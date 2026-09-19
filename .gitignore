@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local data and uploads — never committed
+backend/var/
+backend/.env
+.env
+.env.local
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+web/.env*.local
+next-env.d.ts
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

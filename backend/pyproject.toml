@@ -1,0 +1,35 @@
+[project]
+name = "estock-backend"
+version = "0.1.0"
+description = "Shop management, inventory, sales, credit and online catalogue API"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning:starlette.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "B008",    # FastAPI dependencies are called in defaults by design
+    "SIM108",  # ternaries are not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]          # conftest sets env vars before importing the app
+"app/models/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/alembic/*", "*/__init__.py"]
