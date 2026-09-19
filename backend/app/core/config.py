@@ -49,10 +49,19 @@ class Settings(BaseSettings):
 
     # Public storefront
     public_base_url: str = "http://localhost:3000"
+    #: Comma-separated browser origins allowed to call the API. The defaults
+    #: cover local development; deployments set this explicitly.
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        origins = {o.strip() for o in self.cors_origins.split(",") if o.strip()}
+        origins.add(self.public_base_url.rstrip("/"))
+        return sorted(origins)
 
 
 @lru_cache
