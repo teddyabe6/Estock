@@ -32,24 +32,52 @@ fail()  { printf '\n  Error: %s\n\n' "$*" >&2; exit 1; }
 # Prerequisites
 # --------------------------------------------------------------------------- #
 command -v python3 >/dev/null || fail "Python 3.11+ is required. See docs/local-setup.md"
-command -v node    >/dev/null || fail "Node.js 20+ is required. See docs/local-setup.md"
-command -v npm     >/dev/null || fail "npm is required (it ships with Node.js). See docs/local-setup.md"
 
-# On WSL, Windows' own PATH is appended to yours. If Windows' Node is found
-# first, `npm run` shells out to CMD.EXE, which cannot use a \\wsl.localhost
-# path or run this project's Linux binaries. Catch that here rather than
-# letting it fail later with a confusing CMD.EXE message.
-for tool in node npm; do
-  tool_path="$(command -v "$tool" 2>/dev/null || true)"
-  case "$tool_path" in
-    /mnt/*)
-      printf '\n  Error: `%s` here is Windows'"'"' %s, at\n    %s\n' "$tool" "$tool" "$tool_path" >&2
-      cat >&2 <<'HOWTO'
+# On WSL, Windows' own PATH is appended to yours, so a Node or npm installed on
+# Windows gets picked up here. `npm run` then shells out to CMD.EXE, which can
+# neither open a \\wsl.localhost path nor run this project's Linux binaries.
+# Ubuntu's `nodejs` package also leaves npm out, which lets npm fall through to
+# Windows' copy while node looks fine — so check each tool separately.
+node_path="$(command -v node 2>/dev/null || true)"
+npm_path="$(command -v npm 2>/dev/null || true)"
 
-  It runs through CMD.EXE, which cannot use this project's files.
-  Node needs to be installed inside WSL itself.
+node_ok=yes
+npm_ok=yes
+case "$node_path" in ""|/mnt/*) node_ok=no ;; esac
+case "$npm_path"  in ""|/mnt/*) npm_ok=no  ;; esac
 
-  The quickest way, without sudo:
+describe() { # tool path
+  case "$2" in
+    "")     printf '`%s` is not installed inside WSL' "$1" ;;
+    /mnt/*) printf '`%s` here is Windows'"'"' %s, at %s' "$1" "$1" "$2" ;;
+  esac
+}
+
+if [ "$node_ok" = no ] || [ "$npm_ok" = no ]; then
+  printf '\n  Error: this project needs Node and npm installed inside WSL.\n\n' >&2
+  if [ "$node_ok" = no ]; then printf '    - %s\n' "$(describe node "$node_path")" >&2; fi
+  if [ "$npm_ok" = no ];  then printf '    - %s\n' "$(describe npm "$npm_path")" >&2; fi
+
+  if [ "$node_ok" = yes ] && [ "$npm_ok" = no ]; then
+    printf '\n  Node is fine; only npm is missing. Ubuntu'"'"'s `nodejs`\n' >&2
+    printf '  package does not include it' >&2
+    case "$npm_path" in
+      /mnt/*) printf ', so npm fell through to Windows'"'"' copy' >&2 ;;
+    esac
+    cat >&2 <<'HOWTO'
+.
+
+  Install it:
+
+    sudo apt-get install -y npm
+
+  If that pulls in an older Node, install a matched pair instead — see below.
+HOWTO
+  fi
+
+  cat >&2 <<'HOWTO'
+
+  To install Node and npm together, without sudo:
 
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
     exec $SHELL -l
@@ -60,9 +88,9 @@ for tool in node npm; do
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
 
-  Then check it took effect — this must NOT start with /mnt/:
+  Then check both — neither may start with /mnt/:
 
-    which node
+    which node npm
 
   Then run this again. Anything Windows' npm already wrote into
   web/node_modules is replaced for you:
@@ -70,10 +98,13 @@ for tool in node npm; do
     ./scripts/demo.sh
 
 HOWTO
-      exit 1
-      ;;
-  esac
-done
+  exit 1
+fi
+
+node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+[ "$node_major" -ge 20 ] 2>/dev/null \
+  || fail "Node.js 20+ is required; this is $(node --version 2>/dev/null || echo unknown).
+    Install a newer one:  nvm install 22   (see docs/local-setup.md)"
 
 python3 - <<'PY' || fail "Python 3.11 or newer is required."
 import sys

@@ -35,32 +35,80 @@ echo
 bold "Are the tools the Linux ones?"
 # A Windows node or npm found first on PATH runs through CMD.EXE, which cannot
 # use this project's files. It is the usual reason the web app will not start
-# on WSL.
+# on WSL. Ubuntu's `nodejs` package leaves npm out, so npm can be Windows' copy
+# while node looks perfectly fine — report each tool on its own.
 NODE_BAD=0
+NODE_OLD=0
+NPM_BAD=0
 PYTHON_BAD=0
+NPM_PATH=""
 for tool in node npm python3; do
   tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  [ "$tool" = npm ] && NPM_PATH="$tool_path"
   if [ -z "$tool_path" ]; then
     bad "$tool is not installed"
-    case "$tool" in python3) PYTHON_BAD=1 ;; *) NODE_BAD=1 ;; esac
+    case "$tool" in
+      node) NODE_BAD=1 ;;
+      npm) NPM_BAD=1 ;;
+      python3) PYTHON_BAD=1 ;;
+    esac
     continue
   fi
   case "$tool_path" in
     /mnt/*)
       bad "$tool is Windows' $tool ($tool_path)"
       note "It runs through CMD.EXE, which cannot use this project's files."
-      case "$tool" in python3) PYTHON_BAD=1 ;; *) NODE_BAD=1 ;; esac
+      case "$tool" in
+        node) NODE_BAD=1 ;;
+        npm) NPM_BAD=1 ;;
+        python3) PYTHON_BAD=1 ;;
+      esac
       ;;
-    *) ok "$tool -> $tool_path" ;;
+    *)
+      version=""
+      case "$tool" in
+        node) version="$(node --version 2>/dev/null)" ;;
+        npm) version="$(npm --version 2>/dev/null)" ;;
+        python3) version="$(python3 --version 2>/dev/null | awk '{print $2}')" ;;
+      esac
+      [ -n "$version" ] && version=" $version"
+      # A version that is too old fails later, in the middle of a build.
+      if [ "$tool" = node ] \
+        && ! [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" \
+               -ge 20 ] 2>/dev/null; then
+        bad "node$version is too old; this project needs 20 or newer"
+        NODE_OLD=1
+      else
+        ok "$tool$version -> $tool_path"
+      fi
+      ;;
   esac
 done
-if [ "$NODE_BAD" = 1 ]; then
+
+if [ "$NODE_OLD" = 1 ]; then
   echo
-  note "Install Node inside WSL itself, then open a new terminal:"
+  note "Install a newer Node, then open a new terminal:"
   note "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
   note "    exec \$SHELL -l && nvm install 22"
-  note "Check it took effect — 'which node' must NOT start with /mnt/."
-  note "Then:  rm -rf web/node_modules && ./scripts/demo.sh"
+  note "Then:  ./scripts/demo.sh"
+elif [ "$NPM_BAD" = 1 ] && [ "$NODE_BAD" = 0 ]; then
+  echo
+  note "Node is fine; only npm is wrong. Ubuntu's 'nodejs' package leaves npm out."
+  case "$NPM_PATH" in
+    /mnt/*) note "That is why npm fell through to Windows' copy." ;;
+  esac
+  note "    sudo apt-get install -y npm"
+  note "If that pulls in an older Node, install a matched pair instead:"
+  note "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
+  note "    exec \$SHELL -l && nvm install 22"
+  note "Then:  ./scripts/demo.sh"
+elif [ "$NODE_BAD" = 1 ] || [ "$NPM_BAD" = 1 ]; then
+  echo
+  note "Install Node and npm inside WSL itself, then open a new terminal:"
+  note "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
+  note "    exec \$SHELL -l && nvm install 22"
+  note "Check it took effect — 'which node npm' must NOT show /mnt/."
+  note "Then:  ./scripts/demo.sh"
 fi
 if [ "$PYTHON_BAD" = 1 ]; then
   echo

@@ -35,11 +35,14 @@ Two things are optional:
 - **Flutter** — only for the mobile app. [flutter.dev/docs/get-started/install](https://docs.flutter.dev/get-started/install)
 - **Docker** — an alternative way to run everything, described below.
 
-> **On WSL:** install Python and Node **inside** WSL, not on Windows. WSL puts
-> Windows' `PATH` on yours, so a Windows Node gets picked up and then fails in a
-> way that has nothing to do with this project. `which node` must not start with
-> `/mnt/`. See [the CMD.EXE section](#on-wsl-the-web-app-never-starts-and-the-log-mentions-cmdexe)
-> if it already has.
+> **On WSL:** install Python, Node **and npm** inside WSL, not on Windows. WSL
+> puts Windows' `PATH` on yours, so a Windows copy gets picked up and then fails
+> in a way that has nothing to do with this project. Check with
+> `which node npm` — neither may start with `/mnt/`. Note that Ubuntu's `nodejs`
+> package leaves npm out, which is the usual way `npm` ends up being Windows'
+> while `node` looks fine. See
+> [the CMD.EXE section](#on-wsl-the-web-app-never-starts-and-the-log-mentions-cmdexe)
+> if that has happened.
 
 ## Signing in
 
@@ -197,18 +200,29 @@ UNC paths are not supported.  Defaulting to Windows directory.
 'next' is not recognized as an internal or external command
 ```
 
-**Your `node` is Windows' Node, not a Linux one.** WSL appends Windows' `PATH`
-to yours, so if Node is installed on Windows but not inside WSL, `npm run dev`
-shells out to `CMD.EXE` — which cannot open a `\\wsl.localhost\...` path and
-cannot run this project's Linux binaries.
+**Your `node` or `npm` is Windows', not a Linux one.** WSL appends Windows'
+`PATH` to yours, so if either is installed on Windows but not inside WSL,
+`npm run dev` shells out to `CMD.EXE` — which cannot open a
+`\\wsl.localhost\...` path and cannot run this project's Linux binaries.
 
-Check it:
+Check **both**, not just `node`:
 
 ```bash
-which node      # if this starts with /mnt/, that is the problem
+which node npm      # neither may start with /mnt/
 ```
 
-Install Node **inside WSL**. Without sudo:
+**`node` is fine but `npm` is under `/mnt/`?** That is Ubuntu's `nodejs`
+package, which does not include npm — so npm falls through to Windows' copy.
+Either add it:
+
+```bash
+sudo apt-get install -y npm
+```
+
+…or, if that pulls in a Node older than 20, install a matched pair with one of
+the commands below instead.
+
+**Neither is inside WSL?** Install both there. Without sudo:
 
 ```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
@@ -223,7 +237,8 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-Confirm `which node` no longer starts with `/mnt/`, then run the demo again:
+Confirm `which node npm` shows neither under `/mnt/`, and that
+`node --version` is 20 or newer, then run the demo again:
 
 ```bash
 ./scripts/demo.sh
