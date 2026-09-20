@@ -35,6 +35,12 @@ Two things are optional:
 - **Flutter** — only for the mobile app. [flutter.dev/docs/get-started/install](https://docs.flutter.dev/get-started/install)
 - **Docker** — an alternative way to run everything, described below.
 
+> **On WSL:** install Python and Node **inside** WSL, not on Windows. WSL puts
+> Windows' `PATH` on yours, so a Windows Node gets picked up and then fails in a
+> way that has nothing to do with this project. `which node` must not start with
+> `/mnt/`. See [the CMD.EXE section](#on-wsl-the-web-app-never-starts-and-the-log-mentions-cmdexe)
+> if it already has.
+
 ## Signing in
 
 The demo business is **Merkato Wholesale**: two branches, four staff, twelve
@@ -179,6 +185,56 @@ and memory), and prints the exact URLs to open.
 The servers write to `backend/var/api.log` and `backend/var/web.log`, so a crash
 can always be read after the fact.
 
+### On WSL: the web app never starts, and the log mentions CMD.EXE
+
+This is the most common WSL failure, and it has nothing to do with networking.
+`backend/var/web.log` looks like this:
+
+```
+'\\wsl.localhost\Ubuntu\home\you\Estock\web'
+CMD.EXE was started with the above path as the current directory.
+UNC paths are not supported.  Defaulting to Windows directory.
+'next' is not recognized as an internal or external command
+```
+
+**Your `node` is Windows' Node, not a Linux one.** WSL appends Windows' `PATH`
+to yours, so if Node is installed on Windows but not inside WSL, `npm run dev`
+shells out to `CMD.EXE` — which cannot open a `\\wsl.localhost\...` path and
+cannot run this project's Linux binaries.
+
+Check it:
+
+```bash
+which node      # if this starts with /mnt/, that is the problem
+```
+
+Install Node **inside WSL**. Without sudo:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+exec $SHELL -l
+nvm install 22
+```
+
+Or system-wide:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+Confirm `which node` no longer starts with `/mnt/`, then run the demo again:
+
+```bash
+./scripts/demo.sh
+```
+
+Anything Windows' npm already wrote into `web/node_modules` is `.cmd` shims
+rather than runnable Linux binaries; the script notices and reinstalls.
+
+`./scripts/demo.sh` and `./scripts/doctor.sh` both check for this up front now,
+so you should see a clear message rather than the `CMD.EXE` one.
+
 ### The web app was working, then ERR_CONNECTION_REFUSED
 
 If the API still answers but the web app does not, the Next dev server has
@@ -205,7 +261,11 @@ The two usual causes on WSL:
 
   Then `wsl --shutdown` in PowerShell and reopen WSL.
 
-### On WSL: the API works but the web app never started
+### On WSL: the API answers but the browser cannot reach the web app
+
+This is for when the web server *is* running — the doctor says it is
+listening on port 3000 — but the browser gets nowhere. If it never started
+at all, read the `CMD.EXE` section above first.
 
 Windows forwards `localhost` into the WSL VM, but not reliably for every port.
 When one port works and another does not, the usual cause is that the port falls

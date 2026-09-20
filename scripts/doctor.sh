@@ -32,6 +32,44 @@ fi
 [ -n "$HOST_IP" ] && note "This machine's address: $HOST_IP"
 echo
 
+bold "Are the tools the Linux ones?"
+# A Windows node or npm found first on PATH runs through CMD.EXE, which cannot
+# use this project's files. It is the usual reason the web app will not start
+# on WSL.
+NODE_BAD=0
+PYTHON_BAD=0
+for tool in node npm python3; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  if [ -z "$tool_path" ]; then
+    bad "$tool is not installed"
+    case "$tool" in python3) PYTHON_BAD=1 ;; *) NODE_BAD=1 ;; esac
+    continue
+  fi
+  case "$tool_path" in
+    /mnt/*)
+      bad "$tool is Windows' $tool ($tool_path)"
+      note "It runs through CMD.EXE, which cannot use this project's files."
+      case "$tool" in python3) PYTHON_BAD=1 ;; *) NODE_BAD=1 ;; esac
+      ;;
+    *) ok "$tool -> $tool_path" ;;
+  esac
+done
+if [ "$NODE_BAD" = 1 ]; then
+  echo
+  note "Install Node inside WSL itself, then open a new terminal:"
+  note "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
+  note "    exec \$SHELL -l && nvm install 22"
+  note "Check it took effect — 'which node' must NOT start with /mnt/."
+  note "Then:  rm -rf web/node_modules && ./scripts/demo.sh"
+fi
+if [ "$PYTHON_BAD" = 1 ]; then
+  echo
+  note "Install Python inside WSL itself:"
+  note "    sudo apt-get update && sudo apt-get install -y python3 python3-venv"
+  note "Then:  rm -rf .venv && ./scripts/demo.sh"
+fi
+echo
+
 bold "Are the servers up?"
 check_port() {
   local name="$1" port="$2" path="${3:-/}"

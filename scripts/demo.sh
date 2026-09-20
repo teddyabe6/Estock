@@ -33,6 +33,47 @@ fail()  { printf '\n  Error: %s\n\n' "$*" >&2; exit 1; }
 # --------------------------------------------------------------------------- #
 command -v python3 >/dev/null || fail "Python 3.11+ is required. See docs/local-setup.md"
 command -v node    >/dev/null || fail "Node.js 20+ is required. See docs/local-setup.md"
+command -v npm     >/dev/null || fail "npm is required (it ships with Node.js). See docs/local-setup.md"
+
+# On WSL, Windows' own PATH is appended to yours. If Windows' Node is found
+# first, `npm run` shells out to CMD.EXE, which cannot use a \\wsl.localhost
+# path or run this project's Linux binaries. Catch that here rather than
+# letting it fail later with a confusing CMD.EXE message.
+for tool in node npm; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  case "$tool_path" in
+    /mnt/*)
+      printf '\n  Error: `%s` here is Windows'"'"' %s, at\n    %s\n' "$tool" "$tool" "$tool_path" >&2
+      cat >&2 <<'HOWTO'
+
+  It runs through CMD.EXE, which cannot use this project's files.
+  Node needs to be installed inside WSL itself.
+
+  The quickest way, without sudo:
+
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    exec $SHELL -l
+    nvm install 22
+
+  Or system-wide:
+
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+
+  Then check it took effect — this must NOT start with /mnt/:
+
+    which node
+
+  Then run this again. Anything Windows' npm already wrote into
+  web/node_modules is replaced for you:
+
+    ./scripts/demo.sh
+
+HOWTO
+      exit 1
+      ;;
+  esac
+done
 
 python3 - <<'PY' || fail "Python 3.11 or newer is required."
 import sys
@@ -64,10 +105,19 @@ info "installing backend dependencies"
 "$VENV/bin/pip" install --quiet -r backend/requirements-dev.txt \
   || fail "pip install failed"
 
-if [ ! -d web/node_modules ]; then
-  info "installing web dependencies (first run takes a minute)"
+# An existing node_modules is not enough: one installed by Windows' npm holds
+# .cmd shims rather than runnable Linux binaries, so check for the real thing.
+if [ ! -x web/node_modules/.bin/next ]; then
+  if [ -d web/node_modules ]; then
+    info "web dependencies are unusable here, reinstalling"
+    rm -rf web/node_modules
+  else
+    info "installing web dependencies (first run takes a minute)"
+  fi
   (cd web && npm install --no-audit --no-fund >/dev/null 2>&1) \
     || fail "npm install failed"
+  [ -x web/node_modules/.bin/next ] \
+    || fail "npm install finished but left no runnable 'next'. See docs/local-setup.md"
 fi
 
 mkdir -p "$LOG_DIR"
