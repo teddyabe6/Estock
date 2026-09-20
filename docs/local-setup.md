@@ -151,6 +151,37 @@ is closest to a deployment.
 
 ## If something goes wrong
 
+### On WSL: the API works but the web app says ERR_CONNECTION_REFUSED
+
+Windows forwards `localhost` into the WSL VM, but not reliably for every port.
+When one port works and another does not, the usual cause is that the port falls
+in a range Windows has reserved (Hyper-V, Docker Desktop and WSL itself claim
+blocks of ports), so nothing can forward it.
+
+The script prints the VM's own address when it detects WSL — use that, and it
+works regardless:
+
+```
+http://172.x.x.x:3000
+```
+
+Find it yourself with `hostname -I` in WSL. To confirm the cause, in **Windows**
+PowerShell:
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp   # is 3000 in a reserved range?
+netstat -ano | findstr :3000                               # is something else holding it?
+```
+
+To move off the reserved range instead:
+
+```bash
+WEB_PORT=3100 ./scripts/demo.sh
+```
+
+Note that the WSL VM's address changes when WSL restarts, so prefer a free port
+if you are going to be working for a while.
+
 **"Port 8000 is in use"** — something else is on that port.
 
 ```bash

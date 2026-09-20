@@ -107,7 +107,7 @@ curl -fsS -m 2 "http://localhost:${API_PORT}/health" >/dev/null 2>&1 \
   || fail "the API did not start; run 'make api' on its own to see why"
 info "API ready on http://localhost:${API_PORT}"
 
-(cd web && NEXT_PUBLIC_API_BASE_URL="$API_URL" npm run dev -- -p "$WEB_PORT" >/dev/null 2>&1) &
+(cd web && NEXT_PUBLIC_API_BASE_URL="$API_URL" npm run dev -- -p "$WEB_PORT" -H 0.0.0.0 >/dev/null 2>&1) &
 WEB_PID=$!
 
 for _ in $(seq 1 60); do
@@ -116,6 +116,21 @@ for _ in $(seq 1 60); do
 done
 info "Web ready on http://localhost:${WEB_PORT}"
 
+# On WSL, Windows forwards localhost into the VM — but not always for every
+# port (a port inside a Hyper-V reserved range fails this way, and looks exactly
+# like the server being down). Print the VM address too, which always works.
+WSL_HINT=""
+if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  WSL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [ -n "$WSL_IP" ]; then
+    WSL_HINT="
+  If localhost does not load in your Windows browser, use these instead:
+    Web app     http://${WSL_IP}:${WEB_PORT}
+    API docs    http://${WSL_IP}:${API_PORT}/docs
+"
+  fi
+fi
+
 cat <<BANNER
 
 $(bold "Estock is running")
@@ -123,7 +138,7 @@ $(bold "Estock is running")
   Web app       http://localhost:${WEB_PORT}
   API docs      http://localhost:${API_PORT}/docs
   Online shop   http://localhost:${WEB_PORT}/shop/merkato-wholesale
-
+${WSL_HINT}
   Sign in as                 to see
   ----------------------------------------------------------------
   owner@merkato-demo.et      everything, including cost and profit

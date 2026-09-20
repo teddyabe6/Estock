@@ -76,7 +76,9 @@ worker: ## Run the reminder/alert/trial worker once
 	@cd backend && ../$(VENV)/bin/python -m app.workers.scheduler
 
 web: ## Run the web app on http://localhost:3000
-	@cd web && NEXT_PUBLIC_API_BASE_URL=$(API_URL) npm run dev
+	@# Next already binds 0.0.0.0, but say so explicitly: it matches
+	@# docker-compose and does not depend on that default staying put.
+	@cd web && NEXT_PUBLIC_API_BASE_URL=$(API_URL) npm run dev -- -H 0.0.0.0
 
 mobile: ## Run the Flutter app (needs a device or emulator)
 	@cd mobile && flutter run --dart-define=API_BASE_URL=$(API_URL)
