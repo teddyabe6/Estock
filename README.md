@@ -30,19 +30,29 @@ business can see another's data.
 ## Quick start
 
 ```bash
-cp backend/.env.example backend/.env       # then set SECRET_KEY
-docker compose up --build
+make docker      # the whole stack in Docker, with demo data
 ```
+
+Or without Docker:
+
+```bash
+make setup       # virtualenv, npm packages, Flutter packages, backend/.env
+make migrate seed
+make api         # then `make web` and `make mobile` in other terminals
+```
+
+Once it is up:
 
 - Web app: http://localhost:3000
 - API docs: http://localhost:8000/docs
 - Health: http://localhost:8000/health
 
-To start with a realistic demo business:
+`make help` lists every target. In **Claude Code on the web** none of this is
+needed: a SessionStart hook does the setup for you — see
+[Working in Claude Code on the web](#working-in-claude-code-on-the-web).
 
-```bash
-SEED_ON_START=true docker compose up --build
-```
+`make docker` seeds the demo business for you; plain `docker compose up`
+starts empty.
 
 That creates **Merkato Wholesale** with two branches, four staff accounts, ten
 products, stock, sales, a supplier payable, an overdue receivable, a published
@@ -62,45 +72,48 @@ business-wide reports.
 The demo catalogue includes Amharic product names, so you can see Ethiopic text
 rendering in both clients.
 
-## Running without Docker
+## Working in Claude Code on the web
+
+`.claude/hooks/session-start.sh` runs on every session start and leaves the
+container ready to work: Python and npm dependencies, the Flutter SDK, a running
+PostgreSQL with migrations applied and demo data loaded, and `backend/.env` with
+a generated secret. It is idempotent, so a cached container finishes in a few
+seconds and only a cold one pays for the Flutter download.
+
+It also exports `DATABASE_URL`, `TEST_DATABASE_URL` and `PATH` for the session,
+so `make test-backend-pg` and `flutter test` work immediately with no setup.
+
+The hook does nothing on a local machine — `make setup` covers that. To check it
+by hand:
 
 ```bash
-# Backend
-cd backend
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-export DATABASE_URL="postgresql+psycopg://estock:estock@localhost:5432/estock"
-export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
-alembic upgrade head
-python -m app.seed          # optional
-uvicorn app.main:app --reload
-
-# Background jobs (reminders, low-stock alerts, trial expiry)
-python -m app.workers.scheduler --loop
-
-# Web
-cd ../web
-npm install
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1 npm run dev
-
-# Mobile
-cd ../mobile
-flutter pub get
-flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1   # Android emulator
+CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ```
+
+## Common tasks
+
+| Command | What it does |
+| --- | --- |
+| `make setup` | Install everything on your own machine |
+| `make api` / `make web` / `make mobile` | Run each part |
+| `make worker` | Run reminders, low-stock alerts and trial expiry once |
+| `make migrate` / `make seed` / `make reset-db` | Database |
+| `make test` | Backend (SQLite) and mobile suites |
+| `make test-backend-pg` | Backend against PostgreSQL, covering row locking |
+| `make lint` | ruff, tsc + eslint, and flutter analyze |
+| `make build-web` / `make build-apk` | Production builds |
 
 ## Tests
 
 ```bash
-cd backend
-pytest                       # 219 tests on SQLite, ~1 minute
-
-# Against PostgreSQL, which also exercises the row-locking paths
-TEST_DATABASE_URL="postgresql+psycopg://estock:estock@localhost:5432/estock_test" pytest
-
-cd ../mobile
-flutter test                 # 31 tests, including offline capture and sync conflicts
+make test              # 219 backend tests on SQLite + 31 mobile tests
+make test-backend-pg   # the same backend suite against PostgreSQL
 ```
+
+SQLite keeps the loop short. PostgreSQL is not optional, though: it enforces
+`VARCHAR` limits and has real row locking, and running the suite against it
+caught a bug SQLite accepted silently — see
+[docs/architecture.md](docs/architecture.md).
 
 The suite covers what the PRD asks for: pricing and landed cost, credit
 balances and due-date rules, permission boundaries, proof that one business

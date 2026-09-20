@@ -121,3 +121,33 @@ jobs:
       - run: flutter build web --release --no-web-resources-cdn
         env:
           FLUTTER_API_BASE_URL: http://localhost:8000/api/v1
+
+  session-hook:
+    name: SessionStart hook (syntax and guard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n .claude/hooks/session-start.sh
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning .claude/hooks/session-start.sh
+      # The hook must do nothing outside Claude Code on the web; local machines
+      # use `make setup`. Unset the variable explicitly so the check does not
+      # depend on whatever the runner happens to have.
+      - name: Does nothing locally
+        run: |
+          output=$(env -u CLAUDE_CODE_REMOTE CLAUDE_PROJECT_DIR="$PWD" ./.claude/hooks/session-start.sh)
+          test -z "$output" || { echo "hook ran outside a remote session: $output"; exit 1; }
+      - name: Settings register the hook
+        run: |
+          python3 -c "
+          import json, sys
+          cfg = json.load(open('.claude/settings.json'))
+          hooks = cfg['hooks']['SessionStart'][0]['hooks']
+          assert any('session-start.sh' in h['command'] for h in hooks), hooks
+          print('hook is registered')
+          "
+      - name: Makefile targets resolve
+        run: make -n help setup test lint >/dev/null && echo "make targets OK"
