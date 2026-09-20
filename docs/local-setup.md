@@ -151,6 +151,16 @@ is closest to a deployment.
 
 ## If something goes wrong
 
+### First, run the doctor
+
+```bash
+./scripts/doctor.sh      # or: make doctor
+```
+
+It checks whether the servers are up, whether they answer from outside this
+machine, and prints the exact URLs to open. On WSL it also explains the Windows
+side. Run it while the demo is running.
+
 ### On WSL: the API works but the web app says ERR_CONNECTION_REFUSED
 
 Windows forwards `localhost` into the WSL VM, but not reliably for every port.
@@ -158,8 +168,17 @@ When one port works and another does not, the usual cause is that the port falls
 in a range Windows has reserved (Hyper-V, Docker Desktop and WSL itself claim
 blocks of ports), so nothing can forward it.
 
-The script prints the VM's own address when it detects WSL — use that, and it
-works regardless:
+**The quickest fix is to move to a port Windows is not holding:**
+
+```bash
+WEB_PORT=8080 ./scripts/demo.sh
+```
+
+Then open http://localhost:8080. Ports near one that already works — 8000, in
+this case — are a good bet.
+
+Alternatively the script prints the VM's own address when it detects WSL, and
+that works regardless of forwarding:
 
 ```
 http://172.x.x.x:3000
@@ -174,21 +193,16 @@ You will see one harmless console error, `webpack-hmr WebSocket failed`. That is
 Next's hot-reload channel, which only speaks to `localhost`. Edits will not
 refresh the page by themselves; reload manually. Nothing else is affected.
 
-To confirm the cause, in **Windows** PowerShell:
+To confirm the cause, open **PowerShell on Windows** — Start menu, type
+PowerShell. These are Windows commands and do not exist inside WSL:
 
 ```powershell
 netsh interface ipv4 show excludedportrange protocol=tcp   # is 3000 in a reserved range?
 netstat -ano | findstr :3000                               # is something else holding it?
 ```
 
-To move off the reserved range instead:
-
-```bash
-WEB_PORT=3100 ./scripts/demo.sh
-```
-
-Note that the WSL VM's address changes when WSL restarts, so prefer a free port
-if you are going to be working for a while.
+Note that the WSL VM's address changes when WSL restarts, so a free port is the
+steadier choice if you are going to be working for a while.
 
 **"Port 8000 is in use"** — something else is on that port.
 

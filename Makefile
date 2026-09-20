@@ -16,7 +16,7 @@ API_URL     ?= http://localhost:8000/api/v1
 export DATABASE_URL := $(DB_URL)
 
 .DEFAULT_GOAL := help
-.PHONY: help demo setup setup-backend setup-web setup-mobile \
+.PHONY: help demo doctor setup setup-backend setup-web setup-mobile \
         api web mobile mobile-web worker \
         migrate seed reset-db \
         test test-backend test-backend-pg test-mobile \
@@ -38,6 +38,9 @@ help: ## Show this help
 
 demo: ## Everything running for manual testing — no database to install
 	@./scripts/demo.sh
+
+doctor: ## Work out why the browser cannot reach the app
+	@./scripts/doctor.sh
 
 # --------------------------------------------------------------------------- #
 # Setup

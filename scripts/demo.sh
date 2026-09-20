@@ -154,6 +154,7 @@ ${WSL_HINT}
 
   Every password is: demo-password-123
 
+  Cannot reach it in your browser? Run ./scripts/doctor.sh
   Press Ctrl-C to stop.
 
 BANNER
