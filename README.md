@@ -22,9 +22,10 @@ business can see another's data.
 | Online catalogue, enquiries, proformas with a secure share link | Done |
 | Dashboards and reports for sales, profit, stock, branches and credit | Done |
 | Trial and subscription state, platform-admin surface, audit trail | Done |
-| Amharic-ready interface, ETB, Ethiopian phone formats | Interface is translation-ready; translations not yet written |
-| Flutter mobile app | Not started — see [docs/roadmap.md](docs/roadmap.md) |
-| Offline-first capture, payment gateways, AI assistant | Later releases, by design |
+| Amharic-ready interface, ETB, Ethiopian phone formats | Text renders correctly everywhere; UI strings not yet translated |
+| Flutter mobile app — sales, stock, credit, shop | Done |
+| Offline sale capture and sync, with a stated conflict policy | Done (mobile) |
+| Payment gateways, AI assistant, purchase orders | Later releases, by design |
 
 ## Quick start
 
@@ -58,6 +59,9 @@ storefront and a proforma.
 Sign in as the salesperson to see permissions at work: no cost, no profit, no
 business-wide reports.
 
+The demo catalogue includes Amharic product names, so you can see Ethiopic text
+rendering in both clients.
+
 ## Running without Docker
 
 ```bash
@@ -78,6 +82,11 @@ python -m app.workers.scheduler --loop
 cd ../web
 npm install
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1 npm run dev
+
+# Mobile
+cd ../mobile
+flutter pub get
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1   # Android emulator
 ```
 
 ## Tests
@@ -88,6 +97,9 @@ pytest                       # 219 tests on SQLite, ~1 minute
 
 # Against PostgreSQL, which also exercises the row-locking paths
 TEST_DATABASE_URL="postgresql+psycopg://estock:estock@localhost:5432/estock_test" pytest
+
+cd ../mobile
+flutter test                 # 31 tests, including offline capture and sync conflicts
 ```
 
 The suite covers what the PRD asks for: pricing and landed cost, credit
@@ -111,6 +123,9 @@ backend/            FastAPI service — the only place business rules live
   alembic/          Migrations
   tests/            219 tests
 web/                Next.js app (owner, manager, cashier and storefront)
+mobile/             Flutter app for the shop floor, works offline
+  lib/core/offline/ Outbox, sync service and catalogue cache
+  test/             31 tests
 docs/               Architecture, decisions and roadmap
 ```
 
@@ -129,6 +144,10 @@ Five decisions explain most of the design. Each is described in
    two tables track the same money.
 5. **Credit status is always derived** from balance, due date and cancellation,
    so a transaction with money outstanding can never read as paid.
+
+A sixth applies to the mobile app: **a sale captured offline is provisional
+until the server accepts it**, and the interface says so. See
+[mobile/README.md](mobile/README.md) for the conflict policy.
 
 ## Documentation
 

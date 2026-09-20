@@ -99,3 +99,25 @@ jobs:
       - run: npm run build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+
+  mobile:
+    name: Mobile (analyze, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.27.1"
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      # A web build is the cheapest proof the app still compiles; --no-web-resources-cdn
+      # keeps CanvasKit local, which is also how it ships.
+      - run: flutter build web --release --no-web-resources-cdn
+        env:
+          FLUTTER_API_BASE_URL: http://localhost:8000/api/v1

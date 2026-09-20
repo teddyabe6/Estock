@@ -22,22 +22,38 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Reports agree with transactions and respect permissions | `test_permissions.py`, `test_profit_figures_are_withheld_without_cost_view` |
 | Trial expiry applies the policy without deleting data | `test_an_expired_trial_restricts_access_without_deleting_data` |
 
+## Also built (ahead of the PRD's own schedule)
+
+Two items the PRD lists for later were built because a shop floor needs them:
+
+- **The Flutter app** (PRD section 18 lists it in the architecture): sign-in,
+  home, point of sale, stock, online shop, credit and a pending-sync screen.
+- **Offline sale capture and sync** (PRD V2): a durable outbox, replay on
+  reconnect, and a stated conflict policy. See
+  [mobile/README.md](../mobile/README.md).
+
+Offline sync was scoped deliberately narrowly. What is built is offline
+**capture of sales**, because that is the operation a shop cannot postpone.
+Offline receiving, transfers and stock counts are not built: those are usually
+done at a desk, and each needs its own conflict answer.
+
 ## Next — completing MVP
 
 Ordered by what a first real shop would miss soonest.
 
-1. **Amharic translations.** The interface is translation-ready and Amharic
-   text round-trips correctly through the database and API (tested). What is
-   missing is the strings and a locale switch.
-2. **Flutter mobile app.** The API is the contract; generate typed models from
-   `/api/v1/openapi.json`. Start with the sales screen and stock lookup — the
-   two things a shop floor needs on a phone.
-3. **Receipt and proforma PDFs.** Both pages print cleanly today; a server-side
+1. **Amharic translations.** Ethiopic text renders correctly everywhere —
+   database, API, web and mobile, with the font bundled in the app — and there
+   are tests. What is missing is translating the interface strings themselves
+   and a locale switch.
+2. **Receipt and proforma PDFs.** Both pages print cleanly today; a server-side
    renderer would make sharing more reliable on low-end phones.
-4. **Email delivery.** `EmailSender` is a one-class swap once a provider is
+3. **Email delivery.** `EmailSender` is a one-class swap once a provider is
    chosen.
-5. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
+4. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
    products; nothing enforces them yet.
+5. **Barcode scanning with the camera.** The sale screen already accepts
+   scanner input (a scanner types and presses Enter); using the phone camera
+   needs a plugin and a permissions flow.
 
 ## V1.5
 
@@ -48,15 +64,18 @@ and report exports.
 
 ## V2
 
-Offline-first transaction capture and synchronisation, richer barcode
-workflows, delivery integrations, customer loyalty, payment gateway
-integration, digital receipts, and additional messaging channels including
-customer-facing reminders.
+Richer barcode workflows, delivery integrations, customer loyalty, payment
+gateway integration, digital receipts, and additional messaging channels
+including customer-facing reminders.
 
-Offline-first is the largest single piece of work here. The stock ledger is
-already append-only and every posting takes an idempotency key, which is the
-right foundation, but conflict resolution for concurrent offline sales needs
-designing before any code.
+Offline capture of **sales** is done. What remains of offline-first:
+
+- Offline receiving, transfers and stock counts, each needing its own conflict
+  answer.
+- Offline credit: deliberately excluded for now, because showing a stale
+  balance while deciding whether to extend more credit is worse than showing
+  nothing.
+- A background sync worker that drains the outbox while the app is closed.
 
 ## V3
 
@@ -72,5 +91,9 @@ customer communications, marketplace and discovery, accounting integrations.
 - **Rate limiting** is not implemented at the application layer; it belongs at
   the reverse proxy for now, and the PRD's requirement should be revisited
   before public launch.
+- **The mobile app has no automated end-to-end test.** The offline round-trip
+  was verified by hand against a live API (capture offline, reconnect, confirm
+  the sale posted). The outbox and sync logic have unit tests; the UI path does
+  not have an integration test yet.
 - **Backups** are a deployment concern and are not automated in this
   repository. The PRD requires tested restoration before production.

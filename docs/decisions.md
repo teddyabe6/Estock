@@ -32,10 +32,30 @@ These are not technical questions and the code cannot settle them.
 | 11 | Supported spreadsheet formats, limits, duplicate matching | `.xlsx` and `.csv`, up to 5,000 rows per file. Duplicates are matched on SKU and barcode within the business and flagged, not merged; a matching name with no code is reported as a *possible* duplicate. Nothing is written until every row has been validated. | Matching on name alone would merge genuinely different products. Reporting and letting the user decide is safer than guessing. | `MAX_IMPORT_ROWS`; the matching rules live in `validate_import`. |
 | 12 | Ethiopian calendar interaction model | **Not implemented.** All dates are stored and computed as Gregorian, in UTC for timestamps and as plain calendar dates for due dates. | The PRD asks for it to be "designed carefully". A half-done calendar that shifts a due date by a day is worse than none. Getting the storage right first means display can be added without touching stored data. | Add a display-layer conversion; storage should not change. |
 
+## The offline conflict policy
+
+The PRD puts offline-first in V2 and does not say what should happen when two
+devices disagree. Offline **sale capture** is now built, so that question needed
+an answer. The one taken:
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Is an offline sale final? | No — it is **provisional** until the server accepts it, and the interface says so. | A sale that has not reached the business records is not in the books, and pretending otherwise is how stock and cash drift apart. |
+| Two phones sell the last unit offline; what happens? | The first to sync wins. The second is refused with `insufficient_stock`, marked **rejected**, and shown to a person. | The server is the only place that knows real stock. The app never silently drops the sale, and never invents a correction: what to do about a sale that cannot be posted — refund, back-order, or sell something else — is a business decision. |
+| Could a retry post the same sale twice? | No. The idempotency key is generated when the sale is **captured**, not when it is sent, so every replay carries the same key and the server deduplicates. | This is the guarantee that makes retrying after an ambiguous failure safe. |
+| In what order do queued sales replay? | Oldest first, strictly. | So the server draws stock down in the order the shop actually sold. |
+| What is cached for offline use? | The catalogue and the session. **Not** credit balances. | A stale balance shown to someone deciding whether to extend more credit is worse than showing nothing. |
+| Does signing out discard unsynced work? | No. It stays on the device and replays after signing in again. | Unsynced work is the shop's money. |
+
+What is deliberately **not** offline: receiving, transfers and stock counts.
+Those are usually done at a desk, and each needs its own conflict answer rather
+than being swept in by analogy.
+
 ## Decisions made while building that the PRD did not raise
 
 | Decision | Reasoning |
 | --- | --- |
+| Fonts are bundled in the mobile app, not fetched from a CDN | Without this the app renders **no text at all** when the font CDN is unreachable — precisely the situation it is built for. Amharic also needs Ethiopic glyphs a Latin-only default font does not carry. |
 | Every product owns at least one variant, created implicitly | Stock, sales and pricing then have exactly one shape to handle, while the API still accepts a product with nothing but a name. The alternative — nullable variant references everywhere — invites exactly the kind of bug tenant isolation and stock accuracy cannot afford. |
 | A row from another business returns 404, not 403 | A 403 confirms the id exists somewhere. |
 | "Block" credit-limit behaviour cannot be overridden | Three behaviours exist — warn, require approval, block. If block were overridable it would just be "require approval" with a worse name. |
@@ -50,13 +70,13 @@ These are not technical questions and the code cannot settle them.
 Listed here so the boundary is explicit rather than an oversight. See
 [roadmap.md](roadmap.md).
 
-- **Flutter mobile app.** The API and its OpenAPI document are ready for it.
-- **Offline-first capture and sync** (PRD V2).
 - **Purchase orders, expenses, customer-specific pricing** (PRD V1.5).
+- **Offline receiving, transfers and stock counts.** Offline *sales* are built;
+  the rest each need their own conflict answer.
 - **Payment gateway integration.** Local methods are recorded, not processed —
   the PRD asks for exactly this in MVP.
-- **Amharic translations.** The interface is translation-ready and Amharic text
-  stores and renders correctly end to end (there are tests), but the strings
-  themselves have not been translated.
+- **Amharic translations.** Ethiopic text renders correctly end to end —
+  database, API, web and mobile — and the mobile app bundles the font for it.
+  The interface strings themselves have not been translated.
 - **PDF rendering of proformas.** The share page is print-to-PDF ready; a
   server-side renderer was not added.

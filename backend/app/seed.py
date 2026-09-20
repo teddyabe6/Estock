@@ -55,6 +55,10 @@ CATALOGUE = [
     ("Cement bag 50kg", "Building", "bag", "980", "1200", "150", "20", "40"),
     ("Steel bar 12mm", "Building", "pcs", "640", "820", "80", "15", "30"),
     ("Exercise book A4", "Stationery", "pcs", "28", "45", "300", "40", "80"),
+    # Amharic names and categories, so the demo shows that Ethiopic text works
+    # end to end — database, API and both clients (PRD 16).
+    ("ቡና (የአቢሲኒያ)", "መጠጦች", "kg", "520", "720", "25", "5", "10"),
+    ("በርበሬ", "ቅመማ ቅመም", "kg", "320", "450", "40", "10", "20"),
 ]
 
 

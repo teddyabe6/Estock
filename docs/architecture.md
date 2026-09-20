@@ -6,10 +6,11 @@ not obvious. This complements the PRD rather than repeating it.
 ## Shape
 
 ```
-  Browser (Next.js)          Storefront visitor
-        │                           │
-        │  Bearer token             │  no token
-        ▼                           ▼
+  Browser (Next.js)   Phone (Flutter)   Storefront visitor
+        │                   │                   │
+        │  Bearer token     │  Bearer token     │  no token
+        │                   │  + local outbox   │
+        ▼                   ▼                   ▼
   ┌──────────────────────────────────────────┐
   │  FastAPI  ·  /api/v1                     │
   │  ┌────────────────────────────────────┐  │
@@ -28,8 +29,14 @@ not obvious. This complements the PRD rather than repeating it.
 
 Business rules live in `app/services/` and nowhere else. Routers translate HTTP
 to service calls and decide what the caller may see; models hold shape and
-constraints. A second client — the planned Flutter app — talks to the same
-service layer through the same API, so rules are never duplicated per client.
+constraints. Both clients talk to the same service layer through the same API,
+so rules are never duplicated per client.
+
+The Flutter app adds one thing the web app does not have: a durable outbox, so
+a sale can be captured with no connection and replayed later. It does not add
+business rules — the server still decides whether a queued sale is valid. See
+[the mobile README](../mobile/README.md) for the conflict policy, and
+[decisions.md](decisions.md) for why each choice was made.
 
 ## The five decisions that explain the rest
 
@@ -156,6 +163,12 @@ key, unique per business. The service checks for an existing record first, and a
 database unique constraint is the backstop if two requests race. Composite keys
 are derived for the movements a single sale generates
 (`sale:<id>:<line index>`), so retrying a sale cannot post its stock twice.
+
+This is what makes offline capture safe. The mobile app generates the key when
+a sale is *captured*, not when it is sent, so a queued sale replayed after an
+ambiguous failure returns the record the server already created instead of
+producing a second one. Without server-side idempotency, an offline queue would
+be a duplicate-sales generator.
 
 ## Portability, and why the tests run on two databases
 
