@@ -151,17 +151,61 @@ is closest to a deployment.
 
 ## If something goes wrong
 
+### Is this supposed to run in Docker?
+
+No. `./scripts/demo.sh` runs Python and Node **directly on your machine**, with
+SQLite — no containers, and nothing will appear in `docker ps`. That is
+deliberate: it is the path with the fewest things to install.
+
+Docker is the other option, and it is opt-in:
+
+```bash
+make docker      # PostgreSQL, Redis, the API, the worker and the web app
+```
+
+Use the demo script to try the product; use Docker when you want the shape of a
+real deployment.
+
 ### First, run the doctor
 
 ```bash
 ./scripts/doctor.sh      # or: make doctor
 ```
 
-It checks whether the servers are up, whether they answer from outside this
-machine, and prints the exact URLs to open. On WSL it also explains the Windows
-side. Run it while the demo is running.
+It checks whether the servers are up, shows the tail of their logs if not,
+checks the two limits that usually kill Next's dev server on WSL (file watches
+and memory), and prints the exact URLs to open.
 
-### On WSL: the API works but the web app says ERR_CONNECTION_REFUSED
+The servers write to `backend/var/api.log` and `backend/var/web.log`, so a crash
+can always be read after the fact.
+
+### The web app was working, then ERR_CONNECTION_REFUSED
+
+If the API still answers but the web app does not, the Next dev server has
+stopped rather than anything being wrong with networking. Run the doctor: it
+prints the last lines of `backend/var/web.log`.
+
+The two usual causes on WSL:
+
+- **The file-watch limit is too low.** Next watches a lot of files and the
+  default limit is often 8192.
+
+  ```bash
+  sudo sysctl fs.inotify.max_user_watches=524288
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
+  ```
+
+- **WSL ran out of memory.** It takes a share of Windows' RAM by default. Raise
+  it in `C:\Users\<you>\.wslconfig`:
+
+  ```ini
+  [wsl2]
+  memory=4GB
+  ```
+
+  Then `wsl --shutdown` in PowerShell and reopen WSL.
+
+### On WSL: the API works but the web app never started
 
 Windows forwards `localhost` into the WSL VM, but not reliably for every port.
 When one port works and another does not, the usual cause is that the port falls

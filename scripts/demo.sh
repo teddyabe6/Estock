@@ -17,6 +17,9 @@ cd "$ROOT" || exit 1
 
 VENV="$ROOT/.venv"
 DB_FILE="$ROOT/backend/var/demo.db"
+LOG_DIR="$ROOT/backend/var"
+API_LOG="$LOG_DIR/api.log"
+WEB_LOG="$LOG_DIR/web.log"
 API_PORT="${API_PORT:-8000}"
 WEB_PORT="${WEB_PORT:-3000}"
 API_URL="http://localhost:${API_PORT}/api/v1"
@@ -67,7 +70,7 @@ if [ ! -d web/node_modules ]; then
     || fail "npm install failed"
 fi
 
-mkdir -p "$(dirname "$DB_FILE")"
+mkdir -p "$LOG_DIR"
 export DATABASE_URL="sqlite:///$DB_FILE"
 export SECRET_KEY="${SECRET_KEY:-demo-only-not-for-deployment}"
 export PUBLIC_BASE_URL="http://localhost:${WEB_PORT}"
@@ -101,7 +104,7 @@ trap cleanup INT TERM EXIT
 
 bold ""
 bold "Starting"
-(cd backend && "$VENV/bin/uvicorn" app.main:app --host 0.0.0.0 --port "$API_PORT" --log-level warning) &
+(cd backend && "$VENV/bin/uvicorn" app.main:app --host 0.0.0.0 --port "$API_PORT" --log-level warning) > "$API_LOG" 2>&1 &
 API_PID=$!
 
 # Wait for the API before starting the web app, so the first page load works.
@@ -109,17 +112,25 @@ for _ in $(seq 1 40); do
   if curl -fsS -m 2 "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then break; fi
   sleep 0.5
 done
-curl -fsS -m 2 "http://localhost:${API_PORT}/health" >/dev/null 2>&1 \
-  || fail "the API did not start; run 'make api' on its own to see why"
+if ! curl -fsS -m 2 "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
+  printf '\n  The API did not start. Last lines of %s:\n\n' "$API_LOG" >&2
+  tail -n 25 "$API_LOG" >&2
+  fail "see above"
+fi
 info "API ready on http://localhost:${API_PORT}"
 
-(cd web && NEXT_PUBLIC_API_BASE_URL="$API_URL" npm run dev -- -p "$WEB_PORT" -H 0.0.0.0 >/dev/null 2>&1) &
+(cd web && NEXT_PUBLIC_API_BASE_URL="$API_URL" npm run dev -- -p "$WEB_PORT" -H 0.0.0.0) > "$WEB_LOG" 2>&1 &
 WEB_PID=$!
 
 for _ in $(seq 1 60); do
   if curl -fsS -m 2 "http://localhost:${WEB_PORT}" >/dev/null 2>&1; then break; fi
   sleep 0.5
 done
+if ! curl -fsS -m 2 "http://localhost:${WEB_PORT}" >/dev/null 2>&1; then
+  printf '\n  The web app did not start. Last lines of %s:\n\n' "$WEB_LOG" >&2
+  tail -n 25 "$WEB_LOG" >&2
+  fail "see above"
+fi
 info "Web ready on http://localhost:${WEB_PORT}"
 
 # On WSL, Windows forwards localhost into the VM — but not always for every
@@ -155,8 +166,23 @@ ${WSL_HINT}
   Every password is: demo-password-123
 
   Cannot reach it in your browser? Run ./scripts/doctor.sh
+  Logs: backend/var/api.log and backend/var/web.log
   Press Ctrl-C to stop.
 
 BANNER
 
-wait
+# Watch both servers. If one dies — Next running out of memory or file watchers
+# is the usual cause on WSL — say so and show why, instead of looking healthy.
+while true; do
+  sleep 5
+  if ! kill -0 "$API_PID" 2>/dev/null; then
+    printf '\n  The API stopped. Last lines of %s:\n\n' "$API_LOG" >&2
+    tail -n 25 "$API_LOG" >&2
+    exit 1
+  fi
+  if ! kill -0 "$WEB_PID" 2>/dev/null; then
+    printf '\n  The web app stopped. Last lines of %s:\n\n' "$WEB_LOG" >&2
+    tail -n 25 "$WEB_LOG" >&2
+    exit 1
+  fi
+done

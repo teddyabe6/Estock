@@ -10,6 +10,9 @@ set -uo pipefail
 
 API_PORT="${API_PORT:-8000}"
 WEB_PORT="${WEB_PORT:-3000}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+API_LOG="$ROOT/backend/var/api.log"
+WEB_LOG="$ROOT/backend/var/web.log"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -37,7 +40,19 @@ check_port() {
     return 0
   fi
   bad "$name is NOT responding on port $port"
-  note "Start it with ./scripts/demo.sh"
+  local log=""
+  case "$name" in
+    API) log="$API_LOG" ;;
+    *)   log="$WEB_LOG" ;;
+  esac
+  if [ -s "$log" ]; then
+    note "Last lines of ${log#"$ROOT"/}:"
+    echo
+    tail -n 20 "$log" | sed 's/^/      /'
+    echo
+  else
+    note "No log yet. Start it with ./scripts/demo.sh"
+  fi
   return 1
 }
 API_UP=0; WEB_UP=0
@@ -45,9 +60,38 @@ check_port "API" "$API_PORT" "/health" && API_UP=1
 check_port "Web app" "$WEB_PORT" && WEB_UP=1
 echo
 
+if [ "$WEB_UP" = 0 ]; then
+  bold "Why the web app may have stopped"
+  # Next's dev server is the usual casualty of both of these on WSL.
+  watches="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo unknown)"
+  if [ "$watches" != unknown ] && [ "$watches" -lt 65536 ] 2>/dev/null; then
+    bad "File-watch limit is only $watches — Next often exceeds this"
+    note "Raise it for this boot:"
+    note "    sudo sysctl fs.inotify.max_user_watches=524288"
+    note "And keep it across restarts:"
+    note "    echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf"
+  else
+    ok "File-watch limit is $watches"
+  fi
+
+  total_mb="$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)"
+  avail_mb="$(awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [ "$total_mb" -gt 0 ] && [ "$total_mb" -lt 2048 ]; then
+    bad "Only ${total_mb}MB of memory (${avail_mb}MB free) — Next may be killed"
+    note "On WSL, raise it in C:\\Users\\<you>\\.wslconfig:"
+    note "    [wsl2]"
+    note "    memory=4GB"
+    note "then run  wsl --shutdown  in PowerShell and reopen WSL."
+  else
+    ok "Memory: ${total_mb}MB total, ${avail_mb}MB available"
+  fi
+  echo
+fi
+
 if [ "$API_UP" = 0 ] || [ "$WEB_UP" = 0 ]; then
   bold "Fix that first"
   note "Both servers must be running before the browser can reach anything."
+  note "Restart with ./scripts/demo.sh and read any error it prints."
   exit 1
 fi
 
