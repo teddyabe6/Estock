@@ -72,7 +72,13 @@ export DATABASE_URL="sqlite:///$DB_FILE"
 export SECRET_KEY="${SECRET_KEY:-demo-only-not-for-deployment}"
 export PUBLIC_BASE_URL="http://localhost:${WEB_PORT}"
 # 8090 is where `make mobile-web` serves the Flutter app for browser testing.
-export CORS_ORIGINS="http://localhost:${WEB_PORT},http://127.0.0.1:${WEB_PORT},http://localhost:8090,http://127.0.0.1:8090"
+CORS_LIST="http://localhost:${WEB_PORT},http://127.0.0.1:${WEB_PORT},http://localhost:8090,http://127.0.0.1:8090"
+# Also allow this machine's own addresses, so the app works when opened from a
+# WSL VM address or from a phone on the same network.
+for ip in $(hostname -I 2>/dev/null); do
+  CORS_LIST="${CORS_LIST},http://${ip}:${WEB_PORT},http://${ip}:8090"
+done
+export CORS_ORIGINS="$CORS_LIST"
 
 info "preparing the database"
 (cd backend && "$VENV/bin/alembic" upgrade head >/dev/null 2>&1) \

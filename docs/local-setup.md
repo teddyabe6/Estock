@@ -165,8 +165,16 @@ works regardless:
 http://172.x.x.x:3000
 ```
 
-Find it yourself with `hostname -I` in WSL. To confirm the cause, in **Windows**
-PowerShell:
+Find it yourself with `hostname -I` in WSL. Opening the app by that address
+works fully — the web app calls the API on whatever host served the page, and
+the demo script allows the machine's own addresses through CORS. The same is
+true for testing from a phone on your network.
+
+You will see one harmless console error, `webpack-hmr WebSocket failed`. That is
+Next's hot-reload channel, which only speaks to `localhost`. Edits will not
+refresh the page by themselves; reload manually. Nothing else is affected.
+
+To confirm the cause, in **Windows** PowerShell:
 
 ```powershell
 netsh interface ipv4 show excludedportrange protocol=tcp   # is 3000 in a reserved range?

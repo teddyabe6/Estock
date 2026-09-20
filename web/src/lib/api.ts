@@ -5,8 +5,35 @@
  * token and turns API errors into something the UI can show (PRD 18).
  */
 
-const BASE_URL =
+const CONFIGURED_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+
+/**
+ * Where to call the API from the browser.
+ *
+ * In development the API runs on the same host as this page. When the page is
+ * opened from somewhere other than localhost — a WSL VM address, or a LAN
+ * address while testing on a phone — a configured `localhost` would send the
+ * browser back to itself and every request would fail.
+ *
+ * So a *local* configured host is rewritten to whatever host served the page.
+ * Anything else is used exactly as configured, which is what a deployment sets.
+ */
+function resolveBaseUrl(): string {
+  if (typeof window === "undefined") return CONFIGURED_BASE_URL;
+  try {
+    const configured = new URL(CONFIGURED_BASE_URL, window.location.origin);
+    const configuredIsLocal =
+      configured.hostname === "localhost" || configured.hostname === "127.0.0.1";
+    if (configuredIsLocal && window.location.hostname !== configured.hostname) {
+      configured.hostname = window.location.hostname;
+      return configured.toString().replace(/\/$/, "");
+    }
+    return CONFIGURED_BASE_URL;
+  } catch {
+    return CONFIGURED_BASE_URL;
+  }
+}
 
 const TOKEN_KEY = "estock.token";
 
@@ -62,7 +89,7 @@ export async function request<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
+    response = await fetch(`${resolveBaseUrl()}${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
