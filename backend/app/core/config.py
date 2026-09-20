@@ -51,7 +51,11 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:3000"
     #: Comma-separated browser origins allowed to call the API. The defaults
     #: cover local development; deployments set this explicitly.
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        # `make mobile-web` serves the Flutter app here for browser testing.
+        "http://localhost:8090,http://127.0.0.1:8090"
+    )
 
     @property
     def is_sqlite(self) -> bool:

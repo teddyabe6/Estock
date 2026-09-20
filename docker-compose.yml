@@ -35,6 +35,10 @@ services:
 
   api:
     build: ./backend
+    # Development only. The image itself runs as a non-root user; here the source
+    # tree is bind-mounted from the host, and on Linux a mismatched uid cannot
+    # write to it (uploads, __pycache__). Deployments use the image as built.
+    user: root
     entrypoint: ["/app/entrypoint.sh"]
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     environment:
@@ -49,7 +53,6 @@ services:
       SEED_ON_START: ${SEED_ON_START:-false}
     volumes:
       - ./backend:/app
-      - uploads:/app/var/uploads
     ports:
       - "8000:8000"
     depends_on:
@@ -60,6 +63,7 @@ services:
 
   worker:
     build: ./backend
+    user: root   # same reason as the api service
     command: ["python", "-m", "app.workers.scheduler", "--loop", "--interval", "3600"]
     environment:
       DATABASE_URL: postgresql+psycopg://estock:estock@db:5432/estock
@@ -68,7 +72,6 @@ services:
       STORAGE_LOCAL_ROOT: /app/var/uploads
     volumes:
       - ./backend:/app
-      - uploads:/app/var/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -77,7 +80,7 @@ services:
 
   web:
     build: ./web
-    command: ["npm", "run", "dev"]
+    command: ["npm", "run", "dev", "--", "-H", "0.0.0.0"]
     environment:
       # The browser calls the API directly, so this is the host-visible URL.
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
@@ -91,5 +94,4 @@ services:
 
 volumes:
   db_data:
-  uploads:
   web_node_modules:

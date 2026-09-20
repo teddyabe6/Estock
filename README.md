@@ -29,16 +29,23 @@ business can see another's data.
 
 ## Quick start
 
+To try it by hand, with nothing to install but Python 3.11+ and Node 20+:
+
 ```bash
-make docker      # the whole stack in Docker, with demo data
+./scripts/demo.sh
 ```
 
-Or without Docker:
+That installs what it needs, loads a demo business and starts the API and the
+web app. It uses SQLite, so there is no database to set up.
+[docs/local-setup.md](docs/local-setup.md) covers what to click through, the
+mobile app, and what to do when something does not start.
+
+For the fuller setup — PostgreSQL, the background worker, hot reload:
 
 ```bash
-make setup       # virtualenv, npm packages, Flutter packages, backend/.env
-make migrate seed
-make api         # then `make web` and `make mobile` in other terminals
+make docker      # everything in Docker, with demo data
+# or
+make setup && make migrate seed && make api
 ```
 
 Once it is up:
@@ -164,6 +171,8 @@ until the server accepts it**, and the interface says so. See
 
 ## Documentation
 
+- [docs/local-setup.md](docs/local-setup.md) — running it yourself, and what to
+  try by hand
 - [docs/architecture.md](docs/architecture.md) — how the pieces fit, and why
 - [docs/decisions.md](docs/decisions.md) — the PRD's open decisions, what was
   chosen for now, and what still needs a business answer

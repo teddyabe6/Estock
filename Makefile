@@ -16,8 +16,8 @@ API_URL     ?= http://localhost:8000/api/v1
 export DATABASE_URL := $(DB_URL)
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-backend setup-web setup-mobile \
-        api web mobile worker \
+.PHONY: help demo setup setup-backend setup-web setup-mobile \
+        api web mobile mobile-web worker \
         migrate seed reset-db \
         test test-backend test-backend-pg test-mobile \
         lint lint-backend lint-web lint-mobile fix \
@@ -31,6 +31,13 @@ help: ## Show this help
 	@echo
 	@echo "Demo sign-in after 'make seed':"
 	@echo "  owner@merkato-demo.et / demo-password-123"
+
+# --------------------------------------------------------------------------- #
+# Manual testing
+# --------------------------------------------------------------------------- #
+
+demo: ## Everything running for manual testing — no database to install
+	@./scripts/demo.sh
 
 # --------------------------------------------------------------------------- #
 # Setup
@@ -73,6 +80,16 @@ web: ## Run the web app on http://localhost:3000
 
 mobile: ## Run the Flutter app (needs a device or emulator)
 	@cd mobile && flutter run --dart-define=API_BASE_URL=$(API_URL)
+
+mobile-web: ## Serve the Flutter app at http://localhost:8090 — no Android tooling needed
+	@# Built rather than `flutter run -d web-server`, which ignores
+	@# --no-web-resources-cdn and then renders nothing without CDN access.
+	@cd mobile && flutter build web --release --no-web-resources-cdn \
+	  --dart-define=API_BASE_URL=$(API_URL)
+	@echo
+	@echo "Open http://localhost:8090 and switch your browser to a phone size."
+	@echo "Press Ctrl-C to stop."
+	@cd mobile/build/web && python3 -m http.server 8090
 
 docker: ## Run the whole stack in Docker, with demo data
 	@SEED_ON_START=true docker compose up --build

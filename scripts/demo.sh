@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+#
+# One command to get Estock running for manual testing.
+#
+#   ./scripts/demo.sh
+#
+# Uses SQLite, so there is no database to install. Starts the API and the web
+# app, loads the demo business, and stops both cleanly on Ctrl-C.
+#
+# For the real thing — PostgreSQL, the background worker, the mobile app — see
+# docs/local-setup.md.
+#
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" || exit 1
+
+VENV="$ROOT/.venv"
+DB_FILE="$ROOT/backend/var/demo.db"
+API_PORT="${API_PORT:-8000}"
+WEB_PORT="${WEB_PORT:-3000}"
+API_URL="http://localhost:${API_PORT}/api/v1"
+
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+info()  { printf '  %s\n' "$*"; }
+fail()  { printf '\n  Error: %s\n\n' "$*" >&2; exit 1; }
+
+# --------------------------------------------------------------------------- #
+# Prerequisites
+# --------------------------------------------------------------------------- #
+command -v python3 >/dev/null || fail "Python 3.11+ is required. See docs/local-setup.md"
+command -v node    >/dev/null || fail "Node.js 20+ is required. See docs/local-setup.md"
+
+python3 - <<'PY' || fail "Python 3.11 or newer is required."
+import sys
+sys.exit(0 if sys.version_info >= (3, 11) else 1)
+PY
+
+port_busy() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1
+  else
+    # Fall back to a connection attempt when lsof is unavailable.
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
+  fi
+}
+port_busy "$API_PORT" && fail "Port $API_PORT is in use. Set API_PORT=8001 and try again."
+port_busy "$WEB_PORT" && fail "Port $WEB_PORT is in use. Set WEB_PORT=3001 and try again."
+
+# --------------------------------------------------------------------------- #
+# Setup (skipped when already done)
+# --------------------------------------------------------------------------- #
+bold "Setting up"
+
+if [ ! -x "$VENV/bin/python" ]; then
+  info "creating the Python environment"
+  python3 -m venv "$VENV" || fail "could not create a virtualenv"
+fi
+info "installing backend dependencies"
+"$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1
+"$VENV/bin/pip" install --quiet -r backend/requirements-dev.txt \
+  || fail "pip install failed"
+
+if [ ! -d web/node_modules ]; then
+  info "installing web dependencies (first run takes a minute)"
+  (cd web && npm install --no-audit --no-fund >/dev/null 2>&1) \
+    || fail "npm install failed"
+fi
+
+mkdir -p "$(dirname "$DB_FILE")"
+export DATABASE_URL="sqlite:///$DB_FILE"
+export SECRET_KEY="${SECRET_KEY:-demo-only-not-for-deployment}"
+export PUBLIC_BASE_URL="http://localhost:${WEB_PORT}"
+# 8090 is where `make mobile-web` serves the Flutter app for browser testing.
+export CORS_ORIGINS="http://localhost:${WEB_PORT},http://127.0.0.1:${WEB_PORT},http://localhost:8090,http://127.0.0.1:8090"
+
+info "preparing the database"
+(cd backend && "$VENV/bin/alembic" upgrade head >/dev/null 2>&1) \
+  || fail "migrations failed"
+(cd backend && "$VENV/bin/python" -m app.seed >/dev/null 2>&1) || true
+
+# --------------------------------------------------------------------------- #
+# Run
+# --------------------------------------------------------------------------- #
+API_PID=""
+WEB_PID=""
+cleanup() {
+  printf '\n  Stopping…\n'
+  [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null
+  [ -n "$WEB_PID" ] && kill "$WEB_PID" 2>/dev/null
+  wait 2>/dev/null
+  printf '  Stopped. Your data is kept in backend/var/demo.db\n'
+}
+trap cleanup INT TERM EXIT
+
+bold ""
+bold "Starting"
+(cd backend && "$VENV/bin/uvicorn" app.main:app --host 0.0.0.0 --port "$API_PORT" --log-level warning) &
+API_PID=$!
+
+# Wait for the API before starting the web app, so the first page load works.
+for _ in $(seq 1 40); do
+  if curl -fsS -m 2 "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then break; fi
+  sleep 0.5
+done
+curl -fsS -m 2 "http://localhost:${API_PORT}/health" >/dev/null 2>&1 \
+  || fail "the API did not start; run 'make api' on its own to see why"
+info "API ready on http://localhost:${API_PORT}"
+
+(cd web && NEXT_PUBLIC_API_BASE_URL="$API_URL" npm run dev -- -p "$WEB_PORT" >/dev/null 2>&1) &
+WEB_PID=$!
+
+for _ in $(seq 1 60); do
+  if curl -fsS -m 2 "http://localhost:${WEB_PORT}" >/dev/null 2>&1; then break; fi
+  sleep 0.5
+done
+info "Web ready on http://localhost:${WEB_PORT}"
+
+cat <<BANNER
+
+$(bold "Estock is running")
+
+  Web app       http://localhost:${WEB_PORT}
+  API docs      http://localhost:${API_PORT}/docs
+  Online shop   http://localhost:${WEB_PORT}/shop/merkato-wholesale
+
+  Sign in as                 to see
+  ----------------------------------------------------------------
+  owner@merkato-demo.et      everything, including cost and profit
+  manager@merkato-demo.et    operations for the Bole branch only
+  cashier@merkato-demo.et    sales only — no cost, no profit
+  store@merkato-demo.et      stock only — cannot sell
+
+  Every password is: demo-password-123
+
+  Press Ctrl-C to stop.
+
+BANNER
+
+wait
