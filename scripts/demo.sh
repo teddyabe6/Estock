@@ -37,28 +37,50 @@ command -v python3 >/dev/null || fail "Python 3.11+ is required. See docs/local-
 # Windows gets picked up here. `npm run` then shells out to CMD.EXE, which can
 # neither open a \\wsl.localhost path nor run this project's Linux binaries.
 # Ubuntu's `nodejs` package also leaves npm out, which lets npm fall through to
-# Windows' copy while node looks fine — so check each tool separately.
+# Windows' copy while node looks fine — so check each tool separately. The
+# version matters as much as the location: Ubuntu ships Node 12 on 22.04 and
+# 18 on 24.04, both below what this project needs.
 node_path="$(command -v node 2>/dev/null || true)"
 npm_path="$(command -v npm 2>/dev/null || true)"
 
-node_ok=yes
-npm_ok=yes
-case "$node_path" in ""|/mnt/*) node_ok=no ;; esac
-case "$npm_path"  in ""|/mnt/*) npm_ok=no  ;; esac
+NODE_MIN=20
 
-describe() { # tool path
+node_state=ok
+npm_state=ok
+case "$node_path" in
+  "")     node_state=missing ;;
+  /mnt/*) node_state=windows ;;
+  *)
+    node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    [ "$node_major" -ge "$NODE_MIN" ] 2>/dev/null || node_state=old
+    ;;
+esac
+case "$npm_path" in
+  "")     npm_state=missing ;;
+  /mnt/*) npm_state=windows ;;
+esac
+
+describe() { # tool state path
   case "$2" in
-    "")     printf '`%s` is not installed inside WSL' "$1" ;;
-    /mnt/*) printf '`%s` here is Windows'"'"' %s, at %s' "$1" "$1" "$2" ;;
+    missing) printf '`%s` is not installed inside WSL' "$1" ;;
+    windows) printf '`%s` here is Windows'"'"' %s, at %s' "$1" "$1" "$3" ;;
+    old)     printf '`%s` is %s, older than the %s this project needs' \
+               "$1" "$(node --version 2>/dev/null || echo unknown)" "$NODE_MIN" ;;
   esac
 }
 
-if [ "$node_ok" = no ] || [ "$npm_ok" = no ]; then
-  printf '\n  Error: this project needs Node and npm installed inside WSL.\n\n' >&2
-  if [ "$node_ok" = no ]; then printf '    - %s\n' "$(describe node "$node_path")" >&2; fi
-  if [ "$npm_ok" = no ];  then printf '    - %s\n' "$(describe npm "$npm_path")" >&2; fi
+if [ "$node_state" != ok ] || [ "$npm_state" != ok ]; then
+  printf '\n  Error: this project needs Node %s+ and npm, both inside WSL.\n\n' "$NODE_MIN" >&2
+  if [ "$node_state" != ok ]; then
+    printf '    - %s\n' "$(describe node "$node_state" "$node_path")" >&2
+  fi
+  if [ "$npm_state" != ok ]; then
+    printf '    - %s\n' "$(describe npm "$npm_state" "$npm_path")" >&2
+  fi
 
-  if [ "$node_ok" = yes ] && [ "$npm_ok" = no ]; then
+  # Adding npm alone is only the right advice when the Node beside it is one
+  # this project can actually use.
+  if [ "$node_state" = ok ] && [ "$npm_state" != ok ]; then
     printf '\n  Node is fine; only npm is missing. Ubuntu'"'"'s `nodejs`\n' >&2
     printf '  package does not include it' >&2
     case "$npm_path" in
@@ -72,6 +94,12 @@ if [ "$node_ok" = no ] || [ "$npm_ok" = no ]; then
     sudo apt-get install -y npm
 
   If that pulls in an older Node, install a matched pair instead — see below.
+HOWTO
+  elif [ "$node_state" = old ] && [ "$npm_state" != ok ]; then
+    cat >&2 <<'HOWTO'
+
+  `sudo apt-get install -y npm` will not help here — it would pair npm with the
+  Node you already have, which is too old. Install a newer matched pair instead.
 HOWTO
   fi
 
@@ -88,9 +116,10 @@ HOWTO
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
 
-  Then check both — neither may start with /mnt/:
+  Then check both — neither may start with /mnt/, and node must be 20 or newer:
 
     which node npm
+    node --version
 
   Then run this again. Anything Windows' npm already wrote into
   web/node_modules is replaced for you:
@@ -100,11 +129,6 @@ HOWTO
 HOWTO
   exit 1
 fi
-
-node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-[ "$node_major" -ge 20 ] 2>/dev/null \
-  || fail "Node.js 20+ is required; this is $(node --version 2>/dev/null || echo unknown).
-    Install a newer one:  nvm install 22   (see docs/local-setup.md)"
 
 python3 - <<'PY' || fail "Python 3.11 or newer is required."
 import sys

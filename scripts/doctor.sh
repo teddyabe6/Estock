@@ -90,6 +90,10 @@ if [ "$NODE_OLD" = 1 ]; then
   note "Install a newer Node, then open a new terminal:"
   note "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
   note "    exec \$SHELL -l && nvm install 22"
+  if [ "$NPM_BAD" = 1 ]; then
+    note "That brings a matching npm too, so it clears both lines above."
+    note "Do NOT 'apt-get install npm' — it would pair npm with the old Node."
+  fi
   note "Then:  ./scripts/demo.sh"
 elif [ "$NPM_BAD" = 1 ] && [ "$NODE_BAD" = 0 ]; then
   echo

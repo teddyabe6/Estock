@@ -37,12 +37,19 @@ Two things are optional:
 
 > **On WSL:** install Python, Node **and npm** inside WSL, not on Windows. WSL
 > puts Windows' `PATH` on yours, so a Windows copy gets picked up and then fails
-> in a way that has nothing to do with this project. Check with
-> `which node npm` — neither may start with `/mnt/`. Note that Ubuntu's `nodejs`
-> package leaves npm out, which is the usual way `npm` ends up being Windows'
-> while `node` looks fine. See
+> in a way that has nothing to do with this project. Check all three:
+>
+> ```bash
+> which node npm          # neither may start with /mnt/
+> node --version          # must be 20 or newer
+> ```
+>
+> Two traps here: Ubuntu's `nodejs` package leaves npm out, which is how `npm`
+> ends up being Windows' while `node` looks fine; and the `nodejs` it does
+> install is Node 12 on 22.04 and 18 on 24.04, both too old. `nvm install 22`
+> sidesteps both. See
 > [the CMD.EXE section](#on-wsl-the-web-app-never-starts-and-the-log-mentions-cmdexe)
-> if that has happened.
+> if you have already hit one.
 
 ## Signing in
 
@@ -211,18 +218,24 @@ Check **both**, not just `node`:
 which node npm      # neither may start with /mnt/
 ```
 
-**`node` is fine but `npm` is under `/mnt/`?** That is Ubuntu's `nodejs`
-package, which does not include npm — so npm falls through to Windows' copy.
-Either add it:
+**Check `node --version` too.** Ubuntu ships Node 12 on 22.04 and 18 on 24.04,
+and this project needs 20 or newer. A Node that is too old is the same amount of
+broken as a Windows one, and it decides which fix below applies.
+
+**`node` is under `/mnt/`, or older than 20?** Install a matched pair — see
+below. `sudo apt-get install -y npm` will not help: it pairs npm with the Node
+you already have.
+
+**`node` is a Linux one and 20+, but `npm` is under `/mnt/`?** That is Ubuntu's
+`nodejs` package, which does not include npm — so npm falls through to Windows'
+copy. Add it:
 
 ```bash
 sudo apt-get install -y npm
 ```
 
-…or, if that pulls in a Node older than 20, install a matched pair with one of
-the commands below instead.
-
-**Neither is inside WSL?** Install both there. Without sudo:
+**Installing a matched pair.** This is the fix for every other case, and it
+covers both tools at once. Without sudo:
 
 ```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
