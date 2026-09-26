@@ -96,6 +96,9 @@ class SessionOut(BaseModel):
     all_branches: bool
     branches: list[BranchOut]
     subscription: dict
+    timezone: str = "Africa/Addis_Ababa"
+    #: A read-only platform-support session (PRD 5.2).
+    is_support: bool = False
 
 
 class InviteRequest(BaseModel):
@@ -108,8 +111,19 @@ class InviteRequest(BaseModel):
 
 class AcceptInviteRequest(BaseModel):
     token: str
-    password: str = Field(min_length=8, max_length=72)
+    #: Needed only for an account that has never signed in; an existing account
+    #: keeps its password.
+    password: str | None = Field(None, min_length=8, max_length=72)
     full_name: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=8, max_length=72)
 
 
 TokenResponse.model_rebuild()

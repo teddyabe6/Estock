@@ -5,8 +5,11 @@ Run it as a separate process:
     python -m app.workers.scheduler            # run the daily jobs once
     python -m app.workers.scheduler --loop     # keep running, once per interval
 
-The jobs are idempotent for a given day, so a missed run catches up on the
-next one and a double run does not duplicate anything.
+The jobs are idempotent for a given day — a delivered reminder is marked sent,
+an expired trial is marked expired, and the daily digests check whether a
+person was already told today — so a missed run catches up on the next one
+and an hourly loop does not repeat anything.  "Today" is worked out per
+business, in its own timezone.
 """
 
 from __future__ import annotations

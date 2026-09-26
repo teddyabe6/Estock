@@ -39,6 +39,9 @@ from app.services.catalogue import (
     update_product,
     update_variant,
 )
+from app.services.catalogue import (
+    add_variant as add_variant_to_product,
+)
 from app.services.pricing import resolve_pricing_rule, suggested_price
 
 router = APIRouter(tags=["catalogue"])
@@ -147,39 +150,28 @@ def edit_product(
 def add_variant(
     product_id: uuid.UUID, payload: VariantIn, ctx: Ctx, db: DbSession
 ) -> VariantOut:
-    ctx.require(Permission.PRODUCT_MANAGE)
-    import json
-
-    from app.services.catalogue import _assert_unique_code, post_opening_stock
-
-    product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
-    _assert_unique_code(db, ctx.tenant_id, sku=payload.sku, barcode=payload.barcode)
-    variant = ProductVariant(
-        tenant_id=ctx.tenant_id,
-        product_id=product.id,
-        name=payload.name,
-        attributes_json=json.dumps(payload.attributes) if payload.attributes else None,
-        sku=payload.sku,
-        barcode=payload.barcode,
-        is_default=False,
-        purchase_price=payload.purchase_price,
-        transport_cost=payload.transport_cost,
-        other_costs=payload.other_costs,
-        selling_price=payload.selling_price,
-        tax_rate=payload.tax_rate,
-        max_discount_percent=payload.max_discount_percent,
-        min_stock=payload.min_stock,
-        reorder_level=payload.reorder_level,
-        sort_order=len(product.variants),
+    variant = add_variant_to_product(
+        db,
+        ctx,
+        product_id,
+        VariantInput(
+            name=payload.name,
+            attributes=payload.attributes,
+            sku=payload.sku,
+            barcode=payload.barcode,
+            purchase_price=payload.purchase_price,
+            transport_cost=payload.transport_cost,
+            other_costs=payload.other_costs,
+            selling_price=payload.selling_price,
+            tax_rate=payload.tax_rate,
+            max_discount_percent=payload.max_discount_percent,
+            min_stock=payload.min_stock,
+            reorder_level=payload.reorder_level,
+            opening_stock=payload.opening_stock,
+        ),
     )
-    landed = variant.landed_cost
-    if landed is not None:
-        variant.average_cost = landed
-    db.add(variant)
-    db.flush()
-    if payload.opening_stock:
-        post_opening_stock(db, ctx, variant, Decimal(payload.opening_stock))
-    return variant_out(ctx, variant)
+    stock = stock_totals(db, ctx, [variant.product_id])
+    return variant_out(ctx, variant, stock.get(variant.id))
 
 
 @router.patch("/variants/{variant_id}", response_model=VariantOut)

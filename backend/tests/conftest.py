@@ -83,6 +83,18 @@ def db(engine) -> Session:
     connection.close()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits():
+    """Every test starts with empty rate-limit windows."""
+    from app.core.deps import login_limiter, public_limiter
+
+    login_limiter.reset()
+    public_limiter.reset()
+    yield
+    login_limiter.reset()
+    public_limiter.reset()
+
+
 @pytest.fixture
 def client(db) -> TestClient:
     """A TestClient sharing the test's session, so API writes are rolled back."""

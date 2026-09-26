@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import date
 
 from fastapi import APIRouter, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.api.v1.serializers import credit_out
+from app.core.clock import local_today
 from app.core.deps import Ctx, DbSession, WritableCtx
 from app.core.permissions import Permission
-from app.core.tenancy import get_tenant_object, tenant_query
+from app.core.tenancy import get_tenant_object, in_branches, tenant_query
 from app.models.contacts import Customer, Supplier
 from app.models.credit import CreditKind, CreditStatus, CreditTransaction
 from app.schemas.common import Page
@@ -35,6 +39,7 @@ from app.services.credit import (
     resolve_due_date,
     reverse_payment,
 )
+from app.services.storage import escape_for_spreadsheet
 
 router = APIRouter(prefix="/credit", tags=["credit"])
 
@@ -50,6 +55,27 @@ def _counterparty_name(db, transaction: CreditTransaction) -> str | None:
         supplier = db.get(Supplier, transaction.supplier_id)
         return supplier.name if supplier else None
     return None
+
+
+def _load(db, ctx, transaction_id: uuid.UUID) -> CreditTransaction:
+    """One transaction the caller may see: their tenant, their branch, and
+    purchasing data only with purchase:view."""
+    ctx.require(Permission.CREDIT_VIEW)
+    transaction = get_tenant_object(
+        db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
+    )
+    if transaction.kind == CreditKind.PAYABLE:
+        ctx.require(Permission.PURCHASE_VIEW)
+    ctx.require_branch(transaction.branch_id)
+    return transaction
+
+
+def _out(db, ctx, transaction: CreditTransaction) -> CreditTransactionOut:
+    return credit_out(
+        transaction,
+        counterparty_name=_counterparty_name(db, transaction),
+        tz_name=ctx.tenant.timezone,
+    )
 
 
 @router.get("/summary")
@@ -85,14 +111,14 @@ def list_transactions(
 
     stmt = tenant_query(CreditTransaction, ctx.tenant_id).where(
         CreditTransaction.kind == kind,
-        CreditTransaction.branch_id.in_(allowed + [None]),
+        in_branches(CreditTransaction.branch_id, allowed),
     )
     if customer_id is not None:
         stmt = stmt.where(CreditTransaction.customer_id == customer_id)
     if supplier_id is not None:
         stmt = stmt.where(CreditTransaction.supplier_id == supplier_id)
 
-    today = date.today()
+    today = local_today(ctx.tenant.timezone)
     rows = db.execute(stmt.order_by(CreditTransaction.issued_on.desc())).scalars().all()
     filtered = [t for t in rows if _matches_view(t, view, today)]
 
@@ -105,6 +131,60 @@ def list_transactions(
         total=len(filtered),
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/transactions/export")
+def export_transactions(
+    ctx: Ctx,
+    db: DbSession,
+    kind: CreditKind = CreditKind.RECEIVABLE,
+    view: str = Query("outstanding", pattern="^(all|due_today|due_soon|overdue|outstanding|partially_paid|paid)$"),
+) -> StreamingResponse:
+    """The same list as a spreadsheet, with formula characters neutralised (PRD 15, 20)."""
+    ctx.require(Permission.CREDIT_VIEW, Permission.REPORT_CREDIT)
+    if kind == CreditKind.PAYABLE:
+        ctx.require(Permission.PURCHASE_VIEW)
+    allowed = ctx.visible_branch_ids(db)
+    today = local_today(ctx.tenant.timezone)
+    rows = db.execute(
+        tenant_query(CreditTransaction, ctx.tenant_id)
+        .where(CreditTransaction.kind == kind, in_branches(CreditTransaction.branch_id, allowed))
+        .order_by(CreditTransaction.issued_on.desc())
+    ).scalars()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["Reference", "Counterparty", "Issued", "Due", "Total", "Paid", "Balance", "Status", "Currency"]
+    )
+    for t in rows:
+        if not _matches_view(t, view, today):
+            continue
+        payload = credit_out(t, counterparty_name=_counterparty_name(db, t), today=today)
+        writer.writerow(
+            [
+                escape_for_spreadsheet(t.reference),
+                escape_for_spreadsheet(payload.counterparty_name or ""),
+                t.issued_on.isoformat(),
+                t.due_date.isoformat() if t.due_date else "",
+                str(t.original_amount),
+                str(t.amount_paid),
+                str(t.balance),
+                payload.status,
+                t.currency,
+            ]
+        )
+    return _csv_response(buffer, f"estock-{kind.value}s-{today.isoformat()}.csv")
+
+
+def _csv_response(buffer: io.StringIO, filename: str) -> StreamingResponse:
+    # A byte-order mark so Excel opens Amharic text as UTF-8.
+    content = ("\ufeff" + buffer.getvalue()).encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -135,24 +215,18 @@ def _matches_view(transaction: CreditTransaction, view: str, today: date) -> boo
 def get_transaction(
     transaction_id: uuid.UUID, ctx: Ctx, db: DbSession
 ) -> CreditTransactionOut:
-    ctx.require(Permission.CREDIT_VIEW)
-    transaction = get_tenant_object(
-        db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
-    )
-    ctx.require_branch(transaction.branch_id)
-    return credit_out(transaction, counterparty_name=_counterparty_name(db, transaction))
+    return _out(db, ctx, _load(db, ctx, transaction_id))
 
 
 @router.get("/transactions/{transaction_id}/payments", response_model=list[PaymentOut])
 def list_payments(
     transaction_id: uuid.UUID, ctx: Ctx, db: DbSession
 ) -> list[PaymentOut]:
-    ctx.require(Permission.CREDIT_VIEW)
-    transaction = get_tenant_object(
-        db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
-    )
-    ctx.require_branch(transaction.branch_id)
-    return [PaymentOut.model_validate(p) for p in transaction.payments]
+    transaction = _load(db, ctx, transaction_id)
+    return [
+        PaymentOut.model_validate(p)
+        for p in sorted(transaction.payments, key=lambda p: p.paid_at, reverse=True)
+    ]
 
 
 @router.post(
@@ -179,7 +253,7 @@ def add_payment(
     transaction = get_tenant_object(
         db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
     )
-    return credit_out(transaction, counterparty_name=_counterparty_name(db, transaction))
+    return _out(db, ctx, transaction)
 
 
 @router.post("/payments/{payment_id}/reverse", response_model=PaymentOut)
@@ -196,11 +270,13 @@ def set_due_date(
     transaction_id: uuid.UUID, payload: DueDateChangeIn, ctx: WritableCtx, db: DbSession
 ) -> CreditTransactionOut:
     """Change the due date; reminders and overdue state follow (PRD 11.3)."""
-    due_date = resolve_due_date(payload.due_date_preset, payload.due_date)
+    due_date = resolve_due_date(
+        payload.due_date_preset, payload.due_date, today=local_today(ctx.tenant.timezone)
+    )
     transaction = change_due_date(
         db, ctx, transaction_id, due_date=due_date, note=payload.note
     )
-    return credit_out(transaction, counterparty_name=_counterparty_name(db, transaction))
+    return _out(db, ctx, transaction)
 
 
 @router.post("/transactions/{transaction_id}/cancel", response_model=CreditTransactionOut)
@@ -208,19 +284,18 @@ def cancel(
     transaction_id: uuid.UUID, payload: CancelCreditIn, ctx: WritableCtx, db: DbSession
 ) -> CreditTransactionOut:
     transaction = cancel_transaction(db, ctx, transaction_id, reason=payload.reason)
-    return credit_out(transaction, counterparty_name=_counterparty_name(db, transaction))
+    return _out(db, ctx, transaction)
 
 
 @router.get("/transactions/{transaction_id}/activities", response_model=list[FollowUpOut])
 def list_activities(
     transaction_id: uuid.UUID, ctx: Ctx, db: DbSession
 ) -> list[FollowUpOut]:
-    ctx.require(Permission.CREDIT_VIEW)
-    transaction = get_tenant_object(
-        db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
-    )
-    ctx.require_branch(transaction.branch_id)
-    return [FollowUpOut.model_validate(a) for a in transaction.activities]
+    transaction = _load(db, ctx, transaction_id)
+    return [
+        FollowUpOut.model_validate(a)
+        for a in sorted(transaction.activities, key=lambda a: a.occurred_at, reverse=True)
+    ]
 
 
 @router.post(
@@ -251,9 +326,9 @@ def aging(ctx: Ctx, db: DbSession, kind: CreditKind = CreditKind.RECEIVABLE) -> 
 
 
 @router.get("/due-date-presets")
-def due_date_presets() -> dict:
+def due_date_presets(ctx: Ctx) -> dict:
     """Quick due-date choices offered in the UI (PRD 11.3)."""
-    today = date.today()
+    today = local_today(ctx.tenant.timezone)
     return {
         "presets": [
             {"key": key, "label": key.replace("_", " ").title(), "date": str(resolve_due_date(key, None, today=today))}

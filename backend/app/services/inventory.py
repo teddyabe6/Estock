@@ -383,9 +383,11 @@ def receive_transfer(
 ) -> StockTransfer:
     """Add stock at the destination.
 
-    A shortfall against the dispatched quantity is posted as an explicit loss
-    adjustment at the destination, so the two locations reconcile and the
-    discrepancy stays visible (PRD 9).
+    Everything dispatched arrives on the destination's ledger; a shortfall is
+    then posted as an explicit loss there, so the units that left the source
+    are all accounted for and the discrepancy is a movement with a reason, an
+    actor and a timestamp rather than a note (PRD 9).  Nothing is invented: the
+    destination ends up holding exactly what was counted in.
     """
     ctx.require(Permission.STOCK_TRANSFER)
     transfer = get_tenant_object(
@@ -406,24 +408,42 @@ def receive_transfer(
             )
         line.quantity_received = quantity_received
 
-        if quantity_received > 0:
+        post_movement(
+            db,
+            ctx,
+            StockPosting(
+                variant_id=line.variant_id,
+                location_id=transfer.to_location_id,
+                quantity=Decimal(line.quantity_sent),
+                reason=MovementReason.TRANSFER_IN,
+                source_type="transfer",
+                source_id=transfer.id,
+                idempotency_key=f"transfer-in:{transfer.id}:{line.id}",
+                note=f"Transfer {transfer.reference}",
+            ),
+        )
+        shortfall = Decimal(line.quantity_sent) - quantity_received
+        if shortfall > 0:
             post_movement(
                 db,
                 ctx,
                 StockPosting(
                     variant_id=line.variant_id,
                     location_id=transfer.to_location_id,
-                    quantity=quantity_received,
-                    reason=MovementReason.TRANSFER_IN,
+                    quantity=-shortfall,
+                    reason=MovementReason.LOSS,
                     source_type="transfer",
                     source_id=transfer.id,
-                    idempotency_key=f"transfer-in:{transfer.id}:{line.id}",
-                    note=f"Transfer {transfer.reference}",
+                    idempotency_key=f"transfer-loss:{transfer.id}:{line.id}",
+                    note=(
+                        f"Transfer {transfer.reference}: {shortfall} dispatched but not "
+                        "received"
+                    ),
                 ),
+                # The loss is a correction of what just arrived, not a sale from it.
+                allow_negative=True,
             )
-        shortfall = Decimal(line.quantity_sent) - quantity_received
-        if shortfall > 0:
-            line.note = (line.note or "") + f" Shortfall {shortfall} recorded as loss."
+            line.note = ((line.note or "") + f" Shortfall {shortfall} posted as loss.").strip()
 
     transfer.status = TransferStatus.RECEIVED
     transfer.received_at = utcnow()

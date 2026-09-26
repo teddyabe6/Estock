@@ -10,17 +10,17 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
 from app.core.audit import AuditAction, record_audit
 from app.core.config import settings
 from app.core.db import utcnow
-from app.core.deps import DbSession, PlatformAdminUser
+from app.core.deps import DbSession, PlatformAdminUser, client_ip, login_limiter
 from app.core.errors import AuthenticationError, NotFoundError
 from app.core.security import create_access_token, verify_password
-from app.models.access import TenantMembership
+from app.models.access import MembershipStatus, TenantMembership
 from app.models.catalogue import Product
 from app.models.platform import (
     AuditEvent,
@@ -46,7 +46,8 @@ class AdminLogin(BaseModel):
 
 
 @router.post("/login")
-def login(payload: AdminLogin, db: DbSession) -> dict:
+def login(payload: AdminLogin, db: DbSession, request: Request) -> dict:
+    login_limiter.check(client_ip(request), "platform", payload.email.strip().lower())
     admin = db.execute(
         select(PlatformAdmin).where(PlatformAdmin.email == payload.email.strip().lower())
     ).scalar_one_or_none()
@@ -249,20 +250,31 @@ class SupportAccessIn(BaseModel):
 def grant_support_access(
     payload: SupportAccessIn, admin: PlatformAdminUser, db: DbSession
 ) -> dict:
-    """Issue a short-lived, audited, read-scoped token for one business.
+    """Issue a short-lived, audited, read-only token for one business.
 
-    The grant is recorded before the token is returned, so support access is
-    always explained and always traceable (PRD 5.2).
+    The token carries a ``support`` claim: the API strips every permission
+    that changes anything, refuses posting routes outright, and pins the
+    session to this one business.  The grant is recorded before the token is
+    returned, so support access is always explained and always traceable
+    (PRD 5.2).
     """
     tenant = db.get(Tenant, payload.tenant_id)
     if tenant is None:
         raise NotFoundError("Business not found")
 
-    membership = db.execute(
-        select(TenantMembership).where(TenantMembership.tenant_id == tenant.id)
-    ).scalars().first()
+    # Look through the owner's eyes where possible: the widest *view* of the
+    # business, still with nothing writable.
+    memberships = db.execute(
+        select(TenantMembership).where(
+            TenantMembership.tenant_id == tenant.id,
+            TenantMembership.status == MembershipStatus.ACTIVE,
+        )
+    ).scalars().all()
+    membership = next((m for m in memberships if m.role.is_owner_role), None) or (
+        memberships[0] if memberships else None
+    )
     if membership is None:
-        raise NotFoundError("This business has no users to act on behalf of")
+        raise NotFoundError("This business has no active users to act on behalf of")
 
     record_audit(
         db,
@@ -287,7 +299,9 @@ def grant_support_access(
         "access_token": token,
         "tenant_id": str(tenant.id),
         "expires_in_minutes": payload.minutes,
-        "notice": "This access is time-bound and recorded in the business's audit log.",
+        "notice": (
+            "This access is read-only, time-bound and recorded in the business's audit log."
+        ),
     }
 
 

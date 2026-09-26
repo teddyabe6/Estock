@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
+from app.core.clock import local_today
 from app.core.config import settings
 from app.core.db import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
@@ -207,7 +208,7 @@ def _notify_enquiry(db: Session, enquiry: CustomerEnquiry) -> None:
                 kind=NotificationKind.NEW_ENQUIRY,
                 title=f"New enquiry from {enquiry.contact_name}",
                 body=enquiry.message,
-                link=f"/shop/enquiries/{enquiry.id}",
+                link=f"/shop?tab=enquiries&open={enquiry.id}",
                 entity_type="customer_enquiry",
                 entity_id=enquiry.id,
             )
@@ -256,7 +257,7 @@ def create_quotation(db: Session, ctx: AuthContext, data: QuotationInput) -> Quo
     if not data.customer_name.strip():
         raise ValidationError("Who is this proforma for?")
 
-    today = date.today()
+    today = local_today(ctx.tenant.timezone)
     valid_until = data.valid_until or (
         today + timedelta(days=data.validity_days or DEFAULT_VALIDITY_DAYS)
     )
@@ -500,6 +501,12 @@ def convert_to_sale(
             idempotency_key=f"quotation:{quotation.id}",
         ),
     )
+    if Decimal(quotation.delivery_charge or 0) > 0:
+        # A sale has no delivery line; say so rather than let the charge vanish.
+        result.warnings.append(
+            f"The proforma's delivery charge of {quotation.delivery_charge} "
+            f"{quotation.currency} is not part of the sale total; record it separately."
+        )
 
     quotation.status = QuotationStatus.CONVERTED
     quotation.converted_sale_id = result.sale.id

@@ -15,6 +15,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
+from app.core.clock import local_date
 from app.core.db import utcnow
 from app.core.errors import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from app.core.permissions import Permission
@@ -351,8 +352,9 @@ def create_sale(db: Session, ctx: AuthContext, data: SaleInput) -> SaleResult:
                     summary=limit_check.message,
                 )
 
+        sold_on = local_date(sold_at, ctx.tenant.timezone)
         due_date = credit_service.resolve_due_date(
-            data.due_date_preset, data.due_date, today=sold_at.date()
+            data.due_date_preset, data.due_date, today=sold_on
         )
         credit_transaction = credit_service.create_credit_transaction(
             db,
@@ -363,7 +365,7 @@ def create_sale(db: Session, ctx: AuthContext, data: SaleInput) -> SaleResult:
             customer_id=sale.customer_id,
             sale_id=sale.id,
             due_date=due_date,
-            issued_on=sold_at.date(),
+            issued_on=sold_on,
             agreement_note=data.credit_note,
         )
         # Money taken at the till settles part of the receivable straight away;
@@ -372,7 +374,7 @@ def create_sale(db: Session, ctx: AuthContext, data: SaleInput) -> SaleResult:
         for payment in sale.payments:
             payment.credit_transaction_id = credit_transaction.id
         db.flush()
-        credit_service.recalculate(db, credit_transaction)
+        credit_service.recalculate(db, credit_transaction, today=sold_on)
 
     record_audit(
         db,

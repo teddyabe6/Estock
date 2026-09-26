@@ -73,13 +73,20 @@ class Purchase(UUIDPrimaryKey, Timestamped, TenantScoped, Auditable, Base):
     lines: Mapped[list[PurchaseLine]] = relationship(
         back_populates="purchase", cascade="all, delete-orphan", lazy="selectin"
     )
+    #: Money paid out against this receipt — the same ledger rows the payable reads.
+    payments: Mapped[list[Payment]] = relationship(  # noqa: F821
+        lazy="selectin", foreign_keys="Payment.purchase_id"
+    )
 
     @property
     def amount_paid(self) -> Decimal:
-        from app.models.sales import Payment  # local import avoids a cycle
+        return sum(
+            (Decimal(p.amount) for p in self.payments if not p.is_reversed), Decimal("0.00")
+        )
 
-        payments: list[Payment] = getattr(self, "_payments_cache", [])
-        return sum((Decimal(p.amount) for p in payments if not p.is_reversed), Decimal("0.00"))
+    @property
+    def balance_due(self) -> Decimal:
+        return Decimal(self.total_amount) - self.amount_paid
 
 
 class PurchaseLine(UUIDPrimaryKey, Base):

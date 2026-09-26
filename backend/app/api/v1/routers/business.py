@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
@@ -16,7 +17,7 @@ from app.core.tenancy import get_tenant_object, tenant_query
 from app.models.access import BranchAssignment, MembershipStatus, Role, TenantMembership
 from app.models.organisation import Branch, LocationKind, StockLocation
 from app.models.platform import AuditEvent
-from app.schemas.auth import BranchOut, InviteRequest, MembershipOut, UserOut
+from app.schemas.auth import BranchOut, InviteRequest, MembershipOut, UserOut, normalise_et_phone
 from app.services import subscription as subscription_service
 from app.services.onboarding import invite_user, setup_progress
 
@@ -38,30 +39,34 @@ class BusinessOut(BaseModel):
     require_customer_for_credit: bool
     hide_out_of_stock_online: bool
     reminder_lead_days: int
+    #: Fractional: 0.15 means 15%.  Applied to products with no rate of their own.
+    default_tax_rate: Decimal | None = None
     status: str
 
 
 class BusinessUpdate(BaseModel):
     name: str | None = Field(None, min_length=2, max_length=120)
-    phone: str | None = None
-    email: str | None = None
-    address: str | None = None
-    tin: str | None = None
-    business_type: str | None = None
-    locale: str | None = None
-    timezone: str | None = None
+    phone: str | None = Field(None, max_length=32)
+    email: str | None = Field(None, max_length=255)
+    address: str | None = Field(None, max_length=255)
+    tin: str | None = Field(None, max_length=64)
+    business_type: str | None = Field(None, max_length=120)
+    locale: str | None = Field(None, pattern="^(en|am)$")
+    timezone: str | None = Field(None, max_length=64)
     allow_negative_stock: bool | None = None
     require_customer_for_credit: bool | None = None
     hide_out_of_stock_online: bool | None = None
     reminder_lead_days: int | None = Field(None, ge=0, le=60)
+    default_tax_rate: Decimal | None = Field(None, ge=0, le=1)
 
 
 class BranchIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    code: str | None = None
-    phone: str | None = None
-    address: str | None = None
-    notes: str | None = None
+    code: str | None = Field(None, max_length=64)
+    phone: str | None = Field(None, max_length=32)
+    address: str | None = Field(None, max_length=255)
+    notes: str | None = Field(None, max_length=2000)
+    is_active: bool | None = None
 
 
 @router.get("/business", response_model=BusinessOut)
@@ -83,6 +88,7 @@ def get_business(ctx: Ctx) -> BusinessOut:
         require_customer_for_credit=tenant.require_customer_for_credit,
         hide_out_of_stock_online=tenant.hide_out_of_stock_online,
         reminder_lead_days=tenant.reminder_lead_days,
+        default_tax_rate=tenant.default_tax_rate,
         status=str(tenant.status),
     )
 
@@ -91,6 +97,13 @@ def get_business(ctx: Ctx) -> BusinessOut:
 def update_business(payload: BusinessUpdate, ctx: Ctx, db: DbSession) -> BusinessOut:
     ctx.require(Permission.BUSINESS_MANAGE)
     changes = payload.model_dump(exclude_unset=True)
+    if "phone" in changes:
+        changes["phone"] = normalise_et_phone(changes["phone"])
+    if "timezone" in changes:
+        from app.core.clock import tzinfo_for
+
+        if str(tzinfo_for(changes["timezone"])) != changes["timezone"]:
+            raise ValidationError(f"Unknown timezone '{changes['timezone']}'")
     # Enabling negative stock is a deliberate policy change, so it is audited.
     if "allow_negative_stock" in changes:
         ctx.require(Permission.SETTINGS_MANAGE)
@@ -126,8 +139,8 @@ def create_branch(payload: BranchIn, ctx: Ctx, db: DbSession) -> BranchOut:
     branch = Branch(
         tenant_id=ctx.tenant_id,
         name=payload.name.strip(),
-        code=payload.code,
-        phone=payload.phone,
+        code=payload.code or None,
+        phone=normalise_et_phone(payload.phone),
         address=payload.address,
         notes=payload.notes,
         is_default=False,
@@ -162,7 +175,14 @@ def update_branch(
 ) -> BranchOut:
     ctx.require(Permission.BRANCH_MANAGE)
     branch = get_tenant_object(db, Branch, branch_id, ctx.tenant_id, label="Branch")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    if "phone" in changes:
+        changes["phone"] = normalise_et_phone(changes["phone"])
+    if "code" in changes:
+        changes["code"] = changes["code"] or None
+    if changes.get("is_active") is False and branch.is_default:
+        raise ValidationError("The main branch cannot be deactivated")
+    for key, value in changes.items():
         setattr(branch, key, value)
     db.flush()
     return BranchOut.model_validate(branch)

@@ -32,6 +32,9 @@ def variant_out(
     show_cost = ctx.has(Permission.COST_VIEW)
     return VariantOut(
         id=variant.id,
+        product_id=variant.product_id,
+        product_name=variant.product.name if variant.product else None,
+        display_name=variant.display_name,
         name=variant.name,
         sku=variant.sku,
         barcode=variant.barcode,
@@ -147,12 +150,12 @@ def credit_out(
     *,
     counterparty_name: str | None = None,
     today=None,
+    tz_name: str | None = None,
 ) -> CreditTransactionOut:
-    from datetime import date as date_cls
-
+    from app.core.clock import local_today
     from app.services.credit import is_overdue
 
-    today = today or date_cls.today()
+    today = today or local_today(tz_name)
     overdue = is_overdue(transaction, today=today)
     return CreditTransactionOut(
         id=transaction.id,

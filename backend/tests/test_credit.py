@@ -574,3 +574,85 @@ def test_anonymous_credit_is_possible_when_the_business_allows_it(business):
     result = business.sell(product, quantity="1", paid="0")
     assert result.credit_transaction is not None
     assert result.credit_transaction.customer_id is None
+
+
+def test_holding_the_override_permission_is_not_the_same_as_using_it(business):
+    """"Require approval" means an explicit, audited approval (PRD 11.7, 20)."""
+    from app.models.platform import AuditEvent
+
+    customer = business.add_customer(
+        "Needs approval",
+        credit_limit=Decimal("100"),
+        credit_limit_behaviour="require_approval",
+    )
+    product = business.add_product("Expensive", selling_price="5000.00", opening_stock="5")
+    assert Permission.CREDIT_LIMIT_OVERRIDE in business.ctx.permissions
+
+    with pytest.raises(ConflictError, match="credit limit"):
+        business.sell(product, quantity="1", paid="0", customer_id=customer.id)
+
+    business.sell(
+        product, quantity="1", paid="0", customer_id=customer.id, override_credit_limit=True
+    )
+    overrides = (
+        business.db.query(AuditEvent)
+        .filter(AuditEvent.action == "credit.limit_overridden")
+        .all()
+    )
+    assert len(overrides) == 1
+    assert overrides[0].actor_user_id == business.owner.id
+
+
+def test_a_salesperson_cannot_touch_supplier_payables(business):
+    """Payables are purchasing data; a cashier records customer payments only."""
+    from app.services.purchasing import PurchaseInput, PurchaseLineInput, receive_purchase
+
+    product = business.add_product("Stocked", opening_stock=None, purchase_price=None)
+    payable = receive_purchase(
+        business.db,
+        business.ctx,
+        PurchaseInput(
+            lines=[
+                PurchaseLineInput(
+                    variant_id=product.default_variant.id,
+                    quantity=Decimal("10"),
+                    unit_cost=Decimal("50"),
+                )
+            ],
+            amount_paid=Decimal("0"),
+        ),
+    ).credit_transaction
+
+    _, salesperson = business.add_user(RoleName.SALESPERSON)
+    assert Permission.CREDIT_PAYMENT_RECORD in salesperson.permissions
+    with pytest.raises(PermissionDenied):
+        record_payment(
+            business.db, salesperson, payable.id, amount=Decimal("100"), method=PaymentMethod.CASH
+        )
+    with pytest.raises(PermissionDenied):
+        add_follow_up(business.db, salesperson, payable.id, kind=FollowUpKind.CALLED)
+
+
+def test_a_balance_with_no_branch_still_counts_in_the_summary(business, today):
+    """``IN (…, NULL)`` never matches; business-wide balances must not vanish."""
+    from app.services.reports import credit_summary
+
+    customer = business.add_customer("Head office account")
+    create_credit_transaction(
+        business.db,
+        business.ctx,
+        kind=CreditKind.RECEIVABLE,
+        amount=Decimal("750.00"),
+        branch_id=None,
+        customer_id=customer.id,
+    )
+    summary = credit_summary(business.db, business.ctx, CreditKind.RECEIVABLE, today=today)
+    assert summary.total_outstanding == Decimal("750.00")
+    assert summary.transaction_count == 1
+
+
+def test_the_due_date_of_a_cancelled_balance_cannot_be_changed(business, credit_sale, today):
+    transaction = credit_sale.credit_transaction
+    cancel_transaction(business.db, business.ctx, transaction.id, reason="Written off")
+    with pytest.raises(ConflictError):
+        change_due_date(business.db, business.ctx, transaction.id, due_date=today)

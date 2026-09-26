@@ -25,7 +25,7 @@ from app.schemas.operations import (
     EnquiryOut,
     QuotationIn,
     QuotationOut,
-    SaleOut,
+    SaleResponse,
     StoreOut,
     StoreSettingsIn,
 )
@@ -97,7 +97,7 @@ def list_enquiries(
         stmt.order_by(CustomerEnquiry.created_at.desc()).limit(limit).offset(offset)
     ).scalars()
     return Page(
-        items=[EnquiryOut.model_validate(e) for e in rows],
+        items=[_enquiry_out(e) for e in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -110,7 +110,15 @@ def get_enquiry(enquiry_id: uuid.UUID, ctx: Ctx, db: DbSession) -> EnquiryOut:
     enquiry = get_tenant_object(
         db, CustomerEnquiry, enquiry_id, ctx.tenant_id, label="Enquiry"
     )
-    return EnquiryOut.model_validate(enquiry)
+    return _enquiry_out(enquiry)
+
+
+def _enquiry_out(enquiry: CustomerEnquiry) -> EnquiryOut:
+    import json
+
+    payload = EnquiryOut.model_validate(enquiry)
+    payload.items = json.loads(enquiry.requested_items_json or "[]")
+    return payload
 
 
 @router.patch("/enquiries/{enquiry_id}", response_model=EnquiryOut)
@@ -128,7 +136,7 @@ def update_enquiry(
     enquiry.handled_by_id = ctx.user_id
     enquiry.handled_at = utcnow()
     db.flush()
-    return EnquiryOut.model_validate(enquiry)
+    return _enquiry_out(enquiry)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,10 +216,10 @@ def send(quotation_id: uuid.UUID, ctx: WritableCtx, db: DbSession) -> QuotationO
     return quotation_out(send_quotation(db, ctx, quotation_id))
 
 
-@router.post("/quotations/{quotation_id}/convert", response_model=SaleOut)
+@router.post("/quotations/{quotation_id}/convert", response_model=SaleResponse)
 def convert(
     quotation_id: uuid.UUID, payload: ConvertQuotationIn, ctx: WritableCtx, db: DbSession
-) -> SaleOut:
+) -> SaleResponse:
     """The explicit step that posts the sale and deducts stock (PRD 14)."""
     result = convert_to_sale(
         db,
@@ -225,4 +233,10 @@ def convert(
         ],
         due_date=payload.due_date,
     )
-    return sale_out(ctx, result.sale)
+    return SaleResponse(
+        sale=sale_out(ctx, result.sale),
+        credit_transaction_id=(
+            result.credit_transaction.id if result.credit_transaction else None
+        ),
+        warnings=result.warnings,
+    )

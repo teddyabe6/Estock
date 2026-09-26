@@ -197,6 +197,7 @@ class PaymentOut(Schema):
     reference: str | None = None
     note: str | None = None
     is_reversed: bool = False
+    reversal_reason: str | None = None
 
 
 class SaleOut(Schema):
@@ -283,8 +284,11 @@ class PurchaseOut(Schema):
     transport_cost: Decimal
     other_costs: Decimal
     total_amount: Decimal
+    amount_paid: Decimal = Decimal("0")
+    balance_due: Decimal = Decimal("0")
     currency: str
     cost_allocation_method: str
+    supplier_invoice_ref: str | None = None
     note: str | None = None
     lines: list[PurchaseLineOut] = []
 
@@ -363,6 +367,7 @@ class CreditTransactionOut(Schema):
     reference: str
     kind: CreditKind
     status: str
+    cancel_reason: str | None = None
     branch_id: uuid.UUID | None = None
     customer_id: uuid.UUID | None = None
     supplier_id: uuid.UUID | None = None
@@ -483,6 +488,8 @@ class EnquiryOut(Schema):
     message: str | None = None
     wants_proforma: bool
     created_at: datetime
+    #: Requested items as the customer submitted them.
+    items: list[dict] = []
 
 
 class QuotationLineIn(BaseModel):

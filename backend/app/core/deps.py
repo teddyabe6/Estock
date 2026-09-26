@@ -8,9 +8,11 @@ from typing import Annotated
 from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.db import get_db
 from app.core.errors import AuthenticationError, PermissionDenied, SubscriptionInactive
 from app.core.permissions import Permission
+from app.core.ratelimit import RateLimiter
 from app.core.security import decode_access_token
 from app.core.tenancy import AuthContext
 from app.models.access import User
@@ -56,7 +58,9 @@ def get_auth_context(
 
     payload = decode_access_token(_bearer_token(authorization))
     tenant_id = payload.get("tid")
-    if x_tenant_id:
+    support = bool(payload.get("support"))
+    # A support grant is for one business only; the header cannot widen it.
+    if x_tenant_id and not support:
         tenant_id = x_tenant_id
     if not tenant_id:
         raise PermissionDenied("No business selected")
@@ -64,7 +68,7 @@ def get_auth_context(
         tenant_uuid = uuid.UUID(str(tenant_id))
     except ValueError as exc:
         raise PermissionDenied("No business selected") from exc
-    return load_auth_context(db, user, tenant_uuid)
+    return load_auth_context(db, user, tenant_uuid, support=support)
 
 
 Ctx = Annotated[AuthContext, Depends(get_auth_context)]
@@ -82,6 +86,8 @@ def require_permissions(*permissions: Permission):
 
 def require_writable(ctx: Ctx) -> AuthContext:
     """Block posting operations for a restricted or suspended account (PRD 17)."""
+    if ctx.is_support:
+        raise PermissionDenied("Support access is read-only")
     if ctx.tenant.is_read_only:
         raise SubscriptionInactive(
             "This account is read-only. Your data is safe — subscribe to continue "
@@ -115,3 +121,18 @@ def client_ip(request: Request) -> str | None:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+#: Sign-in and password-reset attempts, per address and account (PRD 20).
+login_limiter = RateLimiter(
+    "login", limit=settings.login_rate_limit, window_seconds=settings.login_rate_window_seconds
+)
+#: Anonymous storefront submissions, per address.
+public_limiter = RateLimiter(
+    "public", limit=settings.public_rate_limit, window_seconds=settings.public_rate_window_seconds
+)
+
+
+def limit_public_requests(request: Request) -> None:
+    """Route dependency for unauthenticated endpoints that write something."""
+    public_limiter.check(client_ip(request))

@@ -84,6 +84,11 @@ class RoleName(StrEnum):
 
 ALL_PERMISSIONS: frozenset[Permission] = frozenset(Permission)
 
+#: What a platform-support token may do: look, never change (PRD 5.2).
+READ_ONLY_PERMISSIONS: frozenset[Permission] = frozenset(
+    p for p in Permission if p.value.endswith(":view") or p.value.startswith("report:")
+)
+
 _MANAGER_PERMISSIONS: frozenset[Permission] = frozenset(
     {
         Permission.BUSINESS_VIEW,

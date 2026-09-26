@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.core.clock import day_end, day_start, local_date, local_today
 from app.core.errors import PermissionDenied
 from app.core.permissions import Permission
-from app.core.tenancy import AuthContext, tenant_query
+from app.core.tenancy import AuthContext, in_branches, tenant_query
 from app.models.access import User
 from app.models.catalogue import Category, Product, ProductVariant
 from app.models.credit import CreditKind, CreditStatus, CreditTransaction
@@ -30,36 +31,47 @@ ZERO = Decimal("0.00")
 
 @dataclass(slots=True)
 class DateRange:
+    """A span of calendar days in the business's own timezone.
+
+    Boundaries are the business's midnight, not the server's: a sale at 01:00
+    in Addis Ababa belongs to that day, not to the UTC day before (PRD 15).
+    """
+
     start: date
     end: date
+    tz_name: str = "UTC"
 
     @property
     def start_dt(self) -> datetime:
-        return datetime.combine(self.start, time.min, tzinfo=UTC)
+        return day_start(self.start, self.tz_name)
 
     @property
     def end_dt(self) -> datetime:
-        return datetime.combine(self.end, time.max, tzinfo=UTC)
+        return day_end(self.end, self.tz_name)
 
     def as_dict(self) -> dict:
-        return {"start": self.start.isoformat(), "end": self.end.isoformat()}
+        return {
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+            "timezone": self.tz_name,
+        }
 
 
-def range_for(period: str, *, today: date | None = None) -> DateRange:
-    today = today or date.today()
+def range_for(period: str, *, today: date | None = None, tz_name: str = "UTC") -> DateRange:
+    today = today or local_today(tz_name)
     if period == "today":
-        return DateRange(today, today)
+        return DateRange(today, today, tz_name)
     if period == "yesterday":
-        return DateRange(today - timedelta(days=1), today - timedelta(days=1))
+        return DateRange(today - timedelta(days=1), today - timedelta(days=1), tz_name)
     if period == "7d":
-        return DateRange(today - timedelta(days=6), today)
+        return DateRange(today - timedelta(days=6), today, tz_name)
     if period == "30d":
-        return DateRange(today - timedelta(days=29), today)
+        return DateRange(today - timedelta(days=29), today, tz_name)
     if period == "month":
-        return DateRange(today.replace(day=1), today)
+        return DateRange(today.replace(day=1), today, tz_name)
     if period == "year":
-        return DateRange(today.replace(month=1, day=1), today)
-    return DateRange(today - timedelta(days=29), today)
+        return DateRange(today.replace(month=1, day=1), today, tz_name)
+    return DateRange(today - timedelta(days=29), today, tz_name)
 
 
 def _sales_scope(
@@ -160,21 +172,20 @@ def sales_summary(
 def sales_by_day(
     db: Session, ctx: AuthContext, period: DateRange, branch_ids: list[uuid.UUID] | None = None
 ) -> list[dict]:
+    """Sales per calendar day, where the day is the business's, not the server's."""
     ctx.require(Permission.REPORT_SALES)
     scope = _sales_scope(ctx, db, period, branch_ids).subquery()
-    rows = db.execute(
-        select(
-            func.date(scope.c.sold_at).label("day"),
-            func.count().label("sale_count"),
-            func.coalesce(func.sum(scope.c.total_amount), 0).label("total"),
-        )
-        .select_from(scope)
-        .group_by(func.date(scope.c.sold_at))
-        .order_by(func.date(scope.c.sold_at))
-    )
+    rows = db.execute(select(scope.c.sold_at, scope.c.total_amount)).all()
+
+    days: dict[date, list] = {}
+    for sold_at, total in rows:
+        day = local_date(sold_at, period.tz_name)
+        bucket = days.setdefault(day, [0, ZERO])
+        bucket[0] += 1
+        bucket[1] += Decimal(total or 0)
     return [
-        {"date": str(row.day), "sale_count": int(row.sale_count), "total": str(Decimal(row.total or 0))}
-        for row in rows
+        {"date": day.isoformat(), "sale_count": count, "total": str(total)}
+        for day, (count, total) in sorted(days.items())
     ]
 
 
@@ -443,7 +454,7 @@ def credit_summary(
 ) -> CreditSummary:
     """Summary cards for receivables or payables (PRD 11.5)."""
     ctx.require(Permission.CREDIT_VIEW)
-    today = today or date.today()
+    today = today or local_today(ctx.tenant.timezone)
     allowed = ctx.visible_branch_ids(db)
     if branch_ids:
         for branch_id in branch_ids:
@@ -455,7 +466,7 @@ def credit_summary(
             CreditTransaction.kind == kind,
             CreditTransaction.cancelled_at.is_(None),
             CreditTransaction.status != CreditStatus.PAID,
-            CreditTransaction.branch_id.in_(allowed + [None]),
+            in_branches(CreditTransaction.branch_id, allowed),
         )
     ).scalars().all()
 
@@ -495,7 +506,7 @@ def credit_aging(
 ) -> list[dict]:
     """Aging buckets by days past due (PRD 15)."""
     ctx.require(Permission.REPORT_CREDIT)
-    today = today or date.today()
+    today = today or local_today(ctx.tenant.timezone)
     buckets = {
         "not_due": ZERO,
         "no_due_date": ZERO,
@@ -509,7 +520,7 @@ def credit_aging(
         tenant_query(CreditTransaction, ctx.tenant_id).where(
             CreditTransaction.kind == kind,
             CreditTransaction.cancelled_at.is_(None),
-            CreditTransaction.branch_id.in_(allowed + [None]),
+            in_branches(CreditTransaction.branch_id, allowed),
         )
     ).scalars()
     for transaction in rows:
@@ -548,9 +559,14 @@ class Dashboard:
 
 def home_dashboard(db: Session, ctx: AuthContext, *, today: date | None = None) -> dict:
     """The home screen: today's sales, alerts and what the user may see (PRD 15)."""
-    today = today or date.today()
-    period = DateRange(today, today)
-    payload: dict = {"date": today.isoformat(), "currency": ctx.tenant.currency}
+    tz_name = ctx.tenant.timezone
+    today = today or local_today(tz_name)
+    period = DateRange(today, today, tz_name)
+    payload: dict = {
+        "date": today.isoformat(),
+        "timezone": tz_name,
+        "currency": ctx.tenant.currency,
+    }
 
     if ctx.has(Permission.SALE_VIEW):
         summary = sales_summary(db, ctx, period)

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date
+from datetime import date
 
 from fastapi import APIRouter, Query, status
 from sqlalchemy import func, select
 
 from app.api.v1.serializers import sale_out
+from app.core.clock import day_end, day_start
 from app.core.deps import Ctx, DbSession, WritableCtx
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
@@ -98,18 +99,11 @@ def list_sales(
         stmt = stmt.where(Sale.status == SaleStatus.COMPLETED)
     if customer_id is not None:
         stmt = stmt.where(Sale.customer_id == customer_id)
+    # Day boundaries follow the business's clock, not the server's.
     if date_from is not None:
-        from datetime import datetime, time
-
-        stmt = stmt.where(
-            Sale.sold_at >= datetime.combine(date_from, time.min, tzinfo=UTC)
-        )
+        stmt = stmt.where(Sale.sold_at >= day_start(date_from, ctx.tenant.timezone))
     if date_to is not None:
-        from datetime import datetime, time
-
-        stmt = stmt.where(
-            Sale.sold_at <= datetime.combine(date_to, time.max, tzinfo=UTC)
-        )
+        stmt = stmt.where(Sale.sold_at <= day_end(date_to, ctx.tenant.timezone))
 
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
     rows = db.execute(

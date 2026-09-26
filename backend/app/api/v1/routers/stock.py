@@ -6,8 +6,10 @@ import uuid
 from decimal import Decimal
 
 from fastapi import APIRouter, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
+from app.core.clock import local_today
 from app.core.deps import Ctx, DbSession, WritableCtx
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
@@ -47,15 +49,7 @@ from app.services.inventory import (
 router = APIRouter(prefix="/stock", tags=["stock"])
 
 
-@router.get("/levels", response_model=Page[StockLevelOut])
-def stock_levels(
-    ctx: Ctx,
-    db: DbSession,
-    branch_id: uuid.UUID | None = None,
-    q: str | None = None,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-) -> Page[StockLevelOut]:
+def _levels(db, ctx, branch_id: uuid.UUID | None, q: str | None) -> list[StockLevelOut]:
     ctx.require(Permission.STOCK_VIEW)
     allowed = ctx.visible_branch_ids(db)
     if branch_id is not None:
@@ -93,7 +87,7 @@ def stock_levels(
         stmt = stmt.where(func.lower(Product.name).like(f"%{q.strip().lower()}%"))
 
     rows = db.execute(stmt.order_by(Product.name)).all()
-    items = [
+    return [
         StockLevelOut(
             product_id=row.product_id,
             variant_id=row.variant_id,
@@ -109,7 +103,42 @@ def stock_levels(
         )
         for row in rows
     ]
+
+
+@router.get("/levels", response_model=Page[StockLevelOut])
+def stock_levels(
+    ctx: Ctx,
+    db: DbSession,
+    branch_id: uuid.UUID | None = None,
+    q: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Page[StockLevelOut]:
+    items = _levels(db, ctx, branch_id, q)
     return Page(items=items[offset : offset + limit], total=len(items), limit=limit, offset=offset)
+
+
+@router.get("/levels/export")
+def export_levels(
+    ctx: Ctx, db: DbSession, branch_id: uuid.UUID | None = None
+) -> StreamingResponse:
+    """Stock on hand as a spreadsheet, for a count sheet or a reorder list (PRD 15)."""
+    from app.api.v1.routers.reports import csv_response
+
+    ctx.require(Permission.REPORT_INVENTORY)
+    rows: list[list] = [["Product", "Branch", "On hand", "Minimum", "Reorder at", "Status"]]
+    for item in _levels(db, ctx, branch_id, None):
+        rows.append(
+            [
+                item.name,
+                item.branch_name or "",
+                str(item.quantity),
+                str(item.min_stock) if item.min_stock is not None else "",
+                str(item.reorder_level) if item.reorder_level is not None else "",
+                item.status,
+            ]
+        )
+    return csv_response(rows, f"estock-stock-{local_today(ctx.tenant.timezone).isoformat()}.csv")
 
 
 @router.get("/low", response_model=list[StockLevelOut])

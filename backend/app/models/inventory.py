@@ -196,8 +196,8 @@ class StockTransferLine(UUIDPrimaryKey, Base):
         GUID, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False
     )
     quantity_sent: Mapped[Decimal] = mapped_column(Quantity, nullable=False)
-    #: Set at receipt; a difference from ``quantity_sent`` is a discrepancy that
-    #: is posted as an explicit adjustment (PRD 9).
+    #: Set at receipt; a shortfall against ``quantity_sent`` is posted as an
+    #: explicit loss movement at the destination (PRD 9).
     quantity_received: Mapped[Decimal | None] = mapped_column(Quantity)
     note: Mapped[str | None] = mapped_column(MediumText)
 

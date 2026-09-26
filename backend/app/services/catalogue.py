@@ -238,19 +238,84 @@ def post_opening_stock(
     )
 
 
+def add_variant(
+    db: Session, ctx: AuthContext, product_id: uuid.UUID, data: VariantInput
+) -> ProductVariant:
+    """Add a variant to an existing product, with its own codes, prices and stock."""
+    ctx.require(Permission.PRODUCT_MANAGE)
+    product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
+    _assert_unique_code(db, ctx.tenant_id, sku=data.sku, barcode=data.barcode)
+    variant = ProductVariant(
+        tenant_id=ctx.tenant_id,
+        product_id=product.id,
+        name=data.name,
+        attributes_json=json.dumps(data.attributes) if data.attributes else None,
+        sku=data.sku,
+        barcode=data.barcode,
+        is_default=False,
+        purchase_price=_money(data.purchase_price),
+        transport_cost=_money(data.transport_cost),
+        other_costs=_money(data.other_costs),
+        selling_price=_money(data.selling_price),
+        tax_rate=data.tax_rate,
+        max_discount_percent=data.max_discount_percent,
+        min_stock=data.min_stock,
+        reorder_level=data.reorder_level,
+        sort_order=len(product.variants),
+    )
+    landed = variant.landed_cost
+    if landed is not None:
+        variant.average_cost = landed
+    db.add(variant)
+    db.flush()
+    if data.opening_stock is not None and Decimal(data.opening_stock) != 0 and product.track_stock:
+        post_opening_stock(db, ctx, variant, Decimal(data.opening_stock))
+    db.refresh(product)
+    return variant
+
+
 def update_product(
     db: Session, ctx: AuthContext, product_id: uuid.UUID, changes: dict
 ) -> Product:
     ctx.require(Permission.PRODUCT_MANAGE)
     product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
+    changes = dict(changes)
 
     if "category_name" in changes:
         category = get_or_create_category(db, ctx, changes.pop("category_name"))
         product.category_id = category.id if category else None
 
+    # A simple product's code and barcode live on its one variant as well, so
+    # the sales screen and the product list keep agreeing with each other.
+    default = product.default_variant if not product.has_real_variants else None
+    sku = changes.get("sku", product.sku) or None
+    barcode = changes.pop("barcode", None)
+    if "sku" in changes and sku:
+        clash = db.execute(
+            tenant_query(Product, ctx.tenant_id).where(
+                Product.sku == sku, Product.id != product.id
+            )
+        ).scalars().first()
+        if clash is not None:
+            raise ConflictError(f"SKU '{sku}' is already used by another product")
+    if default is not None and ("sku" in changes or barcode is not None):
+        _assert_unique_code(
+            db,
+            ctx.tenant_id,
+            sku=sku if "sku" in changes else None,
+            barcode=barcode or None,
+            exclude_variant_id=default.id,
+        )
+        if "sku" in changes:
+            default.sku = sku
+        if barcode is not None:
+            default.barcode = barcode or None
+
     for field_name, value in changes.items():
         if field_name in {"id", "tenant_id", "created_at"}:
             continue
+        if field_name == "sku":
+            value = sku
         if hasattr(product, field_name):
             setattr(product, field_name, value)
     db.flush()
