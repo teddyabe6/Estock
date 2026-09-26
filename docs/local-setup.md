@@ -92,9 +92,29 @@ an enquiry never reserves anything.
 It says plainly that it is not a receipt. Accepting it records intent — it does
 not post a sale or reduce stock until you convert it explicitly.
 
-**Recording a payment.** Credit → Record payment on the overdue balance. Try
-paying more than is owed: it is refused, and the error tells you the exact
-balance.
+**Recording a payment.** More → Credit, open the overdue balance and record a
+payment. Try paying more than is owed: it is refused, and the error tells you
+the exact balance. The same drawer logs follow-up calls and promises — which
+never change the balance — and changes the due date, with an audit record.
+
+**Receiving stock on supplier credit.** Stock → Receive stock, add a product,
+enter the cost and a transport charge, and pay less than the total. Stock goes
+up once, the landed cost is spread across the lines, and a payable appears
+under Credit → Payables.
+
+**Importing a spreadsheet.** Products → Import spreadsheet. Download the
+template or upload any `.xlsx`/`.csv`, match the columns, check the rows, and
+import. A row with no name is reported and skipped; nothing is written until
+every row has been checked.
+
+**A transfer received short.** Stock → Transfers: create one from Merkato Main
+to Bole Branch, dispatch it, then receive fewer units than were sent. The
+history tab shows the transfer in *and* an explicit loss for the difference.
+
+**Support access is read-only.** At `/docs`, sign in as the platform admin,
+grant support access to the business with a reason, and use that token in the
+web app: every page loads, every save is refused, and the grant is in the
+business's audit log.
 
 **Amharic.** Products → search `ቡና`. The name, its category `መጠጦች`, and search
 all work.
@@ -364,7 +384,7 @@ rm -rf .venv web/node_modules backend/var/demo.db backend/.env
 **Run the tests:**
 
 ```bash
-make test                # 219 backend + 31 mobile
+make test                # 257 backend + 35 mobile
 make test-backend-pg     # backend against PostgreSQL
 make lint
 ```

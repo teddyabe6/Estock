@@ -364,7 +364,30 @@ def invite_user(
         summary=f"Invited {email} as {role_name}",
     )
     db.flush()
+
+    from app.services.notifications import send_email
+
+    send_email(
+        to=email,
+        subject=f"You have been invited to {ctx.tenant.name} on Estock",
+        body=(
+            f"Hello {full_name.strip()},\n\n{ctx.user.full_name} has invited you to work in "
+            f"{ctx.tenant.name} as {role.label}. Open this link to accept:\n\n"
+            f"{invitation_link(membership)}\n"
+        ),
+    )
     return membership
+
+
+def invitation_link(membership: TenantMembership) -> str | None:
+    """The accept link for a pending invitation, or None once it has been used.
+
+    Shown to the inviter as well as emailed, because a shop without an email
+    provider configured still needs a way to hand the link over (PRD 6).
+    """
+    if membership.status != MembershipStatus.INVITED or not membership.invitation_token:
+        return None
+    return f"{settings.public_base_url}/accept-invitation?token={membership.invitation_token}"
 
 
 def accept_invitation(

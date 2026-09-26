@@ -701,3 +701,20 @@ def test_public_enquiries_are_rate_limited(client, business, monkeypatch):
     for _ in range(2):
         assert client.post(f"/api/v1/public/shops/{store.slug}/enquiries", json=body).status_code == 201
     assert client.post(f"/api/v1/public/shops/{store.slug}/enquiries", json=body).status_code == 429
+
+
+def test_the_inviter_gets_the_accept_link_to_pass_on(client, business):
+    """Without an email provider the owner still needs a way to hand over the link (PRD 6)."""
+    invite = client.post(
+        "/api/v1/team/invite",
+        json={"email": "newhire@example.com", "full_name": "New Hire", "role_name": "stock_user"},
+        headers=business.headers(),
+    ).json()
+    assert invite["invitation_url"].startswith("http")
+    assert "/accept-invitation?token=" in invite["invitation_url"]
+
+    team = client.get("/api/v1/team", headers=business.headers()).json()
+    by_email = {m["user"]["email"]: m for m in team}
+    assert by_email["newhire@example.com"]["invitation_url"] == invite["invitation_url"]
+    # Once accepted, the link is gone.
+    assert by_email[business.owner.email]["invitation_url"] is None

@@ -19,7 +19,7 @@ from app.models.organisation import Branch, LocationKind, StockLocation
 from app.models.platform import AuditEvent
 from app.schemas.auth import BranchOut, InviteRequest, MembershipOut, UserOut, normalise_et_phone
 from app.services import subscription as subscription_service
-from app.services.onboarding import invite_user, setup_progress
+from app.services.onboarding import invitation_link, invite_user, setup_progress
 
 router = APIRouter(tags=["business"])
 
@@ -214,17 +214,19 @@ def list_team(ctx: Ctx, db: DbSession) -> list[MembershipOut]:
     memberships = db.execute(
         tenant_query(TenantMembership, ctx.tenant_id)
     ).scalars().all()
-    return [
-        MembershipOut(
-            id=m.id,
-            user=UserOut.model_validate(m.user),
-            role_name=m.role.name,
-            status=str(m.status),
-            has_all_branches=m.has_all_branches,
-            branch_ids=sorted(m.branch_ids()),
-        )
-        for m in memberships
-    ]
+    return [_membership_out(m) for m in memberships]
+
+
+def _membership_out(m: TenantMembership) -> MembershipOut:
+    return MembershipOut(
+        id=m.id,
+        user=UserOut.model_validate(m.user),
+        role_name=m.role.name,
+        status=str(m.status),
+        has_all_branches=m.has_all_branches,
+        branch_ids=sorted(m.branch_ids()),
+        invitation_url=invitation_link(m),
+    )
 
 
 @router.post("/team/invite", response_model=MembershipOut, status_code=status.HTTP_201_CREATED)
@@ -238,14 +240,7 @@ def invite(payload: InviteRequest, ctx: Ctx, db: DbSession) -> MembershipOut:
         branch_ids=payload.branch_ids,
         all_branches=payload.all_branches,
     )
-    return MembershipOut(
-        id=membership.id,
-        user=UserOut.model_validate(membership.user),
-        role_name=membership.role.name,
-        status=str(membership.status),
-        has_all_branches=membership.has_all_branches,
-        branch_ids=sorted(membership.branch_ids()),
-    )
+    return _membership_out(membership)
 
 
 class MembershipUpdate(BaseModel):
@@ -311,14 +306,7 @@ def update_membership(
         membership.status = MembershipStatus.ACTIVE
 
     db.flush()
-    return MembershipOut(
-        id=membership.id,
-        user=UserOut.model_validate(membership.user),
-        role_name=membership.role.name,
-        status=str(membership.status),
-        has_all_branches=membership.has_all_branches,
-        branch_ids=sorted(membership.branch_ids()),
-    )
+    return _membership_out(membership)
 
 
 def _assert_not_last_owner(db, ctx, membership) -> None:

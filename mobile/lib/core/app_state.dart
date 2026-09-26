@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/customer.dart';
 import '../models/product.dart';
 import '../models/session.dart';
 import 'api_client.dart';
@@ -33,6 +34,7 @@ class AppState extends ChangeNotifier {
 
   UserSession? session;
   List<Product> products = const [];
+  List<Customer> customers = const [];
   DateTime? catalogueFetchedAt;
   bool loading = true;
   String? error;
@@ -58,6 +60,7 @@ class AppState extends ChangeNotifier {
     }
 
     products = await catalogue.load();
+    customers = await catalogue.loadCustomers();
     catalogueFetchedAt = await catalogue.fetchedAt();
     loading = false;
     notifyListeners();
@@ -89,6 +92,7 @@ class AppState extends ChangeNotifier {
     api.token = null;
     session = null;
     products = const [];
+    customers = const [];
     await catalogue.clear();
     // The outbox is deliberately kept: unsynced work is not thrown away
     // because someone signed out.
@@ -112,6 +116,16 @@ class AppState extends ChangeNotifier {
             .toList();
         await catalogue.save(products);
         catalogueFetchedAt = DateTime.now();
+      }
+      if (session!.can('customer:view')) {
+        // Names and phones only, so a credit sale can name its customer with
+        // no connection. Balances are deliberately not relied on offline.
+        final dynamic page = await api.get('/customers', query: {'limit': '200'});
+        final items = (page as Map<String, dynamic>)['items'] as List<dynamic>;
+        customers = items
+            .map((item) => Customer.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList();
+        await catalogue.saveCustomers(customers);
       }
       error = null;
     } on ApiException catch (exception) {
@@ -138,6 +152,34 @@ class AppState extends ChangeNotifier {
           (variant.barcode ?? '').toLowerCase().contains(text) ||
           (variant.sku ?? '').toLowerCase().contains(text));
     }).toList();
+  }
+
+  /// Search the customers held on the device.
+  List<Customer> searchCustomers(String query) {
+    final text = query.trim().toLowerCase();
+    if (text.isEmpty) return customers;
+    return customers.where((customer) {
+      if (customer.name.toLowerCase().contains(text)) return true;
+      if ((customer.phone ?? '').contains(text)) return true;
+      return (customer.company ?? '').toLowerCase().contains(text);
+    }).toList();
+  }
+
+  /// Add a customer on the server. Needs a connection: a customer created
+  /// only on the device would have no id for the sale to reference.
+  Future<Customer> createCustomer({required String name, String? phone}) async {
+    final dynamic created = await api.post(
+      '/customers',
+      body: {
+        'name': name.trim(),
+        if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
+      },
+    );
+    final customer = Customer.fromJson(Map<String, dynamic>.from(created as Map));
+    customers = [...customers, customer]..sort((a, b) => a.name.compareTo(b.name));
+    await catalogue.saveCustomers(customers);
+    notifyListeners();
+    return customer;
   }
 
   Product? findByBarcode(String barcode) {

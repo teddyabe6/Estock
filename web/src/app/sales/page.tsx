@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
-import { Alert, Badge, Empty, PageHead } from "@/components/ui";
+import { Alert, Badge, Empty, PageHead, Toggle } from "@/components/ui";
 import { api, type Sale } from "@/lib/api";
 import { amount, dateTime } from "@/lib/format";
-import { useSession } from "@/lib/session";
+import { describeError, useSession } from "@/lib/session";
 
 export default function SalesPage() {
   return (
@@ -18,24 +18,25 @@ export default function SalesPage() {
 }
 
 function Sales() {
-  const { session, can } = useSession();
+  const { session, can, canWrite } = useSession();
   const [items, setItems] = useState<Sale[]>([]);
   const [total, setTotal] = useState(0);
+  const [includeVoided, setIncludeVoided] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     api
-      .sales({ limit: 50 })
+      .sales({ limit: 100, include_voided: includeVoided })
       .then((page) => {
         setItems(page.items);
         setTotal(page.total);
+        setError(null);
       })
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not load sales"),
-      )
+      .catch((cause) => setError(describeError(cause, "Could not load sales")))
       .finally(() => setLoading(false));
-  }, []);
+  }, [includeVoided]);
 
   const currency = session?.currency ?? "ETB";
 
@@ -45,7 +46,7 @@ function Sales() {
         title="Sales"
         subtitle={loading ? "Loading…" : `${total} recorded`}
         actions={
-          can("sale:create") ? (
+          canWrite && can("sale:create") ? (
             <Link href="/sales/new">
               <button type="button">New sale</button>
             </Link>
@@ -56,6 +57,7 @@ function Sales() {
       <Alert>{error}</Alert>
 
       <div className="card">
+        <Toggle label="Show voided sales" checked={includeVoided} onChange={setIncludeVoided} />
         {items.length === 0 && !loading ? (
           <Empty title="No sales yet">
             <p>Your first sale will appear here.</p>
@@ -76,7 +78,9 @@ function Sales() {
               <tbody>
                 {items.map((sale) => (
                   <tr key={sale.id}>
-                    <td className="nowrap">{sale.number}</td>
+                    <td className="nowrap">
+                      <Link href={`/sales/${sale.id}`}>{sale.number}</Link>
+                    </td>
                     <td className="muted nowrap">{dateTime(sale.sold_at)}</td>
                     <td className="num">{amount(sale.total_amount)}</td>
                     <td className="num">{amount(sale.amount_paid)}</td>

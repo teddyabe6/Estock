@@ -16,7 +16,7 @@ machine running the API (`http://192.168.x.x:8000/api/v1`), and make sure that
 host is listed in the API's `CORS_ORIGINS`.
 
 ```bash
-flutter test        # 31 tests
+flutter test        # 35 tests
 flutter analyze
 flutter build apk --release --dart-define=API_BASE_URL=https://api.yourshop.et/api/v1
 ```
@@ -32,6 +32,9 @@ never depends on the network.
 - The catalogue — names, prices, last-known quantities — refreshed whenever
   there is a connection. Quantities from the cache are labelled as last known;
   the server decides what actually fits the stock on hand.
+- The customer list (names and phones), so a credit sale can name its customer
+  with no connection. Adding a *new* customer needs the server, because the
+  sale must reference an id the server issued.
 - An **outbox** of operations captured while offline.
 
 **What is not held on the device**
@@ -83,7 +86,7 @@ lib/
   models/                       product, session
   screens/                      sign-in, shell, home, sale, stock, shop, credit, more, pending
   widgets/                      stat tiles, status chips, offline banner
-test/                           31 tests
+test/                           35 tests
 ```
 
 ## Fonts

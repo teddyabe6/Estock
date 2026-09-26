@@ -67,6 +67,8 @@ export default function SignInPage() {
 
         <p className="sub" style={{ marginTop: 16, marginBottom: 0 }}>
           New here? <Link href="/register">Create a business account</Link>
+          <br />
+          <Link href="/forgot-password">Forgot your password?</Link>
         </p>
       </div>
     </div>

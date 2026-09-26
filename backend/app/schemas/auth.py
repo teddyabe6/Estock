@@ -81,6 +81,8 @@ class MembershipOut(Schema):
     status: str
     has_all_branches: bool
     branch_ids: list[uuid.UUID] = []
+    #: Present while an invitation is pending, for the inviter to pass on.
+    invitation_url: str | None = None
 
 
 class SessionOut(BaseModel):
