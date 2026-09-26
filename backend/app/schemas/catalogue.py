@@ -77,7 +77,9 @@ class ProductIn(BaseModel):
 
 class ProductUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=120)
-    sku: str | None = None
+    sku: str | None = Field(None, max_length=64)
+    #: For a simple product this is its one variant's barcode.
+    barcode: str | None = Field(None, max_length=64)
     description: str | None = None
     brand: str | None = None
     unit_of_measure: str | None = None
@@ -107,6 +109,10 @@ class VariantUpdate(BaseModel):
 
 class VariantOut(BaseModel):
     id: uuid.UUID
+    product_id: uuid.UUID | None = None
+    #: The product's name, and the name to show on a sales line (variant label included).
+    product_name: str | None = None
+    display_name: str | None = None
     name: str | None = None
     sku: str | None = None
     barcode: str | None = None

@@ -14,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
+from app.core.clock import local_date
 from app.core.db import utcnow
 from app.core.errors import ValidationError
 from app.core.permissions import Permission
@@ -132,7 +133,9 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
         quantize_money(Decimal(line.unit_cost) * Decimal(line.quantity)) for line in data.lines
     ]
     goods_total = quantize_money(sum(line_values, ZERO))
-    shared_cost = quantize_money(Decimal(data.transport_cost) + Decimal(data.other_costs))
+    transport_total = quantize_money(Decimal(data.transport_cost))
+    other_total = quantize_money(Decimal(data.other_costs))
+    shared_cost = quantize_money(transport_total + other_total)
     weights = (
         line_values
         if data.cost_allocation_method == "by_value"
@@ -202,10 +205,15 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
         else:
             variant.average_cost = landed_unit_cost
 
-        # Keep the purchasing inputs current so the product page explains the cost.
+        # Keep the purchasing inputs current so the product page explains the
+        # latest landed cost: the line's share of transport and of other costs,
+        # each per unit.
         variant.purchase_price = unit_cost
-        if quantity > 0 and allocation > 0:
-            variant.transport_cost = quantize_money(allocation / quantity)
+        transport_share = (
+            quantize_money(allocation * transport_total / shared_cost) if shared_cost else ZERO
+        )
+        variant.transport_cost = quantize_money(transport_share / quantity)
+        variant.other_costs = quantize_money((allocation - transport_share) / quantity)
 
         if data.reprice_from_cost:
             from app.services.pricing import suggest_price_for_variant
@@ -226,10 +234,11 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
 
     credit_transaction: CreditTransaction | None = None
     balance = quantize_money(total_amount - amount_paid)
+    received_on = local_date(received_at, ctx.tenant.timezone)
     if balance > ZERO:
         ctx.require(Permission.CREDIT_CREATE)
         due_date = credit_service.resolve_due_date(
-            data.due_date_preset, data.due_date, today=received_at.date()
+            data.due_date_preset, data.due_date, today=received_on
         )
         credit_transaction = credit_service.create_credit_transaction(
             db,
@@ -240,7 +249,7 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
             supplier_id=purchase.supplier_id,
             purchase_id=purchase.id,
             due_date=due_date,
-            issued_on=received_at.date(),
+            issued_on=received_on,
             agreement_note=data.credit_note,
         )
 
@@ -268,7 +277,7 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
         )
         db.flush()
         if credit_transaction is not None:
-            credit_service.recalculate(db, credit_transaction)
+            credit_service.recalculate(db, credit_transaction, today=received_on)
 
     record_audit(
         db,

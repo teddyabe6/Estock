@@ -11,11 +11,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-from sqlalchemy import Select, select
+from sqlalchemy import ColumnElement, Select, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError, PermissionDenied
-from app.core.permissions import Permission
+from app.core.permissions import READ_ONLY_PERMISSIONS, Permission
 from app.models.access import TenantMembership, User
 from app.models.organisation import Branch, StockLocation
 from app.models.platform import Tenant
@@ -34,6 +34,9 @@ class AuthContext:
     #: Branch ids the user may operate in; empty with ``all_branches`` set means all.
     assigned_branch_ids: frozenset[uuid.UUID] = field(default_factory=frozenset)
     all_branches: bool = False
+    #: A platform-support session: may look at everything the user may, but
+    #: never change anything (PRD 5.2).
+    is_support: bool = False
 
     @property
     def tenant_id(self) -> uuid.UUID:
@@ -78,15 +81,31 @@ class AuthContext:
         return list(self.assigned_branch_ids)
 
 
-def build_auth_context(user: User, tenant: Tenant, membership: TenantMembership) -> AuthContext:
+def build_auth_context(
+    user: User, tenant: Tenant, membership: TenantMembership, *, support: bool = False
+) -> AuthContext:
+    permissions = frozenset(membership.effective_permissions())
+    if support:
+        permissions = permissions & READ_ONLY_PERMISSIONS
     return AuthContext(
         user=user,
         tenant=tenant,
         membership=membership,
-        permissions=frozenset(membership.effective_permissions()),
+        permissions=permissions,
         assigned_branch_ids=frozenset(membership.branch_ids()),
         all_branches=membership.has_all_branches,
+        is_support=support,
     )
+
+
+def in_branches(column: ColumnElement, branch_ids: list[uuid.UUID]) -> ColumnElement:
+    """Rows in the given branches, plus rows that belong to no branch.
+
+    ``column.in_([..., None])`` looks like it does this but never matches a
+    NULL — SQL's ``IN`` compares with ``=`` — so business-wide rows would
+    silently vanish from every branch-filtered list.
+    """
+    return or_(column.in_(branch_ids), column.is_(None))
 
 
 def tenant_query(model: type[ModelT], tenant_id: uuid.UUID) -> Select[tuple[ModelT]]:

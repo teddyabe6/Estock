@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
+from app.core.clock import local_today
 from app.core.db import utcnow
 from app.core.errors import ConflictError, ValidationError
 from app.core.permissions import Permission
@@ -124,6 +125,7 @@ def create_credit_transaction(
     if amount <= ZERO:
         raise ValidationError("A credit transaction needs a positive amount")
 
+    today = local_today(ctx.tenant.timezone)
     transaction = CreditTransaction(
         tenant_id=ctx.tenant_id,
         reference=next_number(db, CreditTransaction, ctx.tenant_id, "credit", column="reference"),
@@ -136,16 +138,23 @@ def create_credit_transaction(
         original_amount=amount,
         amount_paid=ZERO,
         currency=ctx.tenant.currency,
-        issued_on=issued_on or date.today(),
+        issued_on=issued_on or today,
         due_date=due_date,
         agreement_note=agreement_note,
         created_by_id=ctx.user_id,
     )
-    transaction.status = derive_status(transaction)
+    transaction.status = derive_status(transaction, today=today)
     db.add(transaction)
     db.flush()
-    schedule_reminders(db, ctx, transaction)
+    schedule_reminders(db, ctx, transaction, today=today)
     return transaction
+
+
+def _require_credit_access(ctx: AuthContext, transaction: CreditTransaction) -> None:
+    """Payables are purchasing data: a salesperson may handle receivables only."""
+    if transaction.kind == CreditKind.PAYABLE:
+        ctx.require(Permission.PURCHASE_VIEW)
+    ctx.require_branch(transaction.branch_id)
 
 
 def record_payment(
@@ -171,7 +180,7 @@ def record_payment(
     transaction = get_tenant_object(
         db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
     )
-    ctx.require_branch(transaction.branch_id)
+    _require_credit_access(ctx, transaction)
 
     amount = Decimal(amount)
     if amount <= ZERO:
@@ -223,7 +232,7 @@ def record_payment(
     db.add(payment)
     db.flush()
 
-    recalculate(db, transaction)
+    recalculate(db, transaction, today=local_today(ctx.tenant.timezone))
     _cancel_reminders_if_settled(db, transaction)
     record_audit(
         db,
@@ -245,6 +254,9 @@ def reverse_payment(
     """Mark a payment reversed.  The row stays; history is never deleted (PRD 11.7)."""
     ctx.require(Permission.CREDIT_PAYMENT_RECORD)
     payment = get_tenant_object(db, Payment, payment_id, ctx.tenant_id, label="Payment")
+    if payment.direction == PaymentDirection.OUT:
+        ctx.require(Permission.PURCHASE_VIEW)
+    ctx.require_branch(payment.branch_id)
     if payment.is_reversed:
         raise ConflictError("This payment has already been reversed")
     if not reason:
@@ -259,8 +271,9 @@ def reverse_payment(
     if payment.credit_transaction_id:
         transaction = db.get(CreditTransaction, payment.credit_transaction_id)
         if transaction is not None:
-            recalculate(db, transaction)
-            schedule_reminders(db, ctx, transaction)
+            today = local_today(ctx.tenant.timezone)
+            recalculate(db, transaction, today=today)
+            schedule_reminders(db, ctx, transaction, today=today)
 
     record_audit(
         db,
@@ -289,13 +302,16 @@ def change_due_date(
     transaction = get_tenant_object(
         db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
     )
-    ctx.require_branch(transaction.branch_id)
+    _require_credit_access(ctx, transaction)
+    if transaction.cancelled_at is not None:
+        raise ConflictError("This transaction has been cancelled")
+    today = local_today(ctx.tenant.timezone)
     previous = transaction.due_date
     transaction.due_date = due_date
-    transaction.status = derive_status(transaction)
+    transaction.status = derive_status(transaction, today=today)
 
     _clear_scheduled_reminders(db, transaction)
-    schedule_reminders(db, ctx, transaction)
+    schedule_reminders(db, ctx, transaction, today=today)
 
     record_audit(
         db,
@@ -319,6 +335,7 @@ def cancel_transaction(
     transaction = get_tenant_object(
         db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
     )
+    _require_credit_access(ctx, transaction)
     if not reason:
         raise ValidationError("A reason is required to cancel a credit transaction")
     if transaction.cancelled_at is not None:
@@ -360,7 +377,7 @@ def add_follow_up(
     transaction = get_tenant_object(
         db, CreditTransaction, transaction_id, ctx.tenant_id, label="Credit transaction"
     )
-    ctx.require_branch(transaction.branch_id)
+    _require_credit_access(ctx, transaction)
     activity = FollowUpActivity(
         tenant_id=ctx.tenant_id,
         credit_transaction_id=transaction.id,
@@ -396,7 +413,7 @@ def schedule_reminders(
     if transaction.balance <= ZERO:
         return []
 
-    today = today or date.today()
+    today = today or local_today(ctx.tenant.timezone)
     lead_days = ctx.tenant.reminder_lead_days or 3
     wanted: list[tuple[ReminderKind, date]] = [
         (ReminderKind.DUE_SOON, transaction.due_date - timedelta(days=lead_days)),
@@ -518,9 +535,10 @@ def check_credit_limit(
     if behaviour == "block":
         return CreditLimitCheck(False, False, limit, outstanding, projected, message)
     if behaviour == "require_approval":
-        return CreditLimitCheck(
-            ctx.has(Permission.CREDIT_LIMIT_OVERRIDE), True, limit, outstanding, projected, message
-        )
+        # Not allowed as it stands: someone holding credit:limit_override must
+        # approve this sale explicitly, and that approval is audited.  Holding
+        # the permission is not the same as having used it.
+        return CreditLimitCheck(False, True, limit, outstanding, projected, message)
     return CreditLimitCheck(True, False, limit, outstanding, projected, message)
 
 

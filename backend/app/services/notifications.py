@@ -10,11 +10,12 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import day_start, local_today
 from app.core.db import utcnow
 from app.core.permissions import Permission
 from app.models.access import MembershipStatus, TenantMembership
@@ -53,6 +54,11 @@ def set_email_sender(sender: EmailSender) -> None:
     _email_sender = sender
 
 
+def send_email(*, to: str, subject: str, body: str) -> bool:
+    """Send through whichever transport is configured."""
+    return _email_sender.send(to=to, subject=subject, body=body)
+
+
 def recipients_for(
     db: Session, tenant_id: uuid.UUID, permission: Permission
 ) -> list[TenantMembership]:
@@ -64,6 +70,31 @@ def recipients_for(
         )
     ).scalars()
     return [m for m in memberships if permission in m.effective_permissions()]
+
+
+def already_notified_today(
+    db: Session,
+    *,
+    tenant: Tenant,
+    user_id: uuid.UUID,
+    kind: NotificationKind,
+    title: str | None = None,
+) -> bool:
+    """Whether this person already got this notice today, in their business's day.
+
+    The worker runs hourly; the daily digests (low stock, trial warnings) must
+    not repeat every hour.
+    """
+    since = day_start(local_today(tenant.timezone), tenant.timezone)
+    stmt = select(Notification.id).where(
+        Notification.tenant_id == tenant.id,
+        Notification.user_id == user_id,
+        Notification.kind == kind,
+        Notification.created_at >= since,
+    )
+    if title is not None:
+        stmt = stmt.where(Notification.title == title)
+    return db.execute(stmt.limit(1)).first() is not None
 
 
 def notify(
@@ -118,17 +149,29 @@ def _reminder_text(transaction: CreditTransaction, kind: ReminderKind) -> tuple[
 
 
 def run_due_reminders(db: Session, *, on: date | None = None) -> ReminderRunResult:
-    """Deliver scheduled reminders to authorised staff (PRD 11.4)."""
-    on = on or date.today()
-    result = ReminderRunResult()
+    """Deliver scheduled reminders to authorised staff (PRD 11.4).
 
+    A reminder falls due on a calendar date in the business's own timezone,
+    so "today" is worked out per business rather than from the server clock.
+    """
+    result = ReminderRunResult()
+    # Fetch one day ahead of the server date so a business east of UTC is not
+    # kept waiting; the per-business check below decides what is really due.
+    horizon = (on or date.today()) + timedelta(days=1)
     reminders = db.execute(
         select(Reminder).where(
-            Reminder.status == ReminderStatus.SCHEDULED, Reminder.scheduled_for <= on
+            Reminder.status == ReminderStatus.SCHEDULED, Reminder.scheduled_for <= horizon
         )
     ).scalars().all()
+    zones: dict[uuid.UUID, str] = {}
 
     for reminder in reminders:
+        if reminder.tenant_id not in zones:
+            tenant = db.get(Tenant, reminder.tenant_id)
+            zones[reminder.tenant_id] = tenant.timezone if tenant else "UTC"
+        due_today = on if on is not None else local_today(zones[reminder.tenant_id])
+        if reminder.scheduled_for > due_today:
+            continue
         result.considered += 1
         transaction = db.get(CreditTransaction, reminder.credit_transaction_id)
         if transaction is None or transaction.cancelled_at is not None or transaction.balance <= 0:
@@ -137,11 +180,8 @@ def run_due_reminders(db: Session, *, on: date | None = None) -> ReminderRunResu
             continue
 
         title, body = _reminder_text(transaction, reminder.kind)
-        link = (
-            f"/credit/receivables/{transaction.id}"
-            if transaction.kind == CreditKind.RECEIVABLE
-            else f"/credit/payables/{transaction.id}"
-        )
+        # Deep links into the web app (web/src/app/credit, web/src/app/stock).
+        link = f"/credit?kind={transaction.kind.value}&open={transaction.id}"
         staff = recipients_for(db, transaction.tenant_id, Permission.CREDIT_VIEW)
         if not staff:
             reminder.status = ReminderStatus.FAILED
@@ -200,6 +240,11 @@ def run_low_stock_alerts(db: Session) -> LowStockRunResult:
         if len(urgent) > 5:
             body += f" and {len(urgent) - 5} more"
         for membership in staff:
+            # One digest per person per day, however often the worker runs.
+            if already_notified_today(
+                db, tenant=tenant, user_id=membership.user_id, kind=NotificationKind.LOW_STOCK
+            ):
+                continue
             notify(
                 db,
                 tenant_id=tenant.id,
@@ -207,7 +252,7 @@ def run_low_stock_alerts(db: Session) -> LowStockRunResult:
                 kind=NotificationKind.LOW_STOCK,
                 title=headline,
                 body=body,
-                link="/stock/low",
+                link="/stock?view=low",
             )
             result.alerts_created += 1
     db.flush()

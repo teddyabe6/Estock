@@ -41,6 +41,9 @@ class User(UUIDPrimaryKey, Timestamped, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    #: Account recovery (PRD 20): a single-use token with an expiry.
+    password_reset_token: Mapped[str | None] = mapped_column(String(64), index=True)
+    password_reset_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     memberships: Mapped[list[TenantMembership]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

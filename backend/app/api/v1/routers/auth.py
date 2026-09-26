@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.db import utcnow
-from app.core.deps import Ctx, CurrentUser, DbSession
+from app.core.deps import Ctx, CurrentUser, DbSession, client_ip, login_limiter
 from app.core.errors import AuthenticationError
 from app.core.security import create_access_token, verify_password
 from app.core.tenancy import tenant_query
@@ -17,13 +17,21 @@ from app.schemas.auth import (
     AcceptInviteRequest,
     BranchOut,
     LoginRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     RegisterRequest,
     SessionOut,
     TokenResponse,
     UserOut,
 )
+from app.schemas.common import Message
 from app.services import subscription as subscription_service
-from app.services.onboarding import accept_invitation, register_business
+from app.services.onboarding import (
+    accept_invitation,
+    register_business,
+    request_password_reset,
+    reset_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,7 +60,9 @@ def register(payload: RegisterRequest, db: DbSession, request: Request) -> Token
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: DbSession) -> TokenResponse:
+def login(payload: LoginRequest, db: DbSession, request: Request) -> TokenResponse:
+    # Per address and per account, so a guessing run is stopped early (PRD 20).
+    login_limiter.check(client_ip(request), payload.email.strip().lower())
     user = db.execute(
         select(User).where(User.email == payload.email.strip().lower())
     ).scalar_one_or_none()
@@ -97,6 +107,26 @@ def accept_invite(payload: AcceptInviteRequest, db: DbSession) -> TokenResponse:
     )
 
 
+@router.post("/password-reset/request", response_model=Message)
+def password_reset_request(
+    payload: PasswordResetRequest, db: DbSession, request: Request
+) -> Message:
+    """Start account recovery.  The reply never says whether the address exists."""
+    login_limiter.check(client_ip(request), "reset", payload.email.strip().lower())
+    request_password_reset(db, email=payload.email)
+    return Message(
+        message="If that address has an account, a reset link is on its way.",
+        detail=f"The link works once and expires in {settings.password_reset_ttl_minutes} minutes.",
+    )
+
+
+@router.post("/password-reset/confirm", response_model=Message)
+def password_reset_confirm(payload: PasswordResetConfirm, db: DbSession, request: Request) -> Message:
+    login_limiter.check(client_ip(request), "reset-confirm")
+    reset_password(db, token=payload.token, password=payload.password)
+    return Message(message="Your password has been changed. Sign in with the new one.")
+
+
 @router.get("/session", response_model=SessionOut)
 def current_session(ctx: Ctx, db: DbSession) -> SessionOut:
     """Everything the client needs to render only what this user may see."""
@@ -117,6 +147,8 @@ def current_session(ctx: Ctx, db: DbSession) -> SessionOut:
         all_branches=ctx.all_branches,
         branches=[BranchOut.model_validate(b) for b in branches],
         subscription=subscription_service.describe(db, ctx.tenant).as_dict(),
+        timezone=ctx.tenant.timezone,
+        is_support=ctx.is_support,
     )
 
 

@@ -24,6 +24,8 @@ type SessionState = {
   refresh: () => Promise<void>;
   /** Permission check mirroring the server's; the server still decides. */
   can: (permission: string) => boolean;
+  /** Whether this session may change anything at all. */
+  canWrite: boolean;
 };
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -80,9 +82,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [session],
   );
 
+  const canWrite = !!session && !session.is_support && !session.subscription.read_only;
+
   const value = useMemo(
-    () => ({ session, loading, error, signIn, signOut, refresh, can }),
-    [session, loading, error, signIn, signOut, refresh, can],
+    () => ({ session, loading, error, signIn, signOut, refresh, can, canWrite }),
+    [session, loading, error, signIn, signOut, refresh, can, canWrite],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
@@ -94,4 +98,9 @@ export function useSession(): SessionState {
     throw new Error("useSession must be used inside a SessionProvider");
   }
   return context;
+}
+
+/** Turn any thrown value into a sentence the user can read. */
+export function describeError(cause: unknown, fallback = "Something went wrong"): string {
+  return cause instanceof Error && cause.message ? cause.message : fallback;
 }

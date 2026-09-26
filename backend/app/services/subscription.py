@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
+from app.core.clock import local_today
 from app.core.errors import NotFoundError
 from app.models.platform import (
     Subscription,
@@ -50,7 +51,7 @@ class SubscriptionState:
 
 
 def describe(db: Session, tenant: Tenant, *, today: date | None = None) -> SubscriptionState:
-    today = today or date.today()
+    today = today or local_today(tenant.timezone)
     subscription = db.execute(
         select(Subscription).where(Subscription.tenant_id == tenant.id)
     ).scalar_one_or_none()
@@ -81,7 +82,6 @@ def expire_lapsed_trials(db: Session, *, today: date | None = None) -> list[uuid
 
     Data is retained; only new posting is blocked (PRD 17).
     """
-    today = today or date.today()
     expired: list[uuid.UUID] = []
 
     rows = db.execute(
@@ -90,11 +90,13 @@ def expire_lapsed_trials(db: Session, *, today: date | None = None) -> list[uuid
         .where(
             Subscription.status == SubscriptionStatus.TRIALING,
             Subscription.trial_ends_on.is_not(None),
-            Subscription.trial_ends_on < today,
         )
     ).all()
 
     for subscription, tenant in rows:
+        # The trial ends at the end of its last day where the business is.
+        if subscription.trial_ends_on >= (today or local_today(tenant.timezone)):
+            continue
         subscription.status = SubscriptionStatus.EXPIRED
         tenant.status = TenantStatus.RESTRICTED
         expired.append(tenant.id)
@@ -121,8 +123,7 @@ def expire_lapsed_trials(db: Session, *, today: date | None = None) -> list[uuid
 
 
 def warn_expiring_trials(db: Session, *, today: date | None = None) -> int:
-    """Warn businesses whose trial ends soon (PRD 17)."""
-    today = today or date.today()
+    """Warn businesses whose trial ends soon (PRD 17).  Once per day, per person."""
     warned = 0
     rows = db.execute(
         select(Subscription, Tenant)
@@ -134,25 +135,36 @@ def warn_expiring_trials(db: Session, *, today: date | None = None) -> int:
     ).all()
 
     for subscription, tenant in rows:
-        days = (subscription.trial_ends_on - today).days
+        days = (subscription.trial_ends_on - (today or local_today(tenant.timezone))).days
         if days not in EXPIRY_WARNING_DAYS:
             continue
-        _notify_owners(
+        if _notify_owners(
             db,
             tenant,
             title=f"Your trial ends in {days} day(s)",
             body="Subscribe to keep recording sales, stock and credit without interruption.",
-        )
-        warned += 1
+        ):
+            warned += 1
     db.flush()
     return warned
 
 
-def _notify_owners(db: Session, tenant: Tenant, *, title: str, body: str) -> None:
+def _notify_owners(db: Session, tenant: Tenant, *, title: str, body: str) -> int:
+    """Notify each owner once per day for a given notice; returns how many were told."""
     from app.core.permissions import Permission
-    from app.services.notifications import recipients_for
+    from app.services.notifications import already_notified_today, recipients_for
 
+    told = 0
     for membership in recipients_for(db, tenant.id, Permission.BUSINESS_MANAGE):
+        if already_notified_today(
+            db,
+            tenant=tenant,
+            user_id=membership.user_id,
+            kind=NotificationKind.TRIAL_EXPIRY,
+            title=title,
+        ):
+            continue
+        told += 1
         db.add(
             Notification(
                 tenant_id=tenant.id,
@@ -160,9 +172,10 @@ def _notify_owners(db: Session, tenant: Tenant, *, title: str, body: str) -> Non
                 kind=NotificationKind.TRIAL_EXPIRY,
                 title=title,
                 body=body,
-                link="/settings/subscription",
+                link="/settings#subscription",
             )
         )
+    return told
 
 
 def set_tenant_status(

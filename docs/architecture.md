@@ -18,7 +18,7 @@ not obvious. This complements the PRD rather than repeating it.
   │  ├────────────────────────────────────┤  │
   │  │ services  every business rule      │  │
   │  ├────────────────────────────────────┤  │
-  │  │ models    42 tables, tenant-scoped │  │
+  │  │ models    43 tables, tenant-scoped │  │
   │  └────────────────────────────────────┘  │
   └──────────────┬───────────────┬───────────┘
                  │               │
@@ -88,6 +88,13 @@ reported.
 Negative stock is refused unless the business has explicitly enabled it, and
 every negative posting writes an audit record.
 
+A transfer is three steps — draft, dispatch, receive — and stock in transit is
+real. If fewer units arrive than were dispatched, receiving posts the full
+dispatched quantity in and then an explicit *loss* movement out at the
+destination. The units that left the source are all accounted for, the
+destination holds exactly what was counted in, and the discrepancy is a ledger
+row with a reason, an actor and a timestamp rather than a note on the transfer.
+
 ### 4. One payment ledger
 
 The PRD warns against maintaining the same balance independently in several
@@ -122,6 +129,38 @@ The due-date rules follow the PRD closely, and the distinction matters:
   still owed. Due *today* is not yet overdue.
 - Changing a due date reschedules reminders and recomputes the state, and is
   audited.
+
+## Document numbers come from a locked sequence
+
+`S-2026-000042`, `P-2026-000007`, `PF-2026-000003`: each business, document
+kind and year has one row in `document_sequences` holding the last number
+issued. `next_number` reads it under `SELECT … FOR UPDATE`, so two sales
+posted at the same moment queue behind each other instead of both computing
+the same number and one of them failing on the unique constraint. SQLite has
+no row locks but serialises writers, which gives the same result.
+
+The first number issued after an upgrade seeds the row from the highest
+number already in the table, so a database that used the old count-based
+scheme carries on where it left off. The unique constraint on
+`(tenant_id, number)` stays as the backstop, and a PostgreSQL-only test starts
+two transactions at once and checks that the second waits.
+
+## The business's clock, not the server's
+
+Timestamps are stored in UTC. A business lives in its own timezone — Addis
+Ababa is UTC+3 — and every calendar question is asked in that zone
+(`app/core/clock.py`):
+
+- "today" on the dashboard, and the day a sale or purchase was issued on;
+- the start and end of a report period, and which day each sale belongs to
+  in the sales-by-day report;
+- whether a balance is due today or overdue;
+- when the worker considers a reminder due, per business.
+
+Without this a sale at 01:00 in Addis Ababa lands on the previous day's report
+and a balance due today reads as due tomorrow until 03:00. The Ethiopian
+calendar is a display question layered on top of this and is still to come;
+storage does not change for it.
 
 ## Snapshots, so history stays true
 
@@ -192,7 +231,23 @@ stock, and platform-admin support access.
 Support access deserves a note. There is no hidden impersonation. A platform
 administrator must give a written reason, the grant is recorded in the
 business's own audit log *before* a token is issued, and the token is
-short-lived.
+short-lived. It is also **read-only**: the token carries a `support` claim, the
+API keeps only the `*:view` and `report:*` permissions of the borrowed
+membership, every posting route refuses it, and the `X-Tenant-Id` header cannot
+move it to another business. The web app shows a banner for the whole session.
+
+## Rate limiting and account recovery
+
+Sign-in, platform sign-in, password reset and the public storefront's
+submissions are rate-limited (`app/core/ratelimit.py`): a sliding window per
+client address, and per account for sign-in so one guessed address cannot lock
+out an office behind one NAT. The window lives in process memory, which is
+right for the single-container deployment the PRD starts with; a multi-worker
+deployment puts the same limits at the reverse proxy or swaps the window for a
+Redis-backed one behind the same interface.
+
+Password reset issues a single-use token with an expiry and hands the link to
+the email transport. The reply is the same whether or not the address exists.
 
 ## What the storefront can and cannot do
 
@@ -218,6 +273,7 @@ and untouched, new posting is refused with a clear message. Nothing is deleted.
 | S3 or other object storage | Implement `StorageBackend` in `app/services/storage.py` |
 | Real email delivery | Implement `EmailSender` in `app/services/notifications.py` |
 | Telegram or SMS reminders | Add a `ReminderChannel` and a branch in `run_due_reminders` |
+| Shared rate limits across workers | Implement the window behind `RateLimiter` in `app/core/ratelimit.py` |
 | One payment across many invoices | Add `PaymentAllocation`; `Payment` already has the links |
 | Custom role bundles | `Role` and `RolePermission` are already per-tenant rows |
 | A mobile client | Same API; the OpenAPI document generates typed models |

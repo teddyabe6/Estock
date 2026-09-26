@@ -6,9 +6,9 @@ slug or an unguessable share token.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
-from app.core.deps import DbSession, client_ip
+from app.core.deps import DbSession, client_ip, limit_public_requests
 from app.schemas.operations import EnquiryIn, EnquiryOut
 from app.services.commerce import (
     get_public_store,
@@ -74,7 +74,12 @@ def shop_products(
     }
 
 
-@router.post("/shops/{slug}/enquiries", response_model=EnquiryOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/shops/{slug}/enquiries",
+    response_model=EnquiryOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_public_requests)],
+)
 def enquire(slug: str, payload: EnquiryIn, db: DbSession, request: Request) -> EnquiryOut:
     """Submit an enquiry or proforma request.  No stock is reserved (PRD 13)."""
     store, _ = get_public_store(db, slug)
@@ -144,7 +149,7 @@ def view_quotation(token: str, db: DbSession) -> dict:
     }
 
 
-@router.post("/quotations/{token}/respond")
+@router.post("/quotations/{token}/respond", dependencies=[Depends(limit_public_requests)])
 def respond(token: str, db: DbSession, accept: bool = True) -> dict:
     """Accept or decline.  Acceptance records intent; it posts no sale (PRD 14)."""
     quotation = respond_to_quotation(db, token, accept=accept)

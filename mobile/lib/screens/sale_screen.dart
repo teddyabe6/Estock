@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
 import '../core/offline/outbox.dart';
+import '../models/customer.dart';
 import '../models/product.dart';
 import '../widgets/common.dart';
 
@@ -62,7 +64,7 @@ class _SaleScreenState extends State<SaleScreen> {
 
   String _method = 'cash';
   String? _duePreset;
-  String? _customerId;
+  Customer? _customer;
   bool _busy = false;
   // One key per cart, so a double tap cannot post the sale twice.
   String _idempotencyKey = Outbox.newId();
@@ -106,10 +108,11 @@ class _SaleScreenState extends State<SaleScreen> {
     final state = AppScope.of(context);
     final messenger = ScaffoldMessenger.of(context);
 
-    if (_balance > 0 && _customerId == null) {
+    if (_balance > 0 && _customer == null) {
       messenger.showSnackBar(const SnackBar(
         content: Text('Choose a customer before selling on credit.'),
       ));
+      await _pickCustomer();
       return;
     }
 
@@ -127,7 +130,7 @@ class _SaleScreenState extends State<SaleScreen> {
                 {'method': _method, 'amount': _paidAmount.toStringAsFixed(2)}
               ]
             : <Map<String, dynamic>>[],
-        if (_customerId != null) 'customer_id': _customerId,
+        if (_customer != null) 'customer_id': _customer!.id,
         if (_balance > 0 && _duePreset != null) 'due_date_preset': _duePreset,
         'idempotency_key': _idempotencyKey,
       };
@@ -153,7 +156,7 @@ class _SaleScreenState extends State<SaleScreen> {
       setState(() {
         _lines.clear();
         _paid.clear();
-        _customerId = null;
+        _customer = null;
         _duePreset = null;
         _idempotencyKey = Outbox.newId();
       });
@@ -162,6 +165,17 @@ class _SaleScreenState extends State<SaleScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _pickCustomer() async {
+    final state = AppScope.of(context);
+    final picked = await showModalBottomSheet<Customer?>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => CustomerPicker(state: state, selected: _customer),
+    );
+    if (!mounted || picked == null) return;
+    setState(() => _customer = picked.id.isEmpty ? null : picked);
   }
 
   @override
@@ -332,6 +346,24 @@ class _SaleScreenState extends State<SaleScreen> {
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              ListTile(
+                key: const Key('customerRow'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(Icons.person_outline),
+                title: Text(_customer?.name ?? 'Walk-in customer'),
+                subtitle: Text(
+                  _customer?.phone ??
+                      (_balance > 0
+                          ? 'A customer is needed for credit'
+                          : 'Optional for a cash sale'),
+                ),
+                trailing: TextButton(
+                  onPressed: _pickCustomer,
+                  child: Text(_customer == null ? 'Choose' : 'Change'),
+                ),
+              ),
               if (_balance > 0) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
@@ -394,6 +426,186 @@ class _SaleScreenState extends State<SaleScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Pick a customer from the list held on the device, or add one.
+///
+/// Returns the chosen customer, a customer with an empty id for "walk-in"
+/// (clearing the selection), or null when dismissed.
+class CustomerPicker extends StatefulWidget {
+  const CustomerPicker({super.key, required this.state, this.selected});
+
+  final AppState state;
+  final Customer? selected;
+
+  @override
+  State<CustomerPicker> createState() => _CustomerPickerState();
+}
+
+class _CustomerPickerState extends State<CustomerPicker> {
+  final _query = TextEditingController();
+  final _newName = TextEditingController();
+  final _newPhone = TextEditingController();
+  bool _adding = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _query.dispose();
+    _newName.dispose();
+    _newPhone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    if (_newName.text.trim().isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final customer = await widget.state.createCustomer(
+        name: _newName.text,
+        phone: _newPhone.text,
+      );
+      if (mounted) Navigator.of(context).pop(customer);
+    } on ApiException catch (exception) {
+      setState(() => _error = exception.isNetworkError
+          ? 'Adding a customer needs a connection. Pick an existing one, or '
+              'take cash for now.'
+          : exception.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = widget.state.searchCustomers(_query.text).take(30).toList();
+    final theme = Theme.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.7,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('Customer', style: theme.textTheme.titleMedium),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(
+                      const Customer(id: '', name: 'Walk-in customer'),
+                    ),
+                    child: const Text('Walk-in'),
+                  ),
+                ],
+              ),
+            ),
+            if (_adding) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(_error!,
+                            style: TextStyle(color: theme.colorScheme.error)),
+                      ),
+                    TextField(
+                      key: const Key('newCustomerName'),
+                      controller: _newName,
+                      autofocus: true,
+                      decoration: const InputDecoration(labelText: 'Name'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      key: const Key('newCustomerPhone'),
+                      controller: _newPhone,
+                      keyboardType: TextInputType.phone,
+                      decoration:
+                          const InputDecoration(labelText: 'Phone (optional)'),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => setState(() => _adding = false),
+                            child: const Text('Back'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton(
+                            key: const Key('saveCustomer'),
+                            onPressed: _busy ? null : _create,
+                            child: Text(_busy ? 'Saving…' : 'Save'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  key: const Key('customerSearch'),
+                  controller: _query,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'Search by name or phone',
+                    prefixIcon: Icon(Icons.search),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.person_add_outlined),
+                title: const Text('Add a new customer'),
+                subtitle: widget.state.sync.isOnline
+                    ? null
+                    : const Text('Needs a connection'),
+                onTap: () => setState(() => _adding = true),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: matches.isEmpty
+                    ? const EmptyState(
+                        icon: Icons.person_search_outlined,
+                        title: 'No matching customer',
+                        message: 'Try another name, or add them.',
+                      )
+                    : ListView.builder(
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) {
+                          final customer = matches[index];
+                          return ListTile(
+                            title: Text(customer.name),
+                            subtitle: customer.phone == null
+                                ? null
+                                : Text(customer.phone!),
+                            selected: customer.id == widget.selected?.id,
+                            onTap: () => Navigator.of(context).pop(customer),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ],
         ),
       ),
     );

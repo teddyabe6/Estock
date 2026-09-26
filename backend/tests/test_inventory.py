@@ -462,3 +462,53 @@ def test_reconciliation_reports_a_tampered_balance(business):
     assert len(discrepancies) == 1
     assert discrepancies[0]["ledger_total"] == "10.000"
     assert discrepancies[0]["cached_balance"] == "999"
+
+
+def test_a_transfer_shortfall_is_posted_as_a_loss_movement(business):
+    """Units that left the source and never arrived are a traceable loss (PRD 9)."""
+    _, warehouse = business.add_branch("Warehouse")
+    product = business.add_product("Pens", opening_stock="100")
+    variant = product.default_variant
+
+    transfer = create_transfer(
+        business.db,
+        business.ctx,
+        from_location_id=business.location.id,
+        to_location_id=warehouse.id,
+        lines=[(variant.id, Decimal("30"))],
+    )
+    dispatch_transfer(business.db, business.ctx, transfer.id)
+    receive_transfer(business.db, business.ctx, transfer.id, {transfer.lines[0].id: Decimal("28")})
+
+    movements = (
+        business.db.query(StockMovement)
+        .filter(StockMovement.source_id == transfer.id, StockMovement.location_id == warehouse.id)
+        .all()
+    )
+    by_reason = {m.reason: m for m in movements}
+    assert by_reason[MovementReason.TRANSFER_IN].quantity == Decimal("30.000")
+    assert by_reason[MovementReason.LOSS].quantity == Decimal("-2.000")
+    assert "not received" in (by_reason[MovementReason.LOSS].note or "")
+    assert by_reason[MovementReason.LOSS].created_by_id == business.owner.id
+    # Source and destination together account for every unit.
+    assert available_quantity(business.db, business.tenant.id, variant.id) == Decimal("98.000")
+    assert reconcile_balances(business.db, business.tenant.id) == []
+
+
+def test_receiving_a_transfer_twice_does_not_double_the_loss(business):
+    _, warehouse = business.add_branch("Warehouse")
+    product = business.add_product("Pens", opening_stock="100")
+    transfer = create_transfer(
+        business.db,
+        business.ctx,
+        from_location_id=business.location.id,
+        to_location_id=warehouse.id,
+        lines=[(product.default_variant.id, Decimal("10"))],
+    )
+    dispatch_transfer(business.db, business.ctx, transfer.id)
+    receive_transfer(business.db, business.ctx, transfer.id, {transfer.lines[0].id: Decimal("9")})
+    with pytest.raises(ConflictError):
+        receive_transfer(business.db, business.ctx, transfer.id)
+    assert get_balance(
+        business.db, business.tenant.id, product.default_variant.id, warehouse.id
+    ) == Decimal("9.000")

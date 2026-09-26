@@ -21,6 +21,16 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Share a proforma without posting a sale or reducing stock | `test_a_proforma_is_not_a_sale_until_it_is_converted` |
 | Reports agree with transactions and respect permissions | `test_permissions.py`, `test_profit_figures_are_withheld_without_cost_view` |
 | Trial expiry applies the policy without deleting data | `test_an_expired_trial_restricts_access_without_deleting_data` |
+| Security: rate limiting, account recovery, read-only support access | `test_repeated_failed_sign_ins_are_rate_limited`, `test_password_reset_round_trip`, `test_support_access_can_look_but_not_touch` |
+| Concurrent sales, duplicate submissions and retries | `test_concurrency.py`, including a PostgreSQL-only test of two transactions numbering at once |
+| A transfer received short keeps every unit accounted for | `test_a_transfer_shortfall_is_posted_as_a_loss_movement` |
+
+The web app now covers every MVP workflow end to end: onboarding, import,
+products, sales and receipts, receiving with supplier credit, adjustments and
+transfers, the online shop with enquiries and proformas, credit with payments
+and follow-up, reports with CSV export, contacts, notifications and settings.
+The mobile app covers sales (cash or credit, with a customer picker that works
+offline), stock lookup, credit and the shop.
 
 ## Also built (ahead of the PRD's own schedule)
 
@@ -45,15 +55,22 @@ Ordered by what a first real shop would miss soonest.
    database, API, web and mobile, with the font bundled in the app — and there
    are tests. What is missing is translating the interface strings themselves
    and a locale switch.
-2. **Receipt and proforma PDFs.** Both pages print cleanly today; a server-side
+2. **Email delivery.** `EmailSender` is a one-class swap once a provider is
+   chosen. Until then password-reset links are written to the API log rather
+   than sent, and the owner passes an invitation link on by hand: the Team
+   page shows it for every pending invitation with a copy button.
+3. **Receipt and proforma PDFs.** Both pages print cleanly today; a server-side
    renderer would make sharing more reliable on low-end phones.
-3. **Email delivery.** `EmailSender` is a one-class swap once a provider is
-   chosen.
-4. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
+4. **Product images.** `FileAsset` and the storage interface exist; an upload
+   endpoint and the storefront's image slot do not yet.
+5. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
    products; nothing enforces them yet.
-5. **Barcode scanning with the camera.** The sale screen already accepts
+6. **Barcode scanning with the camera.** The sale screens already accept
    scanner input (a scanner types and presses Enter); using the phone camera
    needs a plugin and a permissions flow.
+7. **Stock counts in the web app.** The API has the count workflow (start,
+   record lines, review variances, post); the web app does not yet have a
+   screen for it.
 
 ## V1.5
 
@@ -88,9 +105,13 @@ customer communications, marketplace and discovery, accounting integrations.
   returns to stock with money back are not yet modelled.
 - **Reminder scheduling** runs hourly from a single worker. That is right for
   the current scale and will need a proper queue before it is not.
-- **Rate limiting** is not implemented at the application layer; it belongs at
-  the reverse proxy for now, and the PRD's requirement should be revisited
-  before public launch.
+- **Rate limiting** is per process. Sign-in, password reset and storefront
+  submissions are limited in memory, which is right for one container; a
+  multi-worker deployment needs the same limits at the reverse proxy or a
+  shared window behind the same interface.
+- **Web tests** are a browser smoke run by hand against the demo data (sign in,
+  sell, receipt, credit follow-up, receive stock, edit and import products,
+  every page as owner and cashier, phone width). It is not yet automated in CI.
 - **The mobile app has no automated end-to-end test.** The offline round-trip
   was verified by hand against a live API (capture offline, reconnect, confirm
   the sale posted). The outbox and sync logic have unit tests; the UI path does

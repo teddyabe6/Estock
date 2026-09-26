@@ -68,6 +68,7 @@ from app.models.sales import (  # noqa: F401
     SaleLine,
     SaleStatus,
 )
+from app.models.sequences import DocumentSequence  # noqa: F401
 from app.models.system import (  # noqa: F401
     FileAsset,
     ImportJob,

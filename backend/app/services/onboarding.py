@@ -7,15 +7,17 @@ subscription — so the first product or sale needs no further configuration.
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
+from app.core.clock import local_today
 from app.core.config import settings
 from app.core.db import utcnow
 from app.core.errors import ConflictError, ValidationError
@@ -46,7 +48,10 @@ from app.models.platform import (
 )
 
 DEFAULT_BRANCH_NAME = "Main Branch"
+DEFAULT_TIMEZONE = "Africa/Addis_Ababa"
 SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+logger = logging.getLogger(__name__)
 
 
 def slugify(value: str) -> str:
@@ -121,7 +126,7 @@ def register_business(
         email=email,
         currency=settings.default_currency,
         locale=locale,
-        timezone="Africa/Addis_Ababa",
+        timezone=DEFAULT_TIMEZONE,
     )
     db.add(tenant)
     db.flush()
@@ -180,7 +185,7 @@ def register_business(
     )
 
     days = trial_days if trial_days is not None else settings.default_trial_days
-    today = date.today()
+    today = local_today(tenant.timezone)
     db.add(
         Subscription(
             tenant_id=tenant.id,
@@ -240,18 +245,24 @@ def setup_progress(db: Session, ctx: AuthContext) -> list[SetupStep]:
         .where(Product.tenant_id == ctx.tenant_id, Product.is_published.is_(True))
     ).scalar_one()
 
+    # Links are routes in the web app; keep them in step with web/src/app.
     return [
-        SetupStep("business_profile", "Complete your business details", bool(ctx.tenant.phone), "/settings/business"),
-        SetupStep("first_product", "Add or import your products", product_count > 0, "/products/new"),
-        SetupStep("pricing_rule", "Set a default pricing rule", _has_pricing_rule(db, ctx), "/settings/pricing"),
+        SetupStep(
+            "business_profile",
+            "Complete your business details",
+            bool(ctx.tenant.phone and ctx.tenant.address),
+            "/settings#business",
+        ),
+        SetupStep("first_product", "Add or import your products", product_count > 0, "/products?add=1"),
+        SetupStep("pricing_rule", "Set a default pricing rule", _has_pricing_rule(db, ctx), "/settings#pricing"),
         SetupStep("first_sale", "Record your first sale", sale_count > 0, "/sales/new"),
-        SetupStep("invite_staff", "Invite your team", staff_count > 1, "/settings/team"),
-        SetupStep("add_branch", "Add another branch", branch_count > 1, "/settings/branches"),
+        SetupStep("invite_staff", "Invite your team", staff_count > 1, "/settings#team"),
+        SetupStep("add_branch", "Add another branch", branch_count > 1, "/settings#branches"),
         SetupStep(
             "publish_online",
             "Publish a product to your online shop",
             bool(store and store.is_published and published_count > 0),
-            "/shop/settings",
+            "/shop",
         ),
     ]
 
@@ -269,7 +280,9 @@ def _has_pricing_rule(db: Session, ctx: AuthContext) -> bool:
     )
 
 
-def load_auth_context(db: Session, user: User, tenant_id: uuid.UUID) -> AuthContext:
+def load_auth_context(
+    db: Session, user: User, tenant_id: uuid.UUID, *, support: bool = False
+) -> AuthContext:
     """Build the request's authorisation context, or refuse if not a member."""
     from app.core.errors import PermissionDenied
 
@@ -285,7 +298,7 @@ def load_auth_context(db: Session, user: User, tenant_id: uuid.UUID) -> AuthCont
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise PermissionDenied("You do not have access to this business")
-    return build_auth_context(user, tenant, membership)
+    return build_auth_context(user, tenant, membership, support=support)
 
 
 def invite_user(
@@ -351,10 +364,42 @@ def invite_user(
         summary=f"Invited {email} as {role_name}",
     )
     db.flush()
+
+    from app.services.notifications import send_email
+
+    send_email(
+        to=email,
+        subject=f"You have been invited to {ctx.tenant.name} on Estock",
+        body=(
+            f"Hello {full_name.strip()},\n\n{ctx.user.full_name} has invited you to work in "
+            f"{ctx.tenant.name} as {role.label}. Open this link to accept:\n\n"
+            f"{invitation_link(membership)}\n"
+        ),
+    )
     return membership
 
 
-def accept_invitation(db: Session, *, token: str, password: str, full_name: str | None = None) -> TenantMembership:
+def invitation_link(membership: TenantMembership) -> str | None:
+    """The accept link for a pending invitation, or None once it has been used.
+
+    Shown to the inviter as well as emailed, because a shop without an email
+    provider configured still needs a way to hand the link over (PRD 6).
+    """
+    if membership.status != MembershipStatus.INVITED or not membership.invitation_token:
+        return None
+    return f"{settings.public_base_url}/accept-invitation?token={membership.invitation_token}"
+
+
+def accept_invitation(
+    db: Session, *, token: str, password: str | None = None, full_name: str | None = None
+) -> TenantMembership:
+    """Activate an invited membership.
+
+    A person invited to a second business already has a password; the
+    invitation must not be a way to replace it, so an existing password is
+    kept and the one supplied here is ignored.  Only an account that has never
+    signed in takes its password from the invitation.
+    """
     membership = db.execute(
         select(TenantMembership).where(TenantMembership.invitation_token == token)
     ).scalar_one_or_none()
@@ -362,12 +407,72 @@ def accept_invitation(db: Session, *, token: str, password: str, full_name: str 
         raise ValidationError("This invitation is no longer valid")
 
     user = membership.user
-    user.password_hash = hash_password(password)
-    if full_name:
-        user.full_name = full_name.strip()
-    user.email_verified_at = utcnow()
+    if user.password_hash is None:
+        if not password:
+            raise ValidationError("Choose a password to finish setting up your account")
+        user.password_hash = hash_password(password)
+        if full_name:
+            user.full_name = full_name.strip()
+        user.email_verified_at = user.email_verified_at or utcnow()
     membership.status = MembershipStatus.ACTIVE
     membership.accepted_at = utcnow()
     membership.invitation_token = None
     db.flush()
     return membership
+
+
+# --------------------------------------------------------------------------- #
+# Account recovery (PRD 20)
+# --------------------------------------------------------------------------- #
+
+
+def request_password_reset(db: Session, *, email: str) -> User | None:
+    """Issue a single-use reset token and hand it to the email transport.
+
+    Returns the user when one exists; the API answers the same way either way
+    so the endpoint never confirms whether an address is registered.
+    """
+    from app.services.notifications import send_email
+
+    email = email.strip().lower()
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if user is None or not user.is_active:
+        return None
+
+    user.password_reset_token = generate_share_token(32)
+    user.password_reset_expires_at = utcnow() + timedelta(
+        minutes=settings.password_reset_ttl_minutes
+    )
+    db.flush()
+
+    link = f"{settings.public_base_url}/reset-password?token={user.password_reset_token}"
+    send_email(
+        to=user.email,
+        subject="Reset your Estock password",
+        body=(
+            f"Hello {user.full_name},\n\nUse this link to choose a new password. It works "
+            f"once and expires in {settings.password_reset_ttl_minutes} minutes.\n\n{link}\n\n"
+            "If you did not ask for this, you can ignore it; your password is unchanged."
+        ),
+    )
+    return user
+
+
+def reset_password(db: Session, *, token: str, password: str) -> User:
+    user = db.execute(
+        select(User).where(User.password_reset_token == token)
+    ).scalar_one_or_none()
+    if (
+        user is None
+        or user.password_reset_expires_at is None
+        or user.password_reset_expires_at < utcnow()
+    ):
+        raise ValidationError("This reset link is no longer valid. Request a new one.")
+
+    user.password_hash = hash_password(password)
+    user.password_reset_token = None
+    user.password_reset_expires_at = None
+    user.email_verified_at = user.email_verified_at or utcnow()
+    db.flush()
+    logger.info("password_reset user_id=%s", user.id)
+    return user

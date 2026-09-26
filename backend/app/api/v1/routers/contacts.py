@@ -158,7 +158,12 @@ def customer_history(customer_id: uuid.UUID, ctx: Ctx, db: DbSession) -> dict:
             )
             .order_by(CreditTransaction.issued_on.desc())
         ).scalars()
-        credits = [credit_out(t, counterparty_name=customer.name).model_dump(mode="json") for t in rows]
+        credits = [
+            credit_out(
+                t, counterparty_name=customer.name, tz_name=ctx.tenant.timezone
+            ).model_dump(mode="json")
+            for t in rows
+        ]
 
     return {
         "customer": CustomerOut.model_validate(customer).model_dump(mode="json"),

@@ -11,19 +11,20 @@ business can see another's data.
 
 | Area | Status |
 | --- | --- |
-| Registration, business profile, first branch, staff invitations | Done |
+| Registration, business profile, first branch, staff invitations | Done — the inviter gets the accept link to pass on; an existing account keeps its password |
 | Roles and granular permissions, branch assignment, tenant isolation | Done |
-| Products, categories, variants, cost and price fields, opening stock | Done |
-| Spreadsheet import: upload → map → preview → confirm | Done |
-| Stock ledger, receiving, transfers, adjustments, counts, low-stock alerts | Done |
-| Point of sale: search, barcode, discounts, split payment, credit | Done |
+| Products, categories, variants, cost and price fields, opening stock | Done, with editing and a price suggestion from the pricing rule |
+| Spreadsheet import: upload → map → preview → confirm | Done, in the API and the web app |
+| Stock ledger, receiving, transfers, adjustments, counts, low-stock alerts | Done; a transfer received short posts the shortfall as a loss |
+| Point of sale: search, barcode, discounts, split payment, credit, receipts | Done |
 | Customers and suppliers with transaction history | Done |
-| Credit receivables and payables, partial payments, due dates, reminders | Done |
-| Online catalogue, enquiries, proformas with a secure share link | Done |
-| Dashboards and reports for sales, profit, stock, branches and credit | Done |
-| Trial and subscription state, platform-admin surface, audit trail | Done |
-| Amharic-ready interface, ETB, Ethiopian phone formats | Text renders correctly everywhere; UI strings not yet translated |
-| Flutter mobile app — sales, stock, credit, shop | Done |
+| Credit receivables and payables, partial payments, due dates, reminders, follow-up | Done |
+| Online catalogue, enquiries, proformas with a secure share link | Done, managed from the web app |
+| Dashboards and reports for sales, profit, stock, branches and credit | Done, with CSV export |
+| Trial and subscription state, platform-admin surface, audit trail | Done; support access is read-only and audited |
+| Sign-in rate limiting, password reset | Done |
+| Amharic-ready interface, ETB, Ethiopian phone formats, business-local dates | Text renders correctly everywhere; days follow the business's timezone; UI strings not yet translated |
+| Flutter mobile app — sales (cash or credit), stock, credit, shop | Done |
 | Offline sale capture and sync, with a stated conflict policy | Done (mobile) |
 | Payment gateways, AI assistant, purchase orders | Later releases, by design |
 
@@ -74,7 +75,7 @@ storefront and a proforma.
 | Platform admin | `admin@estock.et` | `admin-password-123` |
 
 Sign in as the salesperson to see permissions at work: no cost, no profit, no
-business-wide reports.
+business-wide reports, no Shop or Reports tab.
 
 The demo catalogue includes Amharic product names, so you can see Ethiopic text
 rendering in both clients.
@@ -113,75 +114,46 @@ CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ## Tests
 
 ```bash
-make test              # 219 backend tests on SQLite + 31 mobile tests
-make test-backend-pg   # the same backend suite against PostgreSQL
+make test              # 257 backend tests on SQLite + 35 mobile tests
+make test-backend-pg   # the same backend suite against PostgreSQL, plus a real concurrency test
 ```
 
 SQLite keeps the loop short. PostgreSQL is not optional, though: it enforces
 `VARCHAR` limits and has real row locking, and running the suite against it
 caught a bug SQLite accepted silently — see
-[docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](docs/architecture.md). One test only runs there: two
+transactions asking for a sale number at the same moment, proving the second
+waits for the first.
 
 The suite covers what the PRD asks for: pricing and landed cost, credit
 balances and due-date rules, permission boundaries, proof that one business
 cannot read or modify another's data, duplicate submissions and retries,
-timezone and Amharic handling, and the end-to-end onboarding, import, sale,
-credit-payment, reminder and proforma workflows.
+timezone and Amharic handling, rate limiting, account recovery, and the
+end-to-end onboarding, import, sale, credit-payment, reminder and proforma
+workflows.
 
 CI runs lint, applies migrations, checks the migrations still match the models,
-and runs the tests against both databases.
+runs the tests against both databases, typechecks and builds the web app, and
+analyzes, tests and builds the mobile app.
 
 ## Repository layout
 
 ```
 backend/            FastAPI service — the only place business rules live
-  app/core/         Config, database, security, permissions, tenancy, audit
-  app/models/       SQLAlchemy models (42 tables)
+  app/core/         Config, database, security, permissions, tenancy, audit,
+                    business-local clock, rate limiting
+  app/models/       SQLAlchemy models (43 tables)
   app/services/     Domain logic: pricing, inventory, sales, credit, …
   app/api/v1/       HTTP routes and response shaping
   app/workers/      Scheduled reminders, alerts and trial expiry
   alembic/          Migrations
-  tests/            219 tests
-web/                Next.js app (owner, manager, cashier and storefront)
+  tests/            257 tests
+web/                Next.js app: home, sales and receipts, products and import,
+                    stock (receive, adjust, transfer, ledger), online shop
+                    (storefront, enquiries, proformas), reports, credit,
+                    contacts, notifications, settings, storefront, share links
 mobile/             Flutter app for the shop floor, works offline
   lib/core/offline/ Outbox, sync service and catalogue cache
-  test/             31 tests
+  test/             35 tests
 docs/               Architecture, decisions and roadmap
 ```
-
-## How to read the code
-
-Five decisions explain most of the design. Each is described in
-[docs/architecture.md](docs/architecture.md):
-
-1. **Tenant isolation** goes through `tenant_query` and `get_tenant_object`, so
-   a forgotten filter is a visible omission rather than a silent leak.
-2. **Authorisation checks permissions, never roles**, so custom role bundles can
-   be added later without touching call sites.
-3. **Stock is an append-only ledger** with a cached balance that a
-   reconciliation endpoint proves still agrees with it.
-4. **One payment ledger** backs sales, purchases and credit settlement, so no
-   two tables track the same money.
-5. **Credit status is always derived** from balance, due date and cancellation,
-   so a transaction with money outstanding can never read as paid.
-
-A sixth applies to the mobile app: **a sale captured offline is provisional
-until the server accepts it**, and the interface says so. See
-[mobile/README.md](mobile/README.md) for the conflict policy.
-
-## Documentation
-
-- [docs/local-setup.md](docs/local-setup.md) — running it yourself, and what to
-  try by hand
-- [docs/architecture.md](docs/architecture.md) — how the pieces fit, and why
-- [docs/decisions.md](docs/decisions.md) — the PRD's open decisions, what was
-  chosen for now, and what still needs a business answer
-- [docs/roadmap.md](docs/roadmap.md) — what is deliberately not built yet
-- [docs/prd.md](docs/prd.md) — the source PRD, converted to Markdown
-
-## Before production
-
-The PRD is explicit that some questions need a business or legal answer rather
-than a technical one. The ones that block a production launch are listed at the
-top of [docs/decisions.md](docs/decisions.md) — tax and invoice requirements,
-data residency, and the email and Telegram delivery approach among them.

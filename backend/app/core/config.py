@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     secret_key: str = "dev-only-insecure-secret-change-me"
     access_token_ttl_minutes: int = 60 * 12
     jwt_algorithm: str = "HS256"
+    password_reset_ttl_minutes: int = 60
+
+    # Rate limits for anonymous endpoints (PRD 20).  Sliding windows, kept in
+    # process memory; 0 disables a limit.
+    login_rate_limit: int = 10
+    login_rate_window_seconds: int = 300
+    public_rate_limit: int = 30
+    public_rate_window_seconds: int = 60
 
     # Background jobs / notifications
     redis_url: str = "redis://localhost:6379/0"

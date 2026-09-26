@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from decimal import Decimal
 
@@ -247,3 +248,89 @@ def test_api_session_reports_the_callers_permissions(client, business):
     assert payload["role"] == "stock_user"
     assert "stock:receive" in payload["permissions"]
     assert "cost:view" not in payload["permissions"]
+
+
+# --------------------------------------------------------------------------- #
+# Platform support access (PRD 5.2)
+# --------------------------------------------------------------------------- #
+
+
+def _support_headers(business) -> dict:
+    from app.core.security import create_access_token
+
+    token = create_access_token(
+        subject=business.owner.id,
+        tenant_id=business.tenant.id,
+        expires_minutes=30,
+        extra_claims={"support": True, "granted_by": "test"},
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_support_access_can_look_but_not_touch(client, business):
+    """A support token is read-only, whatever role it borrows."""
+    business.add_product("Visible", selling_price="10", opening_stock="5")
+    headers = _support_headers(business)
+
+    session = client.get("/api/v1/auth/session", headers=headers).json()
+    assert session["is_support"] is True
+    assert "product:view" in session["permissions"]
+    assert "sale:create" not in session["permissions"]
+    assert "product:manage" not in session["permissions"]
+
+    assert client.get("/api/v1/products", headers=headers).status_code == 200
+    assert client.get("/api/v1/dashboard", headers=headers).status_code == 200
+
+    refused = client.post("/api/v1/products", json={"name": "Nope"}, headers=headers)
+    assert refused.status_code == 403
+    sale = client.post(
+        "/api/v1/sales",
+        json={"lines": [{"variant_id": str(uuid.uuid4()), "quantity": "1"}]},
+        headers=headers,
+    )
+    assert sale.status_code == 403
+    assert "read-only" in sale.json()["message"]
+
+
+def test_support_access_is_pinned_to_one_business(client, business, other_business):
+    """The tenant header cannot widen a support grant to another business."""
+    business.add_product("Ours")
+    other_business.add_product("Theirs")
+    headers = {**_support_headers(business), "X-Tenant-Id": str(other_business.tenant.id)}
+    names = {item["name"] for item in client.get("/api/v1/products", headers=headers).json()["items"]}
+    assert names == {"Ours"}
+
+
+def test_platform_admin_support_grant_is_audited_and_read_only(client, business, db):
+    from app.core.security import hash_password
+    from app.models.platform import AuditEvent, PlatformAdmin
+
+    db.add(
+        PlatformAdmin(
+            email="support@estock.et", full_name="Support", password_hash=hash_password("admin-pw-123")
+        )
+    )
+    db.flush()
+    login = client.post(
+        "/api/v1/platform/login", json={"email": "support@estock.et", "password": "admin-pw-123"}
+    )
+    assert login.status_code == 200
+    admin_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    grant = client.post(
+        "/api/v1/platform/support-access",
+        json={"tenant_id": str(business.tenant.id), "reason": "Customer reported wrong stock figures"},
+        headers=admin_headers,
+    )
+    assert grant.status_code == 200
+    assert "read-only" in grant.json()["notice"]
+    support_headers = {"Authorization": f"Bearer {grant.json()['access_token']}"}
+
+    session = client.get("/api/v1/auth/session", headers=support_headers).json()
+    assert session["is_support"] is True
+    assert session["role"] == "owner"
+    assert client.post("/api/v1/branches", json={"name": "X"}, headers=support_headers).status_code == 403
+
+    audit = db.query(AuditEvent).filter(AuditEvent.action == "platform.support_access").one()
+    assert audit.tenant_id == business.tenant.id
+    assert "wrong stock" in (audit.payload_json or "")

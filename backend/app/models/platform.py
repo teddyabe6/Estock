@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.db import GUID, Base, Money, UTCDateTime
+from app.core.db import GUID, Base, Money, Percent, UTCDateTime
 from app.models.base import (
     CodeText,
     MediumText,
@@ -70,7 +71,8 @@ class Tenant(UUIDPrimaryKey, Timestamped, Base):
         Boolean, default=False, nullable=False
     )
     reminder_lead_days: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
-    default_tax_rate: Mapped[float | None] = mapped_column(Money, nullable=True)
+    #: Fractional rate applied to products with no rate of their own; 0.15 is 15%.
+    default_tax_rate: Mapped[Decimal | None] = mapped_column(Percent, nullable=True)
 
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
