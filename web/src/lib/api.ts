@@ -585,9 +585,56 @@ export type Store = {
   address: string | null;
   is_published: boolean;
   show_prices: boolean;
+  accepts_orders: boolean;
   default_terms: string | null;
   checkout_note: string | null;
   public_url: string | null;
+  telegram_linked: boolean;
+  telegram_start_url: string | null;
+  telegram_configured: boolean;
+};
+
+export type OrderLine = {
+  id: string;
+  product_id: string | null;
+  variant_id: string | null;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  tax_rate: string;
+  tax_amount: string;
+  line_total: string;
+};
+
+export type Order = {
+  id: string;
+  number: string;
+  status: string;
+  batch_id: string | null;
+  customer_id: string | null;
+  customer_name: string;
+  customer_phone: string | null;
+  customer_email: string | null;
+  customer_company: string | null;
+  delivery_location: string | null;
+  delivery_method: string;
+  payment_method: string;
+  customer_message: string | null;
+  seller_note: string | null;
+  subtotal: string;
+  tax_total: string;
+  delivery_charge: string;
+  total_amount: string;
+  currency: string;
+  created_at: string;
+  confirmed_at: string | null;
+  ready_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  converted_sale_id: string | null;
+  lines: OrderLine[];
+  tracking_url: string | null;
 };
 
 export type Enquiry = {
@@ -959,7 +1006,20 @@ export const api = {
     request<Page<Enquiry>>(`/shop/enquiries${toQuery(params)}`),
   updateEnquiry: (id: string, status: string) =>
     request<Enquiry>(`/shop/enquiries/${id}?status=${status}`, { method: "PATCH" }),
-  shopSummary: () => request<{ proforma_requests: number; new_enquiries: number }>("/shop/summary"),
+  shopSummary: () =>
+    request<{ new_orders: number; proforma_requests: number; new_enquiries: number }>("/shop/summary"),
+  orders: (params: { status?: string; limit?: number } = {}) =>
+    request<Page<Order>>(`/shop/orders${toQuery(params)}`),
+  order: (id: string) => request<Order>(`/shop/orders/${id}`),
+  confirmOrder: (id: string, body: Record<string, unknown>) =>
+    request<Order>(`/shop/orders/${id}/confirm`, { method: "POST", body }),
+  readyOrder: (id: string) => request<Order>(`/shop/orders/${id}/ready`, { method: "POST" }),
+  completeOrder: (id: string, body: Record<string, unknown>) =>
+    request<SaleResponse>(`/shop/orders/${id}/complete`, { method: "POST", body }),
+  cancelOrder: (id: string, reason?: string) =>
+    request<Order>(`/shop/orders/${id}/cancel`, { method: "POST", body: { reason: reason || undefined } }),
+  linkTelegram: () => request<Store>("/shop/telegram/link", { method: "POST" }),
+  unlinkTelegram: () => request<Store>("/shop/telegram/link", { method: "DELETE" }),
   quotations: (params: { status?: string; limit?: number } = {}) =>
     request<Page<Quotation>>(`/shop/quotations${toQuery(params)}`),
   quotation: (id: string) => request<Quotation>(`/shop/quotations/${id}`),

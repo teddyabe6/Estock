@@ -1,26 +1,17 @@
 "use client";
 
 /**
- * The public shop. Browse by category or search, add to a basket, and request
- * a proforma from it. Nothing here reserves stock (PRD 13).
+ * One shop's page on the marketplace. Browse its products by category or
+ * search, add to the shared cart, ask a question. Nothing here reserves stock
+ * (PRD 13).
  */
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, use, useEffect, useState } from "react";
 
 import { EnquiryForm, ProductCard, SellerContact, StorefrontShell } from "@/components/Storefront";
 import { Alert, Empty } from "@/components/ui";
-import { shortDate } from "@/lib/format";
-import {
-  defaultVariant,
-  proformaLabel,
-  shopApi,
-  useBasket,
-  useMyRequests,
-  type PublicProduct,
-  type Shop,
-} from "@/lib/storefront";
+import { shopApi, type PublicProduct, type Shop } from "@/lib/storefront";
 
 export default function ShopPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(params);
@@ -40,8 +31,6 @@ function Catalogue({ slug }: { slug: string }) {
   const [products, setProducts] = useState<PublicProduct[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
-  const basket = useBasket(slug);
-  const requests = useMyRequests(slug);
   const currency = shop?.currency ?? "ETB";
 
   useEffect(() => {
@@ -73,20 +62,6 @@ function Catalogue({ slug }: { slug: string }) {
     router.replace(`/shop/${slug}${name ? `?category=${encodeURIComponent(name)}` : ""}`);
   }
 
-  function addToBasket(product: PublicProduct) {
-    const variant = defaultVariant(product);
-    if (!variant) return;
-    basket.add({
-      variantId: variant.id,
-      productId: product.id,
-      name: product.name,
-      variantName: variant.name,
-      unit: product.unit_of_measure,
-      price: variant.price ?? product.price,
-      imageUrl: product.image_url,
-    });
-  }
-
   if (error) {
     return (
       <main style={{ maxWidth: 720, margin: "10vh auto", padding: "0 16px" }}>
@@ -96,10 +71,15 @@ function Catalogue({ slug }: { slug: string }) {
   }
 
   return (
-    <StorefrontShell slug={slug} shop={shop} basketCount={basket.count} basketTotal={basket.total}>
+    <StorefrontShell title={shop?.display_name ?? "Loading…"} subtitle={shop?.tagline} homeHref={`/shop/${slug}`} contact={shop}>
       {shop && (shop.about || shop.address || shop.contact_phone) && (
         <section className="store-intro">
           {shop.about && <p style={{ marginTop: 0 }}>{shop.about}</p>}
+          {!shop.accepts_orders && (
+            <p className="muted" style={{ fontSize: "0.88rem" }}>
+              This shop takes proforma requests rather than direct orders.
+            </p>
+          )}
           <SellerContact shop={shop} />
         </section>
       )}
@@ -109,7 +89,7 @@ function Catalogue({ slug }: { slug: string }) {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search products"
+          placeholder="Search this shop"
           aria-label="Search products"
         />
         <button type="button" className="secondary" onClick={() => setAsking((v) => !v)}>
@@ -149,39 +129,10 @@ function Catalogue({ slug }: { slug: string }) {
         </Empty>
       ) : (
         <div className="product-grid">
-          {products.map((product) => {
-            const variant = defaultVariant(product);
-            return (
-              <ProductCard
-                key={product.id}
-                slug={slug}
-                product={product}
-                currency={currency}
-                inBasket={variant ? basket.quantityOf(variant.id) : 0}
-                onAdd={() => addToBasket(product)}
-                onChange={(quantity) => variant && basket.setQuantity(variant.id, quantity)}
-              />
-            );
-          })}
+          {products.map((product) => (
+            <ProductCard key={product.id} product={product} currency={currency} />
+          ))}
         </div>
-      )}
-
-      {requests.items.length > 0 && (
-        <section className="card" style={{ marginTop: 20 }}>
-          <div className="card-title">Your proforma requests</div>
-          <ul className="menu-list">
-            {requests.items.map((item) => (
-              <li key={item.token}>
-                <Link href={`/q/${item.token}`}>
-                  {item.number}
-                  <span className="sub">
-                    Requested {shortDate(item.at)} · {proformaLabel("requested")} or later — open to see
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
       )}
     </StorefrontShell>
   );

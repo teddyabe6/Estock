@@ -20,9 +20,15 @@ from app.models.catalogue import (  # noqa: F401
     ProductVariant,
 )
 from app.models.commerce import (  # noqa: F401
+    CheckoutBatch,
+    CheckoutKind,
     CustomerEnquiry,
+    DeliveryMethod,
     EnquiryStatus,
     OnlineStore,
+    Order,
+    OrderLine,
+    OrderStatus,
     Quotation,
     QuotationLine,
     QuotationStatus,

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Pieces of the public shop shared by the catalogue, product and basket
- * pages. No sign-in anywhere here (PRD 13).
+ * Pieces of the public side shared by the marketplace, shop, product, cart
+ * and checkout pages. No sign-in anywhere here (PRD 13).
  */
 
 import Link from "next/link";
@@ -10,71 +10,80 @@ import { useState, type ReactNode } from "react";
 
 import { Alert, Field } from "@/components/ui";
 import { money } from "@/lib/format";
-import { defaultVariant, shopApi, type PublicProduct, type Shop } from "@/lib/storefront";
+import { cartLineFor, defaultVariant, shopApi, useCart, type PublicProduct, type Shop } from "@/lib/storefront";
 
 export function StorefrontShell({
-  slug,
-  shop,
-  basketCount,
-  basketTotal,
+  title,
+  subtitle,
+  homeHref = "/market",
+  contact,
   showBar = true,
   children,
 }: {
-  slug: string;
-  shop: Shop | null;
-  basketCount: number;
-  basketTotal: number | null;
+  title: string;
+  subtitle?: string | null;
+  homeHref?: string;
+  contact?: Shop | null;
   showBar?: boolean;
   children: ReactNode;
 }) {
-  const currency = shop?.currency ?? "ETB";
+  const cart = useCart();
+  const currency = contact?.currency ?? "ETB";
   return (
     <div className="shell storefront">
       <header className="topbar">
         <div className="store-brand">
-          <Link href={`/shop/${slug}`} className="brand">
-            {shop?.display_name ?? "Loading…"}
+          <Link href={homeHref} className="brand">
+            {title}
           </Link>
-          {shop?.tagline && <div className="who">{shop.tagline}</div>}
+          {subtitle && <div className="who">{subtitle}</div>}
         </div>
-        <Link href={`/shop/${slug}/basket`} className="basket-button" aria-label={`Basket, ${basketCount} items`}>
-          Basket
-          {basketCount > 0 && <span className="basket-count">{formatCount(basketCount)}</span>}
-        </Link>
+        <nav className="row" style={{ gap: 10 }}>
+          {homeHref !== "/market" && (
+            <Link href="/market" className="muted" style={{ fontSize: "0.9rem" }}>
+              All shops
+            </Link>
+          )}
+          <Link href="/cart" className="basket-button" aria-label={`Cart, ${formatCount(cart.count)} items`}>
+            Cart
+            {cart.count > 0 && <span className="basket-count">{formatCount(cart.count)}</span>}
+          </Link>
+        </nav>
       </header>
 
       <main>{children}</main>
 
-      {showBar && basketCount > 0 && (
+      {showBar && cart.count > 0 && (
         <div className="basket-bar no-print">
           <div>
-            <strong>{formatCount(basketCount)} in your basket</strong>
-            {basketTotal !== null && (
-              <div className="muted" style={{ fontSize: "0.85rem" }}>
-                About {money(basketTotal, currency)} before delivery
-              </div>
-            )}
+            <strong>{formatCount(cart.count)} in your cart</strong>
+            <div className="muted" style={{ fontSize: "0.85rem" }}>
+              {cart.groups.length} shop{cart.groups.length === 1 ? "" : "s"}
+              {cart.total !== null ? ` · about ${money(cart.total, currency)} before delivery` : ""}
+            </div>
           </div>
-          <Link href={`/shop/${slug}/basket`} className="btn">
-            View basket
+          <Link href="/cart" className="btn">
+            View cart
           </Link>
         </div>
       )}
 
       <footer className="store-footer no-print">
-        {shop && (
+        {contact && (
           <div>
-            {[shop.address, shop.contact_phone, shop.contact_email].filter(Boolean).join(" · ")}
-            {shop.telegram_username ? ` · Telegram @${shop.telegram_username}` : ""}
+            {[contact.address, contact.contact_phone, contact.contact_email].filter(Boolean).join(" · ")}
+            {contact.telegram_username ? ` · Telegram @${contact.telegram_username}` : ""}
           </div>
         )}
-        <div style={{ marginTop: 4 }}>Online shop by Estock</div>
+        <div style={{ marginTop: 4 }}>
+          <Link href="/market">Marketplace</Link> · Online shops by Estock
+        </div>
       </footer>
     </div>
   );
 }
 
-function formatCount(count: number): string {
+export function formatCount(count: number): string {
   return Number.isInteger(count) ? String(count) : count.toFixed(3).replace(/\.?0+$/, "");
 }
 
@@ -137,29 +146,33 @@ export function Stepper({
 }
 
 export function ProductCard({
-  slug,
   product,
   currency,
-  inBasket,
-  onAdd,
-  onChange,
+  showShop = false,
 }: {
-  slug: string;
   product: PublicProduct;
   currency: string;
-  inBasket: number;
-  onAdd: () => void;
-  onChange: (quantity: number) => void;
+  showShop?: boolean;
 }) {
+  const cart = useCart();
+  const variant = defaultVariant(product);
+  const inCart = variant ? cart.quantityOf(variant.id) : 0;
   const chooseOnPage = product.variants.length > 1;
+  const href = `/shop/${product.shop.slug}/p/${product.id}`;
   return (
     <article className="product-card">
-      <Link href={`/shop/${slug}/p/${product.id}`} className="thumb-link">
+      <Link href={href} className="thumb-link">
         <ProductImage src={product.image_url} name={product.name} />
       </Link>
       <div className="body">
-        {product.category && <div className="label muted">{product.category}</div>}
-        <Link href={`/shop/${slug}/p/${product.id}`} className="name">
+        <div className="label muted">
+          {showShop ? (
+            <Link href={`/shop/${product.shop.slug}`}>{product.shop.display_name}</Link>
+          ) : (
+            product.category ?? "Product"
+          )}
+        </div>
+        <Link href={href} className="name">
           {product.name}
         </Link>
         <div className="price">
@@ -169,14 +182,18 @@ export function ProductCard({
         {!product.in_stock && <span className="badge warn">Out of stock</span>}
         <div className="actions">
           {chooseOnPage ? (
-            <Link href={`/shop/${slug}/p/${product.id}`} className="btn secondary">
+            <Link href={href} className="btn secondary">
               Choose an option
             </Link>
-          ) : inBasket > 0 ? (
-            <Stepper value={inBasket} onChange={onChange} />
+          ) : inCart > 0 ? (
+            <Stepper value={inCart} onChange={(q) => variant && cart.setQuantity(variant.id, q)} />
           ) : (
-            <button type="button" onClick={onAdd} disabled={!defaultVariant(product)}>
-              Add to basket
+            <button
+              type="button"
+              onClick={() => variant && cart.add(cartLineFor(product, variant))}
+              disabled={!variant}
+            >
+              {product.shop.accepts_orders && product.price ? "Add to cart" : "Add to request"}
             </button>
           )}
         </div>
@@ -299,5 +316,56 @@ export function EnquiryForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/** Contact details asked at both checkouts, remembered in the browser. */
+export function ContactFields({
+  form,
+  onChange,
+  phoneHint,
+}: {
+  form: { contact_name: string; contact_phone: string; contact_email: string; company: string; delivery_location: string };
+  onChange: (next: typeof form) => void;
+  phoneHint: string;
+}) {
+  return (
+    <div className="grid">
+      <Field label="Your name">
+        <input
+          value={form.contact_name}
+          onChange={(e) => onChange({ ...form, contact_name: e.target.value })}
+          required
+          autoComplete="name"
+        />
+      </Field>
+      <Field label="Phone" hint={phoneHint}>
+        <input
+          value={form.contact_phone}
+          onChange={(e) => onChange({ ...form, contact_phone: e.target.value })}
+          inputMode="tel"
+          autoComplete="tel"
+          required
+        />
+      </Field>
+      <Field label="Email" hint="optional, for updates">
+        <input
+          type="email"
+          value={form.contact_email}
+          onChange={(e) => onChange({ ...form, contact_email: e.target.value })}
+          autoComplete="email"
+        />
+      </Field>
+      <Field label="Company" hint="optional">
+        <input value={form.company} onChange={(e) => onChange({ ...form, company: e.target.value })} />
+      </Field>
+      <Field label="Delivery location" hint="optional">
+        <input
+          value={form.delivery_location}
+          onChange={(e) => onChange({ ...form, delivery_location: e.target.value })}
+          placeholder="e.g. Bole, near Edna Mall"
+        />
+      </Field>
+    </div>
   );
 }

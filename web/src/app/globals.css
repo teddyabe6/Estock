@@ -1064,3 +1064,89 @@ button.link {
   color: var(--text-muted);
   font-size: 0.82rem;
 }
+
+/* ---------- Marketplace, cart and checkout ---------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.filter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.filter input,
+.filter select {
+  width: 130px;
+  padding: 7px 9px;
+}
+
+.filter.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.filter.check input {
+  width: auto;
+}
+
+.shop-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  margin-bottom: 14px;
+}
+
+.shop-card.is-active {
+  border-color: var(--brand);
+}
+
+.shop-list .card + .card {
+  margin-top: 0;
+}
+
+.choice-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.choice {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.choice p {
+  font-size: 0.88rem;
+  margin: 6px 0 10px;
+}
+
+.checkout-group {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.checkout-group:last-of-type {
+  border-bottom: none;
+}
+
+.card .totals {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-top: 12px;
+  font-size: 1.05rem;
+}

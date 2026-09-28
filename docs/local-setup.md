@@ -57,7 +57,8 @@ The demo business is **Merkato Wholesale**: two branches, four staff, twelve
 products (two with Amharic names), stock, sales, a supplier payable, an overdue
 receivable, a published storefront and a proforma.
 
-Every password is `demo-password-123`.
+Every password is `demo-password-123`. A second shop, **Bole Hardware**
+(`owner@bole-hardware.et`), exists so the marketplace has two sellers.
 
 | Sign in as | To see |
 | --- | --- |
@@ -83,18 +84,28 @@ time alone does not make a debt late.
 There is no cost column, and the dashboard shows no profit. The server is what
 enforces this, not the interface.
 
-**The online shop, with no sign-in.** Open
-http://localhost:3000/shop/merkato-wholesale in a private window, on a
-phone-sized viewport if you like. Filter by category, open a product, add a few
-things to the basket and request a proforma with your name and phone. You land
-on a tracking link; keep it. Note that stock did not move: a request never
-reserves anything.
+**The marketplace, with no sign-in.** Open http://localhost:3000/market in a
+private window, on a phone-sized viewport if you like. Two demo shops are
+listed. Filter by shop, category or price, open a product, and add items from
+both shops to the cart.
 
-**Confirming the request.** As the owner, Shop → Proformas lists it under *New
-requests*, priced from the catalogue. Adjust a price or add a delivery charge,
-then *Confirm and send*. Reload the tracking link in the private window: the
-priced proforma is there with an Accept button. Accept it, then convert it to a
-sale from the same drawer — only now does stock move.
+**Ordering.** From the cart choose *Checkout*, give your name and phone, pick
+how you will pay, and place the order. You land on a tracking link with one
+part per shop; keep it. Note that stock did not move. Sign in as the second
+shop (`owner@bole-hardware.et`), open Shop → Orders, confirm the order with a
+delivery charge, mark it out for delivery, then complete it — only now is the
+sale posted and stock deducted. Reload the tracking link to watch the status
+change. Sign in as Merkato: it sees only its own order.
+
+**A proforma from several shops.** Add items from both shops again and choose
+*Request a proforma* instead. Each shop receives only its own items — the API
+log shows one email per shop — and answers under Shop → Proformas → *New
+requests*, priced from its catalogue. Adjust, *Confirm and send*, and accept it
+from the tracking link in the private window.
+
+**Telegram.** Shop → Storefront explains how a shop connects Telegram. Without
+a bot token it stays on email; see `backend/.env.example` for the two settings
+and `python -m app.workers.telegram --loop` for the poller.
 
 **A product photo.** Products → open a published product → Photo. Upload a JPEG
 or PNG and reload the shop page: the card and the product page show it.
@@ -395,7 +406,7 @@ rm -rf .venv web/node_modules backend/var/demo.db backend/.env
 **Run the tests:**
 
 ```bash
-make test                # 279 backend + 35 mobile
+make test                # 293 backend + 35 mobile
 make test-backend-pg     # backend against PostgreSQL
 make lint
 ```

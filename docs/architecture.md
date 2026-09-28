@@ -256,14 +256,32 @@ from a published shop slug, an unguessable share token, or the unguessable id
 of a file flagged public, so there is no path from a public request to another
 business's data.
 
-A visitor browses the catalogue by category, opens a product page with the
-photo the seller uploaded, fills a basket that lives in their own browser, and
-checks out by asking for a proforma. The request becomes a numbered proforma
-in the `requested` state, priced from the catalogue, linked to a customer
-record matched by phone number; staff who handle proformas are notified. The
-visitor gets the share link straight away, and it doubles as their tracking
-page: the request first, the priced proforma once the seller sends it, and the
-outcome after that.
+The marketplace lists every published shop's products together, filterable by
+shop, category, price and availability, and each shop keeps its own page. A
+visitor fills one cart across shops (it lives in their browser) and leaves the
+checkout one of two ways:
+
+- **Order.** One order per shop, priced from that shop's catalogue, with the
+  buyer's chosen payment method recorded and nothing charged online. The shop
+  confirms (adding a delivery charge if it wants), marks it ready, and finally
+  completes it, which posts the sale and moves stock. The buyer may withdraw
+  while the shop has not yet confirmed.
+- **Proforma request.** One request per chosen shop, priced from the
+  catalogue so the seller reviews rather than retypes. It becomes a numbered
+  proforma in the `requested` state; the seller sends the priced proforma and
+  the customer accepts it.
+
+Both flows write one `checkout_batches` row so the customer has a single
+tracking link, and one part per shop. Each part is a tenant's own row; a shop
+never sees, and is never told about, another shop's part. The customer is
+matched to a customer record in each shop by phone number.
+
+Each shop is told about its part three ways: an in-app notification for
+members who may act on it, an email to the shop's contact address, and a
+Telegram message when the shop has linked its chat (`app/services/messaging.py`).
+The Bot API cannot message a username, only a chat that has opened the bot, so
+the owner links the shop once with a *Start* link; without a bot token both
+channels are logged rather than sent.
 
 The seller's review is a real step, not a formality. Lines, prices, discounts,
 delivery and terms can be changed while a proforma is requested, a draft, or

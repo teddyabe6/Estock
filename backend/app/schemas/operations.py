@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+from app.models.commerce import DeliveryMethod
 from app.models.credit import CreditKind, FollowUpKind
 from app.models.inventory import MovementReason
 from app.models.sales import PaymentMethod
@@ -442,6 +443,7 @@ class StoreSettingsIn(BaseModel):
     address: str | None = Field(None, max_length=255)
     is_published: bool | None = None
     show_prices: bool | None = None
+    accepts_orders: bool | None = None
     default_terms: str | None = Field(None, max_length=4000)
     checkout_note: str | None = Field(None, max_length=2000)
 
@@ -458,9 +460,14 @@ class StoreOut(Schema):
     address: str | None = None
     is_published: bool
     show_prices: bool
+    accepts_orders: bool = True
     default_terms: str | None = None
     checkout_note: str | None = None
     public_url: str | None = None
+    #: Telegram delivery: linked once the owner pressed Start on the bot.
+    telegram_linked: bool = False
+    telegram_start_url: str | None = None
+    telegram_configured: bool = False
 
 
 class EnquiryItemIn(BaseModel):
@@ -610,6 +617,95 @@ class ProformaRequestIn(BaseModel):
     company: str | None = Field(None, max_length=120)
     delivery_location: str | None = Field(None, max_length=255)
     message: str | None = Field(None, max_length=2000)
+
+
+class CheckoutItemIn(BaseModel):
+    shop: str = Field(min_length=1, max_length=120)
+    variant_id: uuid.UUID
+    quantity: Decimal = Field(gt=0, le=1_000_000)
+
+
+class CheckoutContactIn(BaseModel):
+    contact_name: str = Field(min_length=2, max_length=120)
+    contact_phone: str = Field(min_length=5, max_length=32)
+    contact_email: EmailStr | None = None
+    company: str | None = Field(None, max_length=120)
+    delivery_location: str | None = Field(None, max_length=255)
+    message: str | None = Field(None, max_length=2000)
+
+
+class OrderCheckoutIn(CheckoutContactIn):
+    """A cart across shops, checked out as orders (PRD 13)."""
+
+    items: list[CheckoutItemIn] = Field(min_length=1, max_length=100)
+    delivery_method: DeliveryMethod = DeliveryMethod.DELIVERY
+    #: How the buyer intends to pay; recorded for the shop, not processed.
+    payment_method: PaymentMethod = PaymentMethod.CASH
+
+
+class ProformaCheckoutIn(CheckoutContactIn):
+    """A cart across shops, sent to each chosen shop as a proforma request."""
+
+    items: list[CheckoutItemIn] = Field(min_length=1, max_length=100)
+
+
+class OrderLineOut(Schema):
+    id: uuid.UUID
+    product_id: uuid.UUID | None = None
+    variant_id: uuid.UUID | None = None
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    tax_rate: Decimal
+    tax_amount: Decimal
+    line_total: Decimal
+
+
+class OrderOut(Schema):
+    id: uuid.UUID
+    number: str
+    status: str
+    batch_id: uuid.UUID | None = None
+    customer_id: uuid.UUID | None = None
+    customer_name: str
+    customer_phone: str | None = None
+    customer_email: str | None = None
+    customer_company: str | None = None
+    delivery_location: str | None = None
+    delivery_method: str
+    payment_method: str
+    customer_message: str | None = None
+    seller_note: str | None = None
+    subtotal: Decimal
+    tax_total: Decimal
+    delivery_charge: Decimal
+    total_amount: Decimal
+    currency: str
+    created_at: datetime
+    confirmed_at: datetime | None = None
+    ready_at: datetime | None = None
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancel_reason: str | None = None
+    converted_sale_id: uuid.UUID | None = None
+    lines: list[OrderLineOut] = []
+    tracking_url: str | None = None
+
+
+class ConfirmOrderIn(BaseModel):
+    delivery_charge: Decimal | None = Field(None, ge=0)
+    seller_note: str | None = Field(None, max_length=2000)
+
+
+class CompleteOrderIn(BaseModel):
+    branch_id: uuid.UUID | None = None
+    location_id: uuid.UUID | None = None
+    payments: list[PaymentIn] = []
+    due_date: date | None = None
+
+
+class CancelOrderIn(BaseModel):
+    reason: str | None = Field(None, max_length=500)
 
 
 class ConvertQuotationIn(BaseModel):

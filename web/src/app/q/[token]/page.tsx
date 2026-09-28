@@ -224,6 +224,14 @@ function Proforma({ token }: { token: string }) {
         </p>
       </div>
 
+      {proforma.tracking_url && (
+        <p className="no-print" style={{ textAlign: "center" }}>
+          <Link href={proforma.tracking_url.replace(/^https?:\/\/[^/]+/, "")}>
+            See every shop&apos;s part of this request →
+          </Link>
+        </p>
+      )}
+
       {proforma.shop && (
         <div className="card no-print">
           <div className="card-title">Questions about this proforma?</div>

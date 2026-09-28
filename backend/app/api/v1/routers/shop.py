@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, Query, status
 from sqlalchemy import func, select
 
-from app.api.v1.serializers import quotation_out, sale_out
+from app.api.v1.serializers import order_out, quotation_out, sale_out
 from app.core.config import settings
 from app.core.db import utcnow
 from app.core.deps import Ctx, DbSession, WritableCtx
@@ -17,20 +17,34 @@ from app.models.commerce import (
     CustomerEnquiry,
     EnquiryStatus,
     OnlineStore,
+    Order,
+    OrderStatus,
     Quotation,
     QuotationStatus,
 )
 from app.schemas.common import Page
 from app.schemas.operations import (
+    CancelOrderIn,
     CancelQuotationIn,
+    CompleteOrderIn,
+    ConfirmOrderIn,
     ConvertQuotationIn,
     EnquiryOut,
+    OrderOut,
     QuotationIn,
     QuotationOut,
     QuotationUpdateIn,
     SaleResponse,
     StoreOut,
     StoreSettingsIn,
+)
+from app.services.checkout import (
+    cancel_order,
+    complete_order,
+    confirm_order,
+    get_order,
+    mark_order_ready,
+    tracking_url_for,
 )
 from app.services.commerce import (
     QuotationInput,
@@ -41,6 +55,7 @@ from app.services.commerce import (
     send_quotation,
     update_quotation,
 )
+from app.services.messaging import begin_telegram_link, telegram_start_url, unlink_telegram
 from app.services.sales import PaymentInput
 
 router = APIRouter(prefix="/shop", tags=["online shop"])
@@ -66,7 +81,29 @@ def _store(db, ctx) -> OnlineStore:
 def _store_out(store: OnlineStore) -> StoreOut:
     payload = StoreOut.model_validate(store)
     payload.public_url = f"{settings.public_base_url}/shop/{store.slug}"
+    payload.telegram_linked = bool(store.telegram_chat_id)
+    payload.telegram_start_url = (
+        telegram_start_url(store.telegram_link_code) if store.telegram_link_code else None
+    )
+    payload.telegram_configured = bool(settings.telegram_bot_token)
     return payload
+
+
+@router.post("/telegram/link", response_model=StoreOut)
+def link_telegram(ctx: WritableCtx, db: DbSession) -> StoreOut:
+    """Mint the one-time Start link the owner opens in Telegram (PRD 14)."""
+    ctx.require(Permission.SHOP_MANAGE)
+    store = _store(db, ctx)
+    begin_telegram_link(db, store)
+    return _store_out(store)
+
+
+@router.delete("/telegram/link", response_model=StoreOut)
+def drop_telegram_link(ctx: WritableCtx, db: DbSession) -> StoreOut:
+    ctx.require(Permission.SHOP_MANAGE)
+    store = _store(db, ctx)
+    unlink_telegram(db, store)
+    return _store_out(store)
 
 
 @router.get("/settings", response_model=StoreOut)
@@ -94,6 +131,9 @@ def shop_summary(ctx: Ctx, db: DbSession) -> dict:
         return db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
 
     return {
+        "new_orders": count(
+            tenant_query(Order, ctx.tenant_id).where(Order.status == OrderStatus.PLACED)
+        ),
         "proforma_requests": count(
             tenant_query(Quotation, ctx.tenant_id).where(
                 Quotation.status == QuotationStatus.REQUESTED
@@ -164,6 +204,86 @@ def update_enquiry(
     enquiry.handled_at = utcnow()
     db.flush()
     return _enquiry_out(enquiry)
+
+
+# --------------------------------------------------------------------------- #
+# Orders from the marketplace
+# --------------------------------------------------------------------------- #
+
+
+def _order_out(db, order: Order) -> OrderOut:
+    return order_out(order, tracking_url=tracking_url_for(db, order))
+
+
+@router.get("/orders", response_model=Page[OrderOut])
+def list_orders(
+    ctx: Ctx,
+    db: DbSession,
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> Page[OrderOut]:
+    ctx.require(Permission.SHOP_VIEW)
+    stmt = tenant_query(Order, ctx.tenant_id)
+    if status_filter:
+        stmt = stmt.where(Order.status == status_filter)
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+    rows = db.execute(stmt.order_by(Order.created_at.desc()).limit(limit).offset(offset)).scalars()
+    return Page(items=[_order_out(db, o) for o in rows], total=total, limit=limit, offset=offset)
+
+
+@router.get("/orders/{order_id}", response_model=OrderOut)
+def get_one_order(order_id: uuid.UUID, ctx: Ctx, db: DbSession) -> OrderOut:
+    return _order_out(db, get_order(db, ctx, order_id))
+
+
+@router.post("/orders/{order_id}/confirm", response_model=OrderOut)
+def confirm(
+    order_id: uuid.UUID, payload: ConfirmOrderIn, ctx: WritableCtx, db: DbSession
+) -> OrderOut:
+    """Confirm prices and delivery; the customer is told by email if they gave one."""
+    order = confirm_order(
+        db, ctx, order_id, delivery_charge=payload.delivery_charge, seller_note=payload.seller_note
+    )
+    return _order_out(db, order)
+
+
+@router.post("/orders/{order_id}/ready", response_model=OrderOut)
+def ready(order_id: uuid.UUID, ctx: WritableCtx, db: DbSession) -> OrderOut:
+    return _order_out(db, mark_order_ready(db, ctx, order_id))
+
+
+@router.post("/orders/{order_id}/complete", response_model=SaleResponse)
+def complete(
+    order_id: uuid.UUID, payload: CompleteOrderIn, ctx: WritableCtx, db: DbSession
+) -> SaleResponse:
+    """The explicit step that posts the sale and deducts stock (PRD 13)."""
+    _order, result = complete_order(
+        db,
+        ctx,
+        order_id,
+        payments=[
+            PaymentInput(method=p.method, amount=p.amount, reference=p.reference)
+            for p in payload.payments
+        ],
+        branch_id=payload.branch_id,
+        location_id=payload.location_id,
+        due_date=payload.due_date,
+    )
+    return SaleResponse(
+        sale=sale_out(ctx, result.sale),
+        credit_transaction_id=(
+            result.credit_transaction.id if result.credit_transaction else None
+        ),
+        warnings=result.warnings,
+    )
+
+
+@router.post("/orders/{order_id}/cancel", response_model=OrderOut)
+def cancel_one_order(
+    order_id: uuid.UUID, payload: CancelOrderIn, ctx: WritableCtx, db: DbSession
+) -> OrderOut:
+    return _order_out(db, cancel_order(db, ctx, order_id, reason=payload.reason))
 
 
 # --------------------------------------------------------------------------- #

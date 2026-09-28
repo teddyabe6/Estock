@@ -66,7 +66,8 @@ export default function SignInPage() {
         </form>
 
         <p className="sub" style={{ marginTop: 16, marginBottom: 0 }}>
-          New here? <Link href="/register">Create a business account</Link>
+          New here? <Link href="/register">Create a business account</Link> · Looking to buy?{" "}
+          <Link href="/market">Browse the marketplace</Link>
           <br />
           <Link href="/forgot-password">Forgot your password?</Link>
         </p>

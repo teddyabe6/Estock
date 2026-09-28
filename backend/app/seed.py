@@ -42,6 +42,7 @@ logger = logging.getLogger("estock.seed")
 
 DEMO_EMAIL = "owner@merkato-demo.et"
 DEMO_PASSWORD = "demo-password-123"
+SECOND_SHOP_EMAIL = "owner@bole-hardware.et"
 ADMIN_EMAIL = "admin@estock.et"
 ADMIN_PASSWORD = "admin-password-123"
 
@@ -109,12 +110,14 @@ def seed() -> None:
         _publish_store(db, tenant.id, products)
         _add_proforma(db, ctx, products)
         _add_storefront_request(db, tenant, products)
+        _add_second_shop(db)
 
         db.commit()
 
     logger.info("")
     logger.info("Seed complete.")
     logger.info("  Business owner : %s / %s", DEMO_EMAIL, DEMO_PASSWORD)
+    logger.info("  Second shop    : %s / %s", SECOND_SHOP_EMAIL, DEMO_PASSWORD)
     logger.info("  Platform admin : %s / %s", ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
@@ -402,6 +405,53 @@ def _add_storefront_request(db, tenant, products) -> None:
         delivery_location="Bole, near Edna Mall",
         message="Please deliver on Saturday morning if possible.",
     )
+    db.flush()
+
+
+def _add_second_shop(db) -> None:
+    """A second business, so the marketplace has more than one shop to buy from."""
+    result = register_business(
+        db,
+        business_name="Bole Hardware",
+        full_name="Dawit Alemu",
+        email=SECOND_SHOP_EMAIL,
+        password=DEMO_PASSWORD,
+        phone="0922334455",
+        branch_name="Bole Shop",
+    )
+    db.flush()
+    tenant, owner = result.tenant, result.user
+    ctx = build_auth_context(owner, tenant, result.membership)
+    tenant.address = "Bole, Addis Ababa"
+    for name, category, unit, cost, price, stock in [
+        ("Emulsion paint 20L", "Paint", "bucket", "3200", "3900", "30"),
+        ("Roller and tray set", "Paint", "set", "260", "380", "45"),
+        ("Cement bag 50kg", "Building", "bag", "990", "1180", "200"),
+        ("Nails 2 inch 1kg", "Building", "kg", "140", "190", "120"),
+        ("Cordless drill 18V", "Tools", "pcs", "6800", "8400", "6"),
+    ]:
+        create_product(
+            db,
+            ctx,
+            ProductInput(
+                name=name,
+                category_name=category,
+                unit_of_measure=unit,
+                purchase_price=Decimal(cost),
+                selling_price=Decimal(price),
+                opening_stock=Decimal(stock),
+                is_published=True,
+            ),
+        )
+    store = db.execute(
+        select(OnlineStore).where(OnlineStore.tenant_id == tenant.id)
+    ).scalar_one()
+    store.is_published = True
+    store.tagline = "Paint, cement and tools in Bole"
+    store.about = "Open every day. Delivery within Bole and Gerji; pickup from the shop."
+    store.telegram_username = "bolehardware"
+    store.contact_email = SECOND_SHOP_EMAIL
+    store.checkout_note = "We confirm orders by phone within an hour during opening hours."
     db.flush()
 
 

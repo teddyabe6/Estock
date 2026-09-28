@@ -26,6 +26,7 @@ PREFIXES = {
     "sale": "S",
     "purchase": "P",
     "quotation": "PF",
+    "order": "ORD",
     "transfer": "TR",
     "count": "SC",
     "credit": "CR",

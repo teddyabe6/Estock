@@ -43,6 +43,9 @@ class AuditAction:
     QUOTATION_UPDATED = "quotation.updated"
     QUOTATION_CANCELLED = "quotation.cancelled"
     QUOTATION_CONVERTED = "quotation.converted"
+    ORDER_CONFIRMED = "order.confirmed"
+    ORDER_COMPLETED = "order.completed"
+    ORDER_CANCELLED = "order.cancelled"
     SUBSCRIPTION_CHANGED = "subscription.changed"
     PLATFORM_SUPPORT_ACCESS = "platform.support_access"
 

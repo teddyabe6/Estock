@@ -20,6 +20,7 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Publish online and receive an enquiry from the same catalogue | `test_the_storefront_uses_the_same_catalogue_and_stock`, `test_an_enquiry_reserves_no_stock` |
 | Share a proforma without posting a sale or reducing stock | `test_a_proforma_is_not_a_sale_until_it_is_converted` |
 | A customer fills a basket, requests a proforma, and the seller confirms it | `test_storefront.py` (22 tests: pricing from the catalogue, customer matching, review, sending, cancelling, photos) |
+| A cart across shops is ordered, or sent to several shops as proforma requests, each shop told about its own part | `test_marketplace.py` (14 tests: filters, one order per shop, lifecycle, isolation, email and Telegram per shop, bot linking) |
 | Reports agree with transactions and respect permissions | `test_permissions.py`, `test_profit_figures_are_withheld_without_cost_view` |
 | Trial expiry applies the policy without deleting data | `test_an_expired_trial_restricts_access_without_deleting_data` |
 | Security: rate limiting, account recovery, read-only support access | `test_repeated_failed_sign_ins_are_rate_limited`, `test_password_reset_round_trip`, `test_support_access_can_look_but_not_touch` |

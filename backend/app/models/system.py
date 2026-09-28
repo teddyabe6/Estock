@@ -29,6 +29,10 @@ class NotificationKind(StrEnum):
     PROFORMA_REQUEST = "proforma_request"
     #: A customer accepted or declined a proforma.
     PROFORMA_RESPONSE = "proforma_response"
+    #: A customer placed an order from the marketplace.
+    NEW_ORDER = "new_order"
+    #: A customer cancelled an order.
+    ORDER_UPDATE = "order_update"
     TRIAL_EXPIRY = "trial_expiry"
     IMPORT_COMPLETE = "import_complete"
     GENERAL = "general"

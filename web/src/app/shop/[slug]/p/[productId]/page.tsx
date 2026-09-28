@@ -11,7 +11,7 @@ import { use, useEffect, useState } from "react";
 import { EnquiryForm, ProductImage, SellerContact, Stepper, StorefrontShell } from "@/components/Storefront";
 import { Alert } from "@/components/ui";
 import { money } from "@/lib/format";
-import { shopApi, useBasket, type PublicProduct, type PublicVariant, type Shop } from "@/lib/storefront";
+import { cartLineFor, shopApi, useCart, type PublicProduct, type PublicVariant, type Shop } from "@/lib/storefront";
 
 export default function ProductPage({
   params,
@@ -27,7 +27,7 @@ export default function ProductPage({
   const [added, setAdded] = useState(false);
   const [asking, setAsking] = useState(false);
   const [shared, setShared] = useState(false);
-  const basket = useBasket(slug);
+  const cart = useCart();
   const currency = shop?.currency ?? "ETB";
 
   useEffect(() => {
@@ -42,18 +42,7 @@ export default function ProductPage({
 
   function add() {
     if (!product || !variant) return;
-    basket.add(
-      {
-        variantId: variant.id,
-        productId: product.id,
-        name: product.name,
-        variantName: variant.name,
-        unit: product.unit_of_measure,
-        price: variant.price ?? product.price,
-        imageUrl: product.image_url,
-      },
-      quantity,
-    );
+    cart.add(cartLineFor(product, variant), quantity);
     setAdded(true);
   }
 
@@ -83,12 +72,15 @@ export default function ProductPage({
   }
 
   const price = variant?.price ?? product?.price ?? null;
-  const inStock = variant ? variant.in_stock : product?.in_stock ?? false;
+  const inStock = variant ? variant.in_stock : (product?.in_stock ?? false);
+  const canOrder = Boolean(product?.shop.accepts_orders && price);
 
   return (
-    <StorefrontShell slug={slug} shop={shop} basketCount={basket.count} basketTotal={basket.total}>
+    <StorefrontShell title={shop?.display_name ?? "Loading…"} subtitle={shop?.tagline} homeHref={`/shop/${slug}`} contact={shop}>
       <p className="crumbs">
-        <Link href={`/shop/${slug}`}>All products</Link>
+        <Link href="/market">Marketplace</Link>
+        {" › "}
+        <Link href={`/shop/${slug}`}>{shop?.display_name ?? "Shop"}</Link>
         {product?.category && (
           <>
             {" › "}
@@ -140,14 +132,20 @@ export default function ProductPage({
             <div className="row" style={{ marginTop: 14 }}>
               <Stepper value={quantity} onChange={(next) => setQuantity(Math.max(next, 0.001))} />
               <button type="button" onClick={add} disabled={!variant}>
-                Add to basket
+                {canOrder ? "Add to cart" : "Add to request"}
               </button>
             </div>
             {added && (
               <Alert kind="ok">
-                Added to your basket.{" "}
-                <Link href={`/shop/${slug}/basket`}>View basket and request a proforma →</Link>
+                Added to your cart. <Link href="/cart">View cart →</Link>
               </Alert>
+            )}
+            {!canOrder && (
+              <p className="muted" style={{ fontSize: "0.88rem" }}>
+                {product.shop.accepts_orders
+                  ? "No online price: add it to your cart and request a proforma."
+                  : "This shop takes proforma requests rather than direct orders."}
+              </p>
             )}
             {!inStock && (
               <p className="muted" style={{ fontSize: "0.88rem" }}>

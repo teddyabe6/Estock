@@ -11,13 +11,14 @@ from sqlalchemy.orm import Session
 from app.core.permissions import Permission
 from app.core.tenancy import AuthContext
 from app.models.catalogue import Product, ProductVariant
-from app.models.commerce import Quotation
+from app.models.commerce import Order, Quotation
 from app.models.credit import CreditTransaction
 from app.models.inventory import StockBalance
 from app.models.sales import Sale
 from app.schemas.catalogue import ProductOut, VariantOut
 from app.schemas.operations import (
     CreditTransactionOut,
+    OrderOut,
     PaymentOut,
     QuotationOut,
     SaleLineOut,
@@ -185,6 +186,14 @@ def credit_out(
             else None
         ),
     )
+
+
+def order_out(order: Order, *, tracking_url: str | None = None) -> OrderOut:
+    payload = OrderOut.model_validate(order)
+    payload.status = str(order.status)
+    payload.delivery_method = str(order.delivery_method)
+    payload.tracking_url = tracking_url
+    return payload
 
 
 def quotation_out(quotation: Quotation, *, include_share: bool = True) -> QuotationOut:

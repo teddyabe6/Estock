@@ -42,6 +42,7 @@ from app.models.commerce import (
 from app.models.contacts import Customer
 from app.models.inventory import StockBalance
 from app.models.platform import Tenant, TenantStatus
+from app.services.messaging import notify_store
 from app.services.numbering import next_number
 from app.services.pricing import quantize_money
 from app.services.storage import public_file_url
@@ -153,7 +154,7 @@ def list_public_products(
         )
 
     products = list(db.execute(stmt.order_by(Product.name)).scalars())
-    stock = _stock_by_variant(db, store.tenant_id, products)
+    stock = _stock_by_variant(db, [store.tenant_id], products)
 
     results: list[PublicProduct] = []
     for product in products:
@@ -175,7 +176,7 @@ def get_public_product(
     ).scalar_one_or_none()
     if product is None:
         raise NotFoundError("This product is not available")
-    item = _public_product(product, store, _stock_by_variant(db, store.tenant_id, [product]))
+    item = _public_product(product, store, _stock_by_variant(db, [store.tenant_id], [product]))
     if tenant.hide_out_of_stock_online and not item.in_stock and product.track_stock:
         raise NotFoundError("This product is not available at the moment")
     return item
@@ -220,17 +221,148 @@ def _public_product(
 
 
 def _stock_by_variant(
-    db: Session, tenant_id: uuid.UUID, products: list[Product]
+    db: Session, tenant_ids: list[uuid.UUID], products: list[Product]
 ) -> dict[uuid.UUID, Decimal]:
     variant_ids = [variant.id for product in products for variant in product.variants]
     if not variant_ids:
         return {}
     rows = db.execute(
         select(StockBalance.variant_id, func.sum(StockBalance.quantity))
-        .where(StockBalance.tenant_id == tenant_id, StockBalance.variant_id.in_(variant_ids))
+        .where(StockBalance.tenant_id.in_(tenant_ids), StockBalance.variant_id.in_(variant_ids))
         .group_by(StockBalance.variant_id)
     )
     return {row[0]: Decimal(row[1] or 0) for row in rows}
+
+
+# --------------------------------------------------------------------------- #
+# The marketplace: every open shop at once
+# --------------------------------------------------------------------------- #
+
+MARKET_SORTS = ("name", "price_asc", "price_desc", "newest")
+
+
+def market_stores(db: Session) -> list[tuple[OnlineStore, Tenant]]:
+    """Published shops whose business is not suspended."""
+    rows = db.execute(
+        select(OnlineStore, Tenant)
+        .join(Tenant, Tenant.id == OnlineStore.tenant_id)
+        .where(OnlineStore.is_published.is_(True), Tenant.status != TenantStatus.SUSPENDED)
+        .order_by(OnlineStore.display_name)
+    )
+    return [(row[0], row[1]) for row in rows]
+
+
+def _shop_summary(store: OnlineStore) -> dict:
+    return {
+        "slug": store.slug,
+        "display_name": store.display_name,
+        "accepts_orders": store.accepts_orders,
+        "show_prices": store.show_prices,
+    }
+
+
+def list_market_shops(db: Session) -> list[dict]:
+    shops = []
+    for store, _tenant in market_stores(db):
+        count = db.execute(
+            select(func.count()).select_from(_published_products(store.tenant_id).subquery())
+        ).scalar_one()
+        shops.append(
+            {
+                **_shop_summary(store),
+                "tagline": store.tagline,
+                "address": store.address,
+                "telegram_username": store.telegram_username,
+                "product_count": count,
+                "categories": public_categories(db, store),
+            }
+        )
+    return shops
+
+
+def market_categories(db: Session) -> list[str]:
+    tenant_ids = [tenant.id for _store, tenant in market_stores(db)]
+    if not tenant_ids:
+        return []
+    rows = db.execute(
+        select(Category.name)
+        .join(Product, Product.category_id == Category.id)
+        .where(
+            Product.tenant_id.in_(tenant_ids),
+            Product.is_published.is_(True),
+            Product.is_active.is_(True),
+        )
+        .distinct()
+        .order_by(Category.name)
+    )
+    return [row[0] for row in rows]
+
+
+def list_market_products(
+    db: Session,
+    *,
+    query: str | None = None,
+    category: str | None = None,
+    shop: str | None = None,
+    min_price: Decimal | None = None,
+    max_price: Decimal | None = None,
+    in_stock_only: bool = False,
+    sort: str = "name",
+    limit: int = 24,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Published products across every open shop, with the shop on each item."""
+    if sort not in MARKET_SORTS:
+        raise ValidationError(f"sort must be one of {', '.join(MARKET_SORTS)}")
+    stores = market_stores(db)
+    if shop:
+        stores = [(s, t) for s, t in stores if s.slug == shop.strip().lower()]
+    by_tenant = {tenant.id: (store, tenant) for store, tenant in stores}
+    if not by_tenant:
+        return [], 0
+
+    stmt = select(Product).where(
+        Product.tenant_id.in_(list(by_tenant)),
+        Product.is_published.is_(True),
+        Product.is_active.is_(True),
+    )
+    if query:
+        pattern = f"%{query.strip().lower()}%"
+        stmt = stmt.where(
+            or_(func.lower(Product.name).like(pattern), func.lower(Product.brand).like(pattern))
+        )
+    if category:
+        stmt = stmt.join(Category, Product.category_id == Category.id).where(
+            func.lower(Category.name) == category.strip().lower()
+        )
+    order = Product.created_at.desc() if sort == "newest" else Product.name
+    products = list(db.execute(stmt.order_by(order)).scalars())
+    stock = _stock_by_variant(db, list(by_tenant), products)
+
+    items: list[dict] = []
+    for product in products:
+        store, tenant = by_tenant[product.tenant_id]
+        item = _public_product(product, store, stock)
+        if tenant.hide_out_of_stock_online and not item.in_stock and product.track_stock:
+            continue
+        if in_stock_only and not item.in_stock:
+            continue
+        if min_price is not None and (item.price is None or item.price < min_price):
+            continue
+        if max_price is not None and (item.price is None or item.price > max_price):
+            continue
+        payload = item.as_dict()
+        payload["shop"] = _shop_summary(store)
+        items.append(payload)
+
+    if sort in ("price_asc", "price_desc"):
+        priced = [i for i in items if i["price"] is not None]
+        unpriced = [i for i in items if i["price"] is None]
+        priced.sort(key=lambda i: Decimal(i["price"]), reverse=sort == "price_desc")
+        items = priced + unpriced
+
+    total = len(items)
+    return items[offset : offset + limit], total
 
 
 def submit_enquiry(
@@ -271,7 +403,7 @@ def submit_enquiry(
     )
     db.add(enquiry)
     db.flush()
-    _notify_staff(
+    notify_staff(
         db,
         tenant_id=enquiry.tenant_id,
         permission=Permission.ENQUIRY_VIEW,
@@ -285,7 +417,7 @@ def submit_enquiry(
     return enquiry
 
 
-def _notify_staff(
+def notify_staff(
     db: Session,
     *,
     tenant_id: uuid.UUID,
@@ -420,12 +552,14 @@ def request_quotation(
     company: str | None = None,
     delivery_location: str | None = None,
     message: str | None = None,
+    batch_id: uuid.UUID | None = None,
 ) -> Quotation:
     """A visitor's basket becomes a numbered proforma request (PRD 13, 14).
 
     Lines are priced from the catalogue so the seller reviews rather than
-    retypes, the customer is matched to an existing record by phone, and staff
-    who handle proformas are notified.  No stock is reserved.
+    retypes, the customer is matched to an existing record by phone, staff who
+    handle proformas are notified in the app, and the shop is told by email
+    and Telegram.  No stock is reserved.
     """
     if not items:
         raise ValidationError("Your basket is empty")
@@ -462,7 +596,7 @@ def request_quotation(
             details={"unavailable": unavailable},
         )
 
-    customer = _find_or_create_customer(
+    customer = find_or_create_customer(
         db,
         store.tenant_id,
         name=contact_name,
@@ -475,6 +609,7 @@ def request_quotation(
         tenant_id=store.tenant_id,
         number=next_number(db, Quotation, store.tenant_id, "quotation"),
         status=QuotationStatus.REQUESTED,
+        batch_id=batch_id,
         customer_id=customer.id,
         customer_name=contact_name.strip(),
         customer_phone=customer.phone,
@@ -504,7 +639,7 @@ def request_quotation(
             for variant_id, quantity in wanted.items()
         ],
     )
-    _notify_staff(
+    notify_staff(
         db,
         tenant_id=store.tenant_id,
         permission=Permission.QUOTATION_VIEW,
@@ -518,10 +653,57 @@ def request_quotation(
         entity_type="quotation",
         entity_id=quotation.id,
     )
+    notify_store(
+        db,
+        store,
+        tenant,
+        subject=f"Proforma request {quotation.number} from {quotation.customer_name}",
+        lines=describe_request(quotation),
+        link=f"{settings.public_base_url}/shop?tab=proformas&open={quotation.id}",
+    )
     return quotation
 
 
-def _find_or_create_customer(
+def describe_request(quotation: Quotation) -> list[str]:
+    """The shop's own part of a request, one line per item, for email or Telegram."""
+    lines = [
+        f"• {line.description} × {Decimal(line.quantity).normalize():f} "
+        f"@ {line.unit_price} = {line.line_total} {quotation.currency}"
+        for line in quotation.lines
+    ]
+    lines.append(f"Total at catalogue prices: {quotation.total_amount} {quotation.currency}")
+    lines.append(f"From: {quotation.customer_name} · {quotation.customer_phone or ''}".rstrip(" ·"))
+    if quotation.customer_company:
+        lines.append(f"Company: {quotation.customer_company}")
+    if quotation.delivery_location:
+        lines.append(f"Deliver to: {quotation.delivery_location}")
+    if quotation.customer_message:
+        lines.append(f"Note: {quotation.customer_message}")
+    return lines
+
+
+def quotation_next_step(status: QuotationStatus) -> str:
+    return _NEXT_STEP.get(status, "")
+
+
+_NEXT_STEP = {
+    QuotationStatus.REQUESTED: (
+        "The seller is reviewing your request and will send the priced proforma here."
+    ),
+    QuotationStatus.DRAFT: "Accept below to confirm your order.",
+    QuotationStatus.SENT: (
+        "Accept below to confirm your order. Nothing is reserved until the seller confirms."
+    ),
+    QuotationStatus.ACCEPTED: (
+        "You accepted this proforma. The seller will contact you about delivery and payment."
+    ),
+    QuotationStatus.DECLINED: "You declined this proforma.",
+    QuotationStatus.EXPIRED: "This proforma has expired. Ask the seller for a new one.",
+    QuotationStatus.CONVERTED: "This order has been completed by the seller.",
+}
+
+
+def find_or_create_customer(
     db: Session,
     tenant_id: uuid.UUID,
     *,
@@ -844,7 +1026,7 @@ def respond_to_quotation(db: Session, token: str, *, accept: bool) -> Quotation:
         quotation.status = QuotationStatus.DECLINED
         quotation.declined_at = utcnow()
     db.flush()
-    _notify_staff(
+    notify_staff(
         db,
         tenant_id=quotation.tenant_id,
         permission=Permission.QUOTATION_VIEW,

@@ -13,11 +13,11 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { Alert, Badge, Drawer, Empty, Field, PageHead, Tabs, Toggle } from "@/components/ui";
-import { api, type Enquiry, type Product, type Quotation, type Store } from "@/lib/api";
+import { api, type Enquiry, type Order, type Product, type Quotation, type Store } from "@/lib/api";
 import { dateTime, money, shortDate } from "@/lib/format";
 import { describeError, useSession } from "@/lib/session";
 
-type Tab = "storefront" | "enquiries" | "proformas";
+type Tab = "storefront" | "orders" | "enquiries" | "proformas";
 
 export default function ShopPage() {
   return (
@@ -34,9 +34,9 @@ function Shop() {
   const params = useSearchParams();
   const initial = params.get("tab");
   const [tab, setTab] = useState<Tab>(
-    initial === "enquiries" || initial === "proformas" ? initial : "storefront",
+    initial === "enquiries" || initial === "proformas" || initial === "orders" ? initial : "storefront",
   );
-  const [summary, setSummary] = useState<{ proforma_requests: number; new_enquiries: number } | null>(null);
+  const [summary, setSummary] = useState<{ new_orders: number; proforma_requests: number; new_enquiries: number } | null>(null);
 
   const refreshSummary = useCallback(() => {
     api.shopSummary().then(setSummary).catch(() => setSummary(null));
@@ -48,6 +48,11 @@ function Shop() {
 
   const tabs = [
     { value: "storefront" as const, label: "Storefront", show: true },
+    {
+      value: "orders" as const,
+      label: summary?.new_orders ? `Orders (${summary.new_orders} new)` : "Orders",
+      show: can("shop:view"),
+    },
     {
       value: "enquiries" as const,
       label: summary?.new_enquiries ? `Questions (${summary.new_enquiries})` : "Questions",
@@ -65,6 +70,7 @@ function Shop() {
       <PageHead title="Online shop" subtitle="The same products and stock as the counter" />
       <Tabs value={tab} options={tabs} onChange={setTab} />
       {tab === "storefront" && <Storefront />}
+      {tab === "orders" && <Orders openId={params.get("open")} onChanged={refreshSummary} />}
       {tab === "enquiries" && (
         <Enquiries openId={params.get("open")} onQuote={() => setTab("proformas")} onChanged={refreshSummary} />
       )}
@@ -139,7 +145,7 @@ function Storefront() {
     }
   }
 
-  async function setFlag(key: "is_published" | "show_prices", value: boolean) {
+  async function setFlag(key: "is_published" | "show_prices" | "accepts_orders", value: boolean) {
     try {
       setStore(await api.updateStore({ [key]: value }));
     } catch (cause) {
@@ -183,19 +189,31 @@ function Storefront() {
             )}
           </div>
           <p className="muted" style={{ fontSize: "0.9rem", marginBottom: 0 }}>
-            Customers browse by category, fill a basket and request a proforma. You review the prices and
-            send it; nothing is reserved or sold until you convert it.
+            Your products are listed on the <a href="/market" target="_blank" rel="noreferrer">marketplace</a> next to
+            other shops. Customers can order from you directly, or ask several shops for a proforma at once. You
+            confirm each order and review each request; nothing is reserved or sold until you complete or convert
+            it.
           </p>
           {manage && (
-            <Toggle
-              label="Show prices to visitors"
-              hint="off means visitors see 'ask for a price' and your proforma request arrives unpriced for them"
-              checked={store.show_prices}
-              onChange={(v) => void setFlag("show_prices", v)}
-            />
+            <>
+              <Toggle
+                label="Show prices to visitors"
+                hint="off means visitors see 'ask for a price' and can only request a proforma"
+                checked={store.show_prices}
+                onChange={(v) => void setFlag("show_prices", v)}
+              />
+              <Toggle
+                label="Take orders online"
+                hint="off means customers can only request a proforma from you"
+                checked={store.accepts_orders}
+                onChange={(v) => void setFlag("accepts_orders", v)}
+              />
+            </>
           )}
         </div>
       )}
+
+      {store && <TelegramCard store={store} manage={manage} onChanged={setStore} />}
 
       {store && manage && (
         <form className="card" onSubmit={save}>
@@ -309,6 +327,408 @@ function Storefront() {
         )}
       </div>
     </>
+  );
+}
+
+function TelegramCard({
+  store,
+  manage,
+  onChanged,
+}: {
+  store: Store;
+  manage: boolean;
+  onChanged: (store: Store) => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function run(work: () => Promise<Store>) {
+    setBusy(true);
+    setError(null);
+    try {
+      onChanged(await work());
+    } catch (cause) {
+      setError(describeError(cause, "Could not change the Telegram connection"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">Where orders and requests reach you</div>
+      <Alert>{error}</Alert>
+      <p className="muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+        Every order and proforma request is emailed to {store.contact_email || "your shop email (set it above)"} and
+        shown under Orders and Proformas here.
+        {store.telegram_linked
+          ? " It also arrives in your Telegram chat."
+          : " Connect Telegram to get each one there too."}
+      </p>
+      {store.telegram_linked ? (
+        <div className="row">
+          <span className="badge ok">Telegram connected</span>
+          {manage && (
+            <button type="button" className="link" disabled={busy} onClick={() => void run(api.unlinkTelegram)}>
+              Disconnect
+            </button>
+          )}
+        </div>
+      ) : !store.telegram_configured ? (
+        <p className="muted" style={{ fontSize: "0.88rem", marginBottom: 0 }}>
+          Telegram delivery needs a bot configured by whoever runs this Estock installation. Until then, requests are
+          emailed{store.telegram_username ? ` and your username @${store.telegram_username} is shown to customers so they can message you` : ""}.
+        </p>
+      ) : store.telegram_start_url ? (
+        <>
+          <p>
+            Open this link in Telegram and press <strong>Start</strong>. The bot will confirm, and this page will show
+            the connection once you reload.
+          </p>
+          <p style={{ wordBreak: "break-all" }}>
+            <a href={store.telegram_start_url} target="_blank" rel="noreferrer">
+              {store.telegram_start_url}
+            </a>
+          </p>
+          {manage && (
+            <button type="button" className="secondary" disabled={busy} onClick={() => void run(api.linkTelegram)}>
+              Get a new link
+            </button>
+          )}
+        </>
+      ) : (
+        manage && (
+          <button type="button" disabled={busy} onClick={() => void run(api.linkTelegram)}>
+            Connect Telegram
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Orders from the marketplace
+// --------------------------------------------------------------------------- //
+
+type OrderFilter = "placed" | "confirmed" | "ready" | "completed" | "cancelled" | "all";
+
+const ORDER_FILTERS: Array<{ value: OrderFilter; label: string }> = [
+  { value: "placed", label: "New" },
+  { value: "confirmed", label: "Confirmed" },
+  { value: "ready", label: "Ready" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "all", label: "All" },
+];
+
+const PAYMENT_LABELS: Record<string, string> = {
+  cash: "cash on delivery or pickup",
+  telebirr: "telebirr",
+  cbe_birr: "CBE Birr",
+  bank_transfer: "bank transfer",
+  mobile_money: "mobile money",
+};
+
+function Orders({ openId, onChanged }: { openId: string | null; onChanged: () => void }) {
+  const { session, can, canWrite } = useSession();
+  const currency = session?.currency ?? "ETB";
+  const [items, setItems] = useState<Order[] | null>(null);
+  const [filter, setFilter] = useState<OrderFilter>("all");
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(openId);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const page = await api.orders({ limit: 200 });
+      setItems(page.items);
+      setError(null);
+      if (page.items.some((o) => o.status === "placed") && !openId) setFilter("placed");
+    } catch (cause) {
+      setError(describeError(cause, "Could not load orders"));
+    }
+    // The filter should settle on first load only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function replace(updated: Order) {
+    setItems((all) => (all ? all.map((o) => (o.id === updated.id ? updated : o)) : all));
+    onChanged();
+  }
+
+  const manage = canWrite && can("shop:manage");
+  const selected = items?.find((o) => o.id === selectedId) ?? null;
+  const shown = (items ?? []).filter((o) => filter === "all" || o.status === filter);
+  const newCount = (items ?? []).filter((o) => o.status === "placed").length;
+
+  return (
+    <>
+      <Alert>{error}</Alert>
+      {notice && <Alert kind="ok">{notice}</Alert>}
+      <div className="chips">
+        {ORDER_FILTERS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`chip${filter === option.value ? " is-active" : ""}`}
+            onClick={() => setFilter(option.value)}
+          >
+            {option.label}
+            {option.value === "placed" && newCount ? ` (${newCount})` : ""}
+          </button>
+        ))}
+      </div>
+      <div className="card">
+        <p className="muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+          Orders placed on the marketplace. Confirm, prepare, then complete: completing posts the sale and moves
+          stock. The customer pays you the way they chose; nothing is charged online.
+        </p>
+        {items === null ? (
+          <p className="muted">Loading…</p>
+        ) : shown.length === 0 ? (
+          <Empty title={filter === "all" ? "No orders yet" : "Nothing here"} />
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Number</th>
+                  <th>Customer</th>
+                  <th>When</th>
+                  <th className="num">Total ({currency})</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((o) => (
+                  <tr key={o.id}>
+                    <td className="nowrap">
+                      <button type="button" className="link" onClick={() => setSelectedId(o.id)}>
+                        {o.number}
+                      </button>
+                    </td>
+                    <td>
+                      {o.customer_company || o.customer_name}
+                      <div className="muted" style={{ fontSize: "0.82rem" }}>
+                        {PAYMENT_LABELS[o.payment_method] ?? o.payment_method} ·{" "}
+                        {o.delivery_method === "pickup" ? "pickup" : o.delivery_location ? `deliver to ${o.delivery_location}` : "delivery"}
+                      </div>
+                    </td>
+                    <td className="muted nowrap">{dateTime(o.created_at)}</td>
+                    <td className="num">{money(o.total_amount, currency)}</td>
+                    <td className="nowrap">
+                      <Badge status={o.status} label={o.status === "placed" ? "new" : undefined} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {selected && (
+        <OrderDrawer
+          order={selected}
+          manage={manage}
+          currency={currency}
+          onClose={() => setSelectedId(null)}
+          onChanged={replace}
+          onCompleted={(text) => {
+            setNotice(text);
+            setSelectedId(null);
+            void load();
+            onChanged();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function OrderDrawer({
+  order,
+  manage,
+  currency,
+  onClose,
+  onChanged,
+  onCompleted,
+}: {
+  order: Order;
+  manage: boolean;
+  currency: string;
+  onClose: () => void;
+  onChanged: (updated: Order) => void;
+  onCompleted: (notice: string) => void;
+}) {
+  const [delivery, setDelivery] = useState(order.delivery_charge);
+  const [note, setNote] = useState(order.seller_note ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setDelivery(order.delivery_charge);
+    setNote(order.seller_note ?? "");
+  }, [order]);
+
+  async function run<T>(work: () => Promise<T>, fallback: string): Promise<T | null> {
+    setBusy(true);
+    setError(null);
+    try {
+      return await work();
+    } catch (cause) {
+      setError(describeError(cause, fallback));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm() {
+    const updated = await run(
+      () => api.confirmOrder(order.id, { delivery_charge: delivery || "0", seller_note: note || null }),
+      "Could not confirm",
+    );
+    if (updated) onChanged(updated);
+  }
+
+  async function ready() {
+    const updated = await run(() => api.readyOrder(order.id), "Could not update");
+    if (updated) onChanged(updated);
+  }
+
+  async function complete() {
+    if (!window.confirm(`Complete ${order.number}? This posts the sale and deducts stock.`)) return;
+    const result = await run(() => api.completeOrder(order.id, { payments: [] }), "Could not complete");
+    if (result) {
+      onCompleted(
+        `Sale ${result.sale.number} posted from ${order.number}.` +
+          (result.warnings.length ? ` ${result.warnings.join(" ")}` : ""),
+      );
+    }
+  }
+
+  async function cancel() {
+    const reason = window.prompt(`Cancel ${order.number}? The customer is told by email if they gave one. Reason (optional):`);
+    if (reason === null) return;
+    const updated = await run(() => api.cancelOrder(order.id, reason), "Could not cancel");
+    if (updated) onChanged(updated);
+  }
+
+  const open = order.status !== "completed" && order.status !== "cancelled";
+
+  return (
+    <Drawer title={order.number} onClose={onClose}>
+      <Alert>{error}</Alert>
+      <p>
+        <strong>{order.customer_company || order.customer_name}</strong>
+        {order.customer_phone ? ` · ${order.customer_phone}` : ""}
+        {order.customer_email ? ` · ${order.customer_email}` : ""} ·{" "}
+        <Badge status={order.status} label={order.status === "placed" ? "new" : undefined} />
+      </p>
+      <p className="muted">
+        {PAYMENT_LABELS[order.payment_method] ?? order.payment_method} ·{" "}
+        {order.delivery_method === "pickup" ? "customer picks up" : `deliver to ${order.delivery_location ?? "(no location given)"}`}
+      </p>
+      {order.customer_message && (
+        <p>
+          <span className="muted">Customer&apos;s note:</span> “{order.customer_message}”
+        </p>
+      )}
+      {order.cancel_reason && <p className="muted">Cancelled: {order.cancel_reason}</p>}
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th className="num">Qty</th>
+              <th className="num">Unit</th>
+              <th className="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {order.lines.map((line) => (
+              <tr key={line.id}>
+                <td>{line.description}</td>
+                <td className="num">{Number(line.quantity).toLocaleString()}</td>
+                <td className="num">{money(line.unit_price, currency)}</td>
+                <td className="num">{money(line.line_total, currency)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            {Number(order.tax_total) > 0 && (
+              <tr>
+                <td colSpan={3} className="num muted">Tax</td>
+                <td className="num">{money(order.tax_total, currency)}</td>
+              </tr>
+            )}
+            {Number(order.delivery_charge) > 0 && (
+              <tr>
+                <td colSpan={3} className="num muted">Delivery</td>
+                <td className="num">{money(order.delivery_charge, currency)}</td>
+              </tr>
+            )}
+            <tr>
+              <td colSpan={3} className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{money(order.total_amount, currency)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {manage && order.status === "placed" && (
+        <div className="card">
+          <div className="card-title">Confirm the order</div>
+          <div className="grid">
+            <Field label="Delivery charge" hint="0 for none">
+              <input value={delivery} onChange={(e) => setDelivery(e.target.value)} inputMode="decimal" />
+            </Field>
+          </div>
+          <Field label="Note to the customer" hint="optional">
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Delivery Saturday morning" />
+          </Field>
+          <button type="button" disabled={busy} onClick={() => void confirm()}>
+            Confirm order
+          </button>
+        </div>
+      )}
+      {order.seller_note && order.status !== "placed" && <p className="muted">Your note: {order.seller_note}</p>}
+
+      {manage && open && (
+        <div className="row" style={{ marginTop: 8 }}>
+          {order.status === "confirmed" && (
+            <button type="button" className="secondary" disabled={busy} onClick={() => void ready()}>
+              {order.delivery_method === "pickup" ? "Ready for pickup" : "Out for delivery"}
+            </button>
+          )}
+          <button type="button" className={order.status === "ready" ? undefined : "secondary"} disabled={busy} onClick={() => void complete()}>
+            Complete and post the sale
+          </button>
+          <button type="button" className="link" disabled={busy} onClick={() => void cancel()}>
+            Cancel order
+          </button>
+        </div>
+      )}
+      {order.converted_sale_id && (
+        <p>
+          <Link href={`/sales/${order.converted_sale_id}`}>See the sale →</Link>
+        </p>
+      )}
+      {order.tracking_url && (
+        <p className="muted" style={{ fontSize: "0.85rem", wordBreak: "break-all" }}>
+          The customer follows it at{" "}
+          <a href={order.tracking_url} target="_blank" rel="noreferrer">
+            {order.tracking_url}
+          </a>
+        </p>
+      )}
+    </Drawer>
   );
 }
 
@@ -559,8 +979,9 @@ function Proformas({ openId, onChanged }: { openId: string | null; onChanged: ()
       )}
       <div className="card">
         <p className="muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-          A proforma is a numbered quotation. Requests from your shop page arrive priced from your catalogue;
-          review, then send. It is not a sale, a payment or a stock deduction until you convert it.
+          A proforma is a numbered quotation. Requests from the marketplace arrive priced from your catalogue,
+          holding only your own items; review, then send. It is not a sale, a payment or a stock deduction until
+          you convert it.
         </p>
         {items === null ? (
           <p className="muted">Loading…</p>

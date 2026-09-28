@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     #: Where browsers reach this API; used to build links to public files such
     #: as product images.
     api_base_url: str = "http://localhost:8000/api/v1"
+
+    # Telegram delivery of orders and proforma requests to shop owners (PRD 14).
+    # Without a bot token, messages are logged instead of sent.
+    telegram_bot_token: str | None = None
+    telegram_bot_username: str | None = None
+    #: Set to enable POST /public/telegram/webhook; Telegram sends it back in a
+    #: header on every delivery.  Leave unset to poll with the telegram worker.
+    telegram_webhook_secret: str | None = None
     #: Comma-separated browser origins allowed to call the API. The defaults
     #: cover local development; deployments set this explicitly.
     cors_origins: str = (
