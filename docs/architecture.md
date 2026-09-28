@@ -252,13 +252,33 @@ the email transport. The reply is the same whether or not the address exists.
 ## What the storefront can and cannot do
 
 The public endpoints under `/api/v1/public/` take no token. Every lookup starts
-from a published shop slug or an unguessable share token, so there is no path
-from a public request to another business's data.
+from a published shop slug, an unguessable share token, or the unguessable id
+of a file flagged public, so there is no path from a public request to another
+business's data.
 
-An enquiry or a proforma **never** reserves or reduces stock. A customer
-accepting a proforma records intent and nothing more; only the explicit
-conversion step posts a sale and moves stock. The public proforma page says in
-plain words that it is not a receipt.
+A visitor browses the catalogue by category, opens a product page with the
+photo the seller uploaded, fills a basket that lives in their own browser, and
+checks out by asking for a proforma. The request becomes a numbered proforma
+in the `requested` state, priced from the catalogue, linked to a customer
+record matched by phone number; staff who handle proformas are notified. The
+visitor gets the share link straight away, and it doubles as their tracking
+page: the request first, the priced proforma once the seller sends it, and the
+outcome after that.
+
+The seller's review is a real step, not a formality. Lines, prices, discounts,
+delivery and terms can be changed while a proforma is requested, a draft, or
+sent but unanswered, and a product line without a price cannot be sent. Once
+the customer has accepted, the numbers are what was agreed and stay as they
+are.
+
+An enquiry, a request or a proforma **never** reserves or reduces stock. A
+customer accepting a proforma records intent and nothing more; only the
+explicit conversion step posts a sale and moves stock. The public proforma
+page says in plain words that it is not a receipt.
+
+Product photos are the one kind of upload served without a token. An asset is
+served only when it is flagged public, its id is unguessable, and a new upload
+always gets a new id, so the URL can be cached indefinitely.
 
 ## Trial expiry
 

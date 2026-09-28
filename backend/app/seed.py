@@ -26,9 +26,11 @@ from app.models.platform import PlatformAdmin, SubscriptionPlan
 from app.models.sales import PaymentMethod
 from app.services.catalogue import ProductInput, create_product
 from app.services.commerce import (
+    BasketItem,
     QuotationInput,
     QuotationLineInput,
     create_quotation,
+    request_quotation,
     send_quotation,
 )
 from app.services.onboarding import register_business
@@ -106,6 +108,7 @@ def seed() -> None:
         _record_sales(db, ctx, products, customers)
         _publish_store(db, tenant.id, products)
         _add_proforma(db, ctx, products)
+        _add_storefront_request(db, tenant, products)
 
         db.commit()
 
@@ -371,6 +374,34 @@ def _add_proforma(db, ctx, products) -> None:
         ),
     )
     send_quotation(db, ctx, quotation.id)
+    db.flush()
+
+
+def _add_storefront_request(db, tenant, products) -> None:
+    """A visitor filled a basket on the shop page and asked for a proforma."""
+    store = db.execute(
+        select(OnlineStore).where(OnlineStore.tenant_id == tenant.id)
+    ).scalar_one()
+    store.default_terms = "Prices valid for 14 days. Delivery within Addis Ababa on payment."
+    store.checkout_note = (
+        "We confirm prices and delivery by phone within one working day. "
+        "Delivery across Addis Ababa; pickup from Merkato Main is free."
+    )
+    db.flush()
+    published = [product for product in products if product.is_published]
+    request_quotation(
+        db,
+        store,
+        tenant,
+        items=[
+            BasketItem(variant_id=published[0].default_variant.id, quantity=Decimal("10")),
+            BasketItem(variant_id=published[1].default_variant.id, quantity=Decimal("3")),
+        ],
+        contact_name="Meseret Tadesse",
+        contact_phone="0912000444",
+        delivery_location="Bole, near Edna Mall",
+        message="Please deliver on Saturday morning if possible.",
+    )
     db.flush()
 
 

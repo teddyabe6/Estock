@@ -250,6 +250,8 @@ export type Product = {
   is_active?: boolean;
   is_published: boolean;
   track_stock: boolean;
+  image_asset_id?: string | null;
+  image_url?: string | null;
   variants: Variant[];
   quantity_on_hand: string | null;
   stock_status: string | null;
@@ -583,6 +585,8 @@ export type Store = {
   address: string | null;
   is_published: boolean;
   show_prices: boolean;
+  default_terms: string | null;
+  checkout_note: string | null;
   public_url: string | null;
 };
 
@@ -618,6 +622,13 @@ export type Quotation = {
   id: string;
   number: string;
   status: string;
+  /** "storefront" when a customer requested it from their basket. */
+  source: "storefront" | "staff";
+  can_edit: boolean;
+  customer_message: string | null;
+  created_at?: string | null;
+  sent_at?: string | null;
+  accepted_at?: string | null;
   customer_id: string | null;
   customer_name: string;
   customer_phone: string | null;
@@ -835,6 +846,12 @@ export const api = {
     request<Variant>(`/variants/${id}`, { method: "PATCH", body }),
   publishProduct: (id: string, published: boolean) =>
     request<Product>(`/products/${id}/publish?published=${published}`, { method: "POST" }),
+  uploadProductImage: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return upload<Product>(`/products/${id}/image`, form);
+  },
+  deleteProductImage: (id: string) => request<Product>(`/products/${id}/image`, { method: "DELETE" }),
   lookupBarcode: (barcode: string) =>
     request<Variant>(`/products/lookup/barcode/${encodeURIComponent(barcode)}`),
   categories: () => request<Category[]>("/categories"),
@@ -942,8 +959,14 @@ export const api = {
     request<Page<Enquiry>>(`/shop/enquiries${toQuery(params)}`),
   updateEnquiry: (id: string, status: string) =>
     request<Enquiry>(`/shop/enquiries/${id}?status=${status}`, { method: "PATCH" }),
+  shopSummary: () => request<{ proforma_requests: number; new_enquiries: number }>("/shop/summary"),
   quotations: (params: { status?: string; limit?: number } = {}) =>
     request<Page<Quotation>>(`/shop/quotations${toQuery(params)}`),
+  quotation: (id: string) => request<Quotation>(`/shop/quotations/${id}`),
+  updateQuotation: (id: string, body: Record<string, unknown>) =>
+    request<Quotation>(`/shop/quotations/${id}`, { method: "PATCH", body }),
+  cancelQuotation: (id: string, reason?: string) =>
+    request<Quotation>(`/shop/quotations/${id}/cancel`, { method: "POST", body: { reason: reason || undefined } }),
   createQuotation: (body: Record<string, unknown>) =>
     request<Quotation>("/shop/quotations", { method: "POST", body }),
   sendQuotation: (id: string) =>

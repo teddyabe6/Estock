@@ -25,6 +25,10 @@ class NotificationKind(StrEnum):
     LOW_STOCK = "low_stock"
     CREDIT_REMINDER = "credit_reminder"
     NEW_ENQUIRY = "new_enquiry"
+    #: A customer requested a proforma from the storefront basket.
+    PROFORMA_REQUEST = "proforma_request"
+    #: A customer accepted or declined a proforma.
+    PROFORMA_RESPONSE = "proforma_response"
     TRIAL_EXPIRY = "trial_expiry"
     IMPORT_COMPLETE = "import_complete"
     GENERAL = "general"

@@ -19,6 +19,7 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Reminders and dashboards work without messaging customers | `test_reminder_delivery_notifies_authorised_staff_only` |
 | Publish online and receive an enquiry from the same catalogue | `test_the_storefront_uses_the_same_catalogue_and_stock`, `test_an_enquiry_reserves_no_stock` |
 | Share a proforma without posting a sale or reducing stock | `test_a_proforma_is_not_a_sale_until_it_is_converted` |
+| A customer fills a basket, requests a proforma, and the seller confirms it | `test_storefront.py` (22 tests: pricing from the catalogue, customer matching, review, sending, cancelling, photos) |
 | Reports agree with transactions and respect permissions | `test_permissions.py`, `test_profit_figures_are_withheld_without_cost_view` |
 | Trial expiry applies the policy without deleting data | `test_an_expired_trial_restricts_access_without_deleting_data` |
 | Security: rate limiting, account recovery, read-only support access | `test_repeated_failed_sign_ins_are_rate_limited`, `test_password_reset_round_trip`, `test_support_access_can_look_but_not_touch` |
@@ -61,11 +62,9 @@ Ordered by what a first real shop would miss soonest.
    page shows it for every pending invitation with a copy button.
 3. **Receipt and proforma PDFs.** Both pages print cleanly today; a server-side
    renderer would make sharing more reliable on low-end phones.
-4. **Product images.** `FileAsset` and the storage interface exist; an upload
-   endpoint and the storefront's image slot do not yet.
-5. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
+4. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
    products; nothing enforces them yet.
-6. **Barcode scanning with the camera.** The sale screens already accept
+5. **Barcode scanning with the camera.** The sale screens already accept
    scanner input (a scanner types and presses Enter); using the phone camera
    needs a plugin and a permissions flow.
 7. **Stock counts in the web app.** The API has the count workflow (start,

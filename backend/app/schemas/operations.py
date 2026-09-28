@@ -442,6 +442,8 @@ class StoreSettingsIn(BaseModel):
     address: str | None = Field(None, max_length=255)
     is_published: bool | None = None
     show_prices: bool | None = None
+    default_terms: str | None = Field(None, max_length=4000)
+    checkout_note: str | None = Field(None, max_length=2000)
 
 
 class StoreOut(Schema):
@@ -456,6 +458,8 @@ class StoreOut(Schema):
     address: str | None = None
     is_published: bool
     show_prices: bool
+    default_terms: str | None = None
+    checkout_note: str | None = None
     public_url: str | None = None
 
 
@@ -541,6 +545,14 @@ class QuotationOut(Schema):
     id: uuid.UUID
     number: str
     status: str
+    #: "storefront" when a customer requested it from their basket, else "staff".
+    source: str = "staff"
+    #: Whether the seller may still change lines, prices and terms.
+    can_edit: bool = False
+    customer_message: str | None = None
+    created_at: datetime | None = None
+    sent_at: datetime | None = None
+    accepted_at: datetime | None = None
     customer_id: uuid.UUID | None = None
     customer_name: str
     customer_phone: str | None = None
@@ -560,6 +572,44 @@ class QuotationOut(Schema):
     lines: list[QuotationLineOut] = []
     share: dict | None = None
     converted_sale_id: uuid.UUID | None = None
+
+
+class QuotationUpdateIn(BaseModel):
+    """The seller's review of a proforma.  Only the fields sent are changed."""
+
+    lines: list[QuotationLineIn] | None = Field(None, min_length=1)
+    customer_name: str | None = Field(None, min_length=2, max_length=120)
+    customer_phone: str | None = Field(None, max_length=32)
+    customer_email: EmailStr | None = None
+    customer_company: str | None = Field(None, max_length=120)
+    delivery_location: str | None = Field(None, max_length=255)
+    delivery_charge: Decimal | None = Field(None, ge=0)
+    branch_id: uuid.UUID | None = None
+    valid_until: date | None = None
+    validity_days: int | None = Field(None, ge=1, le=365)
+    terms: str | None = Field(None, max_length=4000)
+    note: str | None = Field(None, max_length=2000)
+
+
+class CancelQuotationIn(BaseModel):
+    reason: str | None = Field(None, max_length=500)
+
+
+class BasketItemIn(BaseModel):
+    variant_id: uuid.UUID
+    quantity: Decimal = Field(gt=0, le=1_000_000)
+
+
+class ProformaRequestIn(BaseModel):
+    """A visitor's basket plus how to reach them (PRD 13)."""
+
+    items: list[BasketItemIn] = Field(min_length=1, max_length=50)
+    contact_name: str = Field(min_length=2, max_length=120)
+    contact_phone: str = Field(min_length=5, max_length=32)
+    contact_email: EmailStr | None = None
+    company: str | None = Field(None, max_length=120)
+    delivery_location: str | None = Field(None, max_length=255)
+    message: str | None = Field(None, max_length=2000)
 
 
 class ConvertQuotationIn(BaseModel):

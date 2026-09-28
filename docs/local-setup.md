@@ -83,10 +83,21 @@ time alone does not make a debt late.
 There is no cost column, and the dashboard shows no profit. The server is what
 enforces this, not the interface.
 
-**The storefront, with no sign-in.** Open
-http://localhost:3000/shop/merkato-wholesale in a private window. Submit an
-enquiry, then check Shop → Enquiries as the owner. Note that stock did not move:
-an enquiry never reserves anything.
+**The online shop, with no sign-in.** Open
+http://localhost:3000/shop/merkato-wholesale in a private window, on a
+phone-sized viewport if you like. Filter by category, open a product, add a few
+things to the basket and request a proforma with your name and phone. You land
+on a tracking link; keep it. Note that stock did not move: a request never
+reserves anything.
+
+**Confirming the request.** As the owner, Shop → Proformas lists it under *New
+requests*, priced from the catalogue. Adjust a price or add a delivery charge,
+then *Confirm and send*. Reload the tracking link in the private window: the
+priced proforma is there with an Accept button. Accept it, then convert it to a
+sale from the same drawer — only now does stock move.
+
+**A product photo.** Products → open a published product → Photo. Upload a JPEG
+or PNG and reload the shop page: the card and the product page show it.
 
 **A proforma.** Create one, send it, open the share link in a private window.
 It says plainly that it is not a receipt. Accepting it records intent — it does
@@ -384,7 +395,7 @@ rm -rf .venv web/node_modules backend/var/demo.db backend/.env
 **Run the tests:**
 
 ```bash
-make test                # 257 backend + 35 mobile
+make test                # 279 backend + 35 mobile
 make test-backend-pg     # backend against PostgreSQL
 make lint
 ```

@@ -70,6 +70,10 @@ than being swept in by analogy.
 | A business must always keep one active owner | Demoting or disabling the last owner would lock everyone out. |
 | Reminders are internal only | The PRD is explicit: a generated reminder is not proof anyone was contacted. Every reminder body says so. |
 | Money stored at two decimals, quantities at three | ETB has two decimals; three on quantity supports goods sold by weight or volume. Inputs are rounded on write, so the value held in memory is the value stored. |
+| A storefront order is a proforma request the seller confirms | The basket is priced from the catalogue so the seller reviews rather than retypes, but no price reaches the customer as a quotation until a person sends it. PRD 14 asks for review by an authorised person, and a shop that hides prices online would otherwise be quoting blind. |
+| A visitor's request is matched to a customer by phone number | It is the one identifier a walk-in customer reliably has, and the contacts screens already store numbers in one canonical form. A second request from the same number lands on the same record instead of creating a duplicate. |
+| The customer's link is issued at request time | One link shows the request, then the priced proforma, then the outcome, so the customer has one thing to keep and the seller has nothing to send twice. |
+| Product photos are public assets by unguessable id | The storefront serves them without a token; only assets flagged public are ever served that way, and a new upload gets a new id so caches never go stale. |
 | Sale numbers restart per business and per year | `S-2026-000001`. A business should not be able to infer platform volume from its own numbering. |
 
 ## Deliberately not built
@@ -87,6 +91,10 @@ Listed here so the boundary is explicit rather than an oversight. See
   The interface strings themselves have not been translated.
 - **PDF rendering of proformas and receipts.** Both pages are print-to-PDF
   ready; a server-side renderer was not added.
+- **Reserving stock for an accepted proforma.** PRD 13 forbids a request
+  reserving stock until a defined fulfilment step exists. Acceptance is
+  recorded and the seller is told; stock moves when they convert the proforma
+  as the goods go out.
 - **A delivery charge on a converted proforma.** A sale has no delivery line,
   so conversion carries the goods only and returns a warning naming the charge
   to record separately. Modelling delivery on sales is a decision for the

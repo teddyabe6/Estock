@@ -49,6 +49,7 @@ services:
       ENVIRONMENT: development
       DEBUG: "true"
       PUBLIC_BASE_URL: http://localhost:3000
+      API_BASE_URL: http://localhost:8000/api/v1
       STORAGE_LOCAL_ROOT: /app/var/uploads
       SEED_ON_START: ${SEED_ON_START:-false}
     volumes:

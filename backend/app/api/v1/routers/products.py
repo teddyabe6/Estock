@@ -5,11 +5,11 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, File, Query, UploadFile, status
 
 from app.api.v1.serializers import product_out, stock_totals, variant_out
 from app.core.audit import AuditAction, record_audit
-from app.core.deps import Ctx, DbSession
+from app.core.deps import Ctx, DbSession, WritableCtx
 from app.core.errors import NotFoundError
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
@@ -33,7 +33,9 @@ from app.services.catalogue import (
     VariantInput,
     create_product,
     find_by_barcode,
+    remove_product_image,
     search_products,
+    set_product_image,
     set_published,
     stock_by_branch,
     update_product,
@@ -203,6 +205,32 @@ def publish_product(
 ) -> ProductOut:
     """The online availability toggle (PRD 13)."""
     product = set_published(db, ctx, product_id, published)
+    return product_out(ctx, product, stock_totals(db, ctx, [product.id]))
+
+
+@router.post("/products/{product_id}/image", response_model=ProductOut)
+async def upload_product_image(
+    product_id: uuid.UUID,
+    ctx: WritableCtx,
+    db: DbSession,
+    file: UploadFile = File(...),
+) -> ProductOut:
+    """Attach a photo for the storefront: JPEG, PNG or WebP (PRD 13)."""
+    content = await file.read()
+    product = set_product_image(
+        db,
+        ctx,
+        product_id,
+        filename=file.filename or "image",
+        content_type=file.content_type or "application/octet-stream",
+        content=content,
+    )
+    return product_out(ctx, product, stock_totals(db, ctx, [product.id]))
+
+
+@router.delete("/products/{product_id}/image", response_model=ProductOut)
+def delete_product_image(product_id: uuid.UUID, ctx: WritableCtx, db: DbSession) -> ProductOut:
+    product = remove_product_image(db, ctx, product_id)
     return product_out(ctx, product, stock_totals(db, ctx, [product.id]))
 
 

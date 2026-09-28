@@ -19,7 +19,7 @@ business can see another's data.
 | Point of sale: search, barcode, discounts, split payment, credit, receipts | Done |
 | Customers and suppliers with transaction history | Done |
 | Credit receivables and payables, partial payments, due dates, reminders, follow-up | Done |
-| Online catalogue, enquiries, proformas with a secure share link | Done, managed from the web app |
+| Online shop: catalogue by category, product pages with photos, basket, proforma requests, secure share links | Done; a request arrives priced from the catalogue for the seller to confirm, and the customer's link tracks it through to the sale |
 | Dashboards and reports for sales, profit, stock, branches and credit | Done, with CSV export |
 | Trial and subscription state, platform-admin surface, audit trail | Done; support access is read-only and audited |
 | Sign-in rate limiting, password reset | Done |
@@ -114,7 +114,7 @@ CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ## Tests
 
 ```bash
-make test              # 257 backend tests on SQLite + 35 mobile tests
+make test              # 279 backend tests on SQLite + 35 mobile tests
 make test-backend-pg   # the same backend suite against PostgreSQL, plus a real concurrency test
 ```
 
@@ -147,7 +147,7 @@ backend/            FastAPI service — the only place business rules live
   app/api/v1/       HTTP routes and response shaping
   app/workers/      Scheduled reminders, alerts and trial expiry
   alembic/          Migrations
-  tests/            257 tests
+  tests/            279 tests
 web/                Next.js app: home, sales and receipts, products and import,
                     stock (receive, adjust, transfer, ledger), online shop
                     (storefront, enquiries, proformas), reports, credit,

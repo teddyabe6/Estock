@@ -142,6 +142,8 @@ class ProductOut(BaseModel):
     is_active: bool = True
     is_published: bool = False
     track_stock: bool = True
+    image_asset_id: uuid.UUID | None = None
+    image_url: str | None = None
     variants: list[VariantOut] = []
     quantity_on_hand: Decimal | None = None
     stock_status: str | None = None
