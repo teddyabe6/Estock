@@ -18,13 +18,16 @@ from app.models.commerce import (
     EnquiryStatus,
     OnlineStore,
     Quotation,
+    QuotationStatus,
 )
 from app.schemas.common import Page
 from app.schemas.operations import (
+    CancelQuotationIn,
     ConvertQuotationIn,
     EnquiryOut,
     QuotationIn,
     QuotationOut,
+    QuotationUpdateIn,
     SaleResponse,
     StoreOut,
     StoreSettingsIn,
@@ -32,9 +35,11 @@ from app.schemas.operations import (
 from app.services.commerce import (
     QuotationInput,
     QuotationLineInput,
+    cancel_quotation,
     convert_to_sale,
     create_quotation,
     send_quotation,
+    update_quotation,
 )
 from app.services.sales import PaymentInput
 
@@ -78,6 +83,28 @@ def update_store(payload: StoreSettingsIn, ctx: WritableCtx, db: DbSession) -> S
         setattr(store, key, value)
     db.flush()
     return _store_out(store)
+
+
+@router.get("/summary")
+def shop_summary(ctx: Ctx, db: DbSession) -> dict:
+    """What is waiting for the seller: basket requests and unanswered enquiries."""
+    ctx.require(Permission.SHOP_VIEW)
+
+    def count(stmt) -> int:
+        return db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+
+    return {
+        "proforma_requests": count(
+            tenant_query(Quotation, ctx.tenant_id).where(
+                Quotation.status == QuotationStatus.REQUESTED
+            )
+        ),
+        "new_enquiries": count(
+            tenant_query(CustomerEnquiry, ctx.tenant_id).where(
+                CustomerEnquiry.status == EnquiryStatus.NEW
+            )
+        ),
+    }
 
 
 @router.get("/enquiries", response_model=Page[EnquiryOut])
@@ -208,6 +235,48 @@ def get_quotation(quotation_id: uuid.UUID, ctx: Ctx, db: DbSession) -> Quotation
         db, Quotation, quotation_id, ctx.tenant_id, label="Proforma"
     )
     return quotation_out(quotation)
+
+
+@router.patch("/quotations/{quotation_id}", response_model=QuotationOut)
+def edit_quotation(
+    quotation_id: uuid.UUID, payload: QuotationUpdateIn, ctx: WritableCtx, db: DbSession
+) -> QuotationOut:
+    """Review a request or draft: change lines, prices, delivery and terms."""
+    changes = payload.model_dump(exclude_unset=True)
+    changes.pop("lines", None)
+    quotation = update_quotation(
+        db,
+        ctx,
+        quotation_id,
+        lines=(
+            [
+                QuotationLineInput(
+                    variant_id=line.variant_id,
+                    description=line.description,
+                    quantity=line.quantity,
+                    unit_price=line.unit_price,
+                    discount_amount=line.discount_amount,
+                    tax_rate=line.tax_rate,
+                )
+                for line in payload.lines
+            ]
+            if payload.lines is not None
+            else None
+        ),
+        delivery_charge=changes.pop("delivery_charge", None),
+        valid_until=changes.pop("valid_until", None),
+        validity_days=changes.pop("validity_days", None),
+        fields=changes,
+    )
+    return quotation_out(quotation)
+
+
+@router.post("/quotations/{quotation_id}/cancel", response_model=QuotationOut)
+def cancel(
+    quotation_id: uuid.UUID, payload: CancelQuotationIn, ctx: WritableCtx, db: DbSession
+) -> QuotationOut:
+    """Withdraw a proforma; its share link stops working."""
+    return quotation_out(cancel_quotation(db, ctx, quotation_id, reason=payload.reason))
 
 
 @router.post("/quotations/{quotation_id}/send", response_model=QuotationOut)

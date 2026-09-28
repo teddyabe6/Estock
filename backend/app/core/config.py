@@ -57,6 +57,9 @@ class Settings(BaseSettings):
 
     # Public storefront
     public_base_url: str = "http://localhost:3000"
+    #: Where browsers reach this API; used to build links to public files such
+    #: as product images.
+    api_base_url: str = "http://localhost:8000/api/v1"
     #: Comma-separated browser origins allowed to call the API. The defaults
     #: cover local development; deployments set this explicitly.
     cors_origins: str = (

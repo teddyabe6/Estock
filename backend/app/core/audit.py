@@ -40,6 +40,8 @@ class AuditAction:
     CREDIT_LIMIT_OVERRIDDEN = "credit.limit_overridden"
     DISCOUNT_APPROVED = "discount.approved"
     QUOTATION_SENT = "quotation.sent"
+    QUOTATION_UPDATED = "quotation.updated"
+    QUOTATION_CANCELLED = "quotation.cancelled"
     QUOTATION_CONVERTED = "quotation.converted"
     SUBSCRIPTION_CHANGED = "subscription.changed"
     PLATFORM_SUPPORT_ACCESS = "platform.support_access"

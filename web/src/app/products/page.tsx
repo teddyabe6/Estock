@@ -335,6 +335,35 @@ function EditProduct({
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [image, setImage] = useState<string | null>(product.image_url ?? null);
+  const [imageBusy, setImageBusy] = useState(false);
+
+  async function changeImage(file: File | null) {
+    if (!file) return;
+    setImageBusy(true);
+    setError(null);
+    try {
+      const updated = await api.uploadProductImage(product.id, file);
+      setImage(updated.image_url ?? null);
+    } catch (cause) {
+      setError(describeError(cause, "Could not upload the photo"));
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function removeImage() {
+    setImageBusy(true);
+    setError(null);
+    try {
+      await api.deleteProductImage(product.id);
+      setImage(null);
+    } catch (cause) {
+      setError(describeError(cause, "Could not remove the photo"));
+    } finally {
+      setImageBusy(false);
+    }
+  }
 
   function update(key: keyof typeof form) {
     return (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -414,6 +443,38 @@ function EditProduct({
         <Field label="Description" hint="shown in the online shop">
           <textarea rows={2} value={form.description} onChange={update("description")} />
         </Field>
+
+        <div className="card">
+          <div className="card-title">Photo</div>
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <div className="thumb small" style={{ width: 88, height: 88 }}>
+              {image ? (
+                // eslint-disable-next-line @next/next/no-img-element -- served by the API
+                <img src={image} alt={product.name} />
+              ) : (
+                <span className="initial">{product.name.charAt(0).toUpperCase()}</span>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <p className="muted" style={{ margin: "0 0 8px", fontSize: "0.85rem" }}>
+                Shown on the product card and page in your online shop. JPEG, PNG or WebP.
+              </p>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={imageBusy || !canWrite}
+                onChange={(e) => void changeImage(e.target.files?.[0] ?? null)}
+              />
+              {image && (
+                <p style={{ margin: "8px 0 0" }}>
+                  <button type="button" className="link" disabled={imageBusy} onClick={() => void removeImage()}>
+                    Remove photo
+                  </button>
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
 
         <div className="card">
           <div className="card-title">Pricing</div>

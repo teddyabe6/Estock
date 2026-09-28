@@ -24,6 +24,7 @@ from app.schemas.operations import (
     SaleOut,
 )
 from app.services.inventory import classify_stock_level
+from app.services.storage import public_file_url
 
 
 def variant_out(
@@ -99,6 +100,8 @@ def product_out(
         is_active=product.is_active,
         is_published=product.is_published,
         track_stock=product.track_stock,
+        image_asset_id=product.image_asset_id,
+        image_url=public_file_url(product.image_asset_id) if product.image_asset_id else None,
         variants=variants,
         quantity_on_hand=total if product.track_stock else None,
         stock_status=status,
@@ -185,10 +188,12 @@ def credit_out(
 
 
 def quotation_out(quotation: Quotation, *, include_share: bool = True) -> QuotationOut:
-    from app.services.commerce import quotation_status_for, share_links
+    from app.services.commerce import EDITABLE_STATUSES, quotation_status_for, share_links
 
     payload = QuotationOut.model_validate(quotation)
     payload.status = str(quotation_status_for(quotation))
+    payload.source = "staff" if quotation.created_by_id else "storefront"
+    payload.can_edit = quotation.status in EDITABLE_STATUSES
     if include_share:
         payload.share = share_links(quotation)
     return payload

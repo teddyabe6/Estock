@@ -15,6 +15,7 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import (
@@ -453,3 +454,85 @@ def stock_by_branch(
         }
         for row in rows
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Product photos (PRD 13)
+# --------------------------------------------------------------------------- #
+
+
+def set_product_image(
+    db: Session,
+    ctx: AuthContext,
+    product_id: uuid.UUID,
+    *,
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> Product:
+    """Attach a photo for the storefront.
+
+    The bytes live behind the storage interface; the asset is public because
+    the storefront serves it to visitors without a token.  The asset id is
+    unguessable, and only assets flagged public are ever served that way.
+    """
+    from app.models.system import FileAsset
+    from app.services.storage import (
+        ALLOWED_IMAGE_TYPES,
+        get_storage,
+        safe_filename,
+        validate_upload,
+    )
+
+    ctx.require(Permission.PRODUCT_MANAGE)
+    product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
+    checksum = validate_upload(
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        allowed_types=ALLOWED_IMAGE_TYPES,
+    )
+    key = get_storage().save(ctx.tenant_id, filename, content)
+    asset = FileAsset(
+        tenant_id=ctx.tenant_id,
+        filename=safe_filename(filename),
+        content_type=content_type,
+        size_bytes=len(content),
+        storage_backend=settings.storage_backend,
+        storage_key=key,
+        checksum_sha256=checksum,
+        uploaded_by_id=ctx.user_id,
+        is_public=True,
+    )
+    db.add(asset)
+    db.flush()
+
+    previous = product.image_asset_id
+    product.image_asset_id = asset.id
+    db.flush()
+    if previous is not None:
+        _discard_asset(db, ctx.tenant_id, previous)
+    return product
+
+
+def remove_product_image(db: Session, ctx: AuthContext, product_id: uuid.UUID) -> Product:
+    ctx.require(Permission.PRODUCT_MANAGE)
+    product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
+    previous = product.image_asset_id
+    product.image_asset_id = None
+    db.flush()
+    if previous is not None:
+        _discard_asset(db, ctx.tenant_id, previous)
+    return product
+
+
+def _discard_asset(db: Session, tenant_id: uuid.UUID, asset_id: uuid.UUID) -> None:
+    from app.models.system import FileAsset
+    from app.services.storage import get_storage
+
+    asset = db.get(FileAsset, asset_id)
+    if asset is None or asset.tenant_id != tenant_id:
+        return
+    get_storage().delete(asset.storage_key)
+    db.delete(asset)
+    db.flush()

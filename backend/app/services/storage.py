@@ -118,3 +118,8 @@ def validate_upload(
             details={"allowed": sorted(allowed_types)},
         )
     return hashlib.sha256(content).hexdigest()
+
+
+def public_file_url(asset_id: uuid.UUID | str) -> str:
+    """The link a browser uses for a public asset such as a product photo."""
+    return f"{settings.api_base_url.rstrip('/')}/public/files/{asset_id}"

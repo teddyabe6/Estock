@@ -35,6 +35,9 @@ class EnquiryStatus(StrEnum):
 
 
 class QuotationStatus(StrEnum):
+    #: Requested by a customer from the storefront basket; awaiting the seller's
+    #: review before it is sent (PRD 13, 14).
+    REQUESTED = "requested"
     DRAFT = "draft"
     SENT = "sent"
     ACCEPTED = "accepted"
@@ -62,6 +65,10 @@ class OnlineStore(UUIDPrimaryKey, Timestamped, TenantScoped, Base):
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: Whether visitors see prices without contacting the seller.
     show_prices: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Terms copied onto every proforma requested from the storefront.
+    default_terms: Mapped[str | None] = mapped_column(Text)
+    #: Shown to the customer at checkout: delivery areas, how you confirm, etc.
+    checkout_note: Mapped[str | None] = mapped_column(Text)
 
 
 class CustomerEnquiry(UUIDPrimaryKey, Timestamped, TenantScoped, Base):
@@ -140,6 +147,8 @@ class Quotation(UUIDPrimaryKey, Timestamped, TenantScoped, Auditable, Base):
 
     terms: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    #: What the customer wrote when requesting it from the storefront.
+    customer_message: Mapped[str | None] = mapped_column(Text)
 
     #: Unguessable token backing the public share link (PRD 14).
     share_token: Mapped[str | None] = mapped_column(String(64), index=True)

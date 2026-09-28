@@ -179,6 +179,7 @@ mkdir -p "$LOG_DIR"
 export DATABASE_URL="sqlite:///$DB_FILE"
 export SECRET_KEY="${SECRET_KEY:-demo-only-not-for-deployment}"
 export PUBLIC_BASE_URL="http://localhost:${WEB_PORT}"
+export API_BASE_URL="$API_URL"
 # 8090 is where `make mobile-web` serves the Flutter app for browser testing.
 CORS_LIST="http://localhost:${WEB_PORT},http://127.0.0.1:${WEB_PORT},http://localhost:8090,http://127.0.0.1:8090"
 # Also allow this machine's own addresses, so the app works when opened from a

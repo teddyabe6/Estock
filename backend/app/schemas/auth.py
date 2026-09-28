@@ -2,30 +2,12 @@
 
 from __future__ import annotations
 
-import re
 import uuid
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.phone import ET_PHONE_RE, normalise_et_phone  # noqa: F401  (re-exported)
 from app.schemas.common import Schema
-
-#: Ethiopian numbers, local (09..., 07...) or international (+251...) (PRD 16).
-ET_PHONE_RE = re.compile(r"^(?:\+251|251|0)?(9|7)\d{8}$")
-
-
-def normalise_et_phone(value: str | None) -> str | None:
-    """Store Ethiopian numbers in one canonical ``+251...`` form."""
-    if not value:
-        return None
-    cleaned = re.sub(r"[\s\-()]", "", value.strip())
-    if not ET_PHONE_RE.match(cleaned):
-        # Keep non-Ethiopian numbers as entered rather than rejecting them.
-        return cleaned or None
-    digits = cleaned.lstrip("+")
-    if digits.startswith("251"):
-        digits = digits[3:]
-    digits = digits.lstrip("0")
-    return f"+251{digits}"
 
 
 class RegisterRequest(BaseModel):
