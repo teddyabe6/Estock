@@ -17,11 +17,13 @@ business can see another's data.
 | Spreadsheet import: upload → map → preview → confirm | Done, in the API and the web app |
 | Stock ledger, receiving, transfers, adjustments, counts, low-stock alerts | Done; a transfer received short posts the shortfall as a loss |
 | Point of sale: search, barcode, discounts, split payment, credit, receipts | Done |
+| Returns and refunds | Done in the API — part returns, damaged goods written off, value against an outstanding balance before any cash; no web screen yet |
 | Customers and suppliers with transaction history | Done |
 | Credit receivables and payables, partial payments, due dates, reminders, follow-up | Done |
 | Online shop: catalogue by category, product pages with photos, basket, proforma requests, secure share links | Done; a request arrives priced from the catalogue for the seller to confirm, and the customer's link tracks it through to the sale |
 | Dashboards and reports for sales, profit, stock, branches and credit | Done, with CSV export |
 | Trial and subscription state, platform-admin surface, audit trail | Done; support access is read-only and audited |
+| Plan limits on branches, staff and products | Done; a downgrade never takes data away, only the next addition is refused |
 | Sign-in rate limiting, password reset | Done |
 | Amharic-ready interface, ETB, Ethiopian phone formats, business-local dates | Text renders correctly everywhere; days follow the business's timezone; UI strings not yet translated |
 | Flutter mobile app — sales (cash or credit), stock, credit, shop | Done |
@@ -114,7 +116,7 @@ CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ## Tests
 
 ```bash
-make test              # 290 backend tests on SQLite + 35 mobile tests
+make test              # 338 backend tests on SQLite + 35 mobile tests
 make test-backend-pg   # the same backend suite against PostgreSQL, plus a real concurrency test
 ```
 
@@ -147,7 +149,7 @@ backend/            FastAPI service — the only place business rules live
   app/api/v1/       HTTP routes and response shaping
   app/workers/      Scheduled reminders, alerts and trial expiry
   alembic/          Migrations
-  tests/            290 tests
+  tests/            338 tests
 web/                Next.js app: home, sales and receipts, products and import,
                     stock (receive, adjust, transfer, ledger), online shop
                     (storefront, enquiries, proformas), reports, credit,

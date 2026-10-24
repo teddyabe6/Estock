@@ -46,6 +46,7 @@ from app.models.platform import (
     Tenant,
     TenantStatus,
 )
+from app.services.subscription import check_limit
 
 DEFAULT_BRANCH_NAME = "Main Branch"
 DEFAULT_TIMEZONE = "Africa/Addis_Ababa"
@@ -313,6 +314,9 @@ def invite_user(
 ) -> TenantMembership:
     """Invite a staff member to this business (PRD 6)."""
     ctx.require(Permission.USER_MANAGE)
+    # Checked before the invitation is written, because an outstanding
+    # invitation holds a seat on the plan.
+    check_limit(db, ctx.tenant_id, "users")
     email = email.strip().lower()
     role = db.execute(
         tenant_query(Role, ctx.tenant_id).where(Role.name == role_name)

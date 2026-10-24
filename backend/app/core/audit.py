@@ -32,6 +32,7 @@ class AuditAction:
     NEGATIVE_STOCK_ALLOWED = "stock.negative_allowed"
     SALE_COMPLETED = "sale.completed"
     SALE_VOIDED = "sale.voided"
+    SALE_RETURNED = "sale.returned"
     PURCHASE_RECEIVED = "purchase.received"
     PAYMENT_RECORDED = "payment.recorded"
     PAYMENT_REVERSED = "payment.reversed"

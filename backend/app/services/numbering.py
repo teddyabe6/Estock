@@ -24,6 +24,7 @@ from app.models.sequences import DocumentSequence
 
 PREFIXES = {
     "sale": "S",
+    "sale_return": "SR",
     "purchase": "P",
     "quotation": "PF",
     "transfer": "TR",

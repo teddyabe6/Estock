@@ -50,3 +50,15 @@ class InsufficientStock(DomainError):
 class SubscriptionInactive(DomainError):
     status_code = 402
     code = "subscription_inactive"
+
+
+class PlanLimitReached(DomainError):
+    """The plan's ceiling on branches, users or products, not a permission problem.
+
+    402 like :class:`SubscriptionInactive`, because the answer is a commercial
+    one — upgrade or free a slot — and a separate code so a client can tell the
+    two apart.
+    """
+
+    status_code = 402
+    code = "plan_limit_reached"

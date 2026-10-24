@@ -6,6 +6,9 @@ those up inside the loop made the query count grow several times faster than
 the number of lines — invisible in a test that only checks the result, and
 paid for on every multi-line sale at the till.
 
+The same question applies to reading: a page of sales must not query once per
+sale for its lines, payments or returns.
+
 These tests pin the shape rather than an absolute number: adding lines may
 add the writes a line genuinely needs, but it must not add another lookup of
 the catalogue or the location.  An absolute budget would break on any
@@ -16,47 +19,18 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-from sqlalchemy import event
-
 from app.models.sales import PaymentMethod
 from app.services.inventory import create_transfer, dispatch_transfer, post_count
 from app.services.purchasing import PurchaseInput, PurchaseLineInput, receive_purchase
-from app.services.sales import PaymentInput, SaleInput, SaleLineInput, create_sale
-
-
-class Counted:
-    """SQL issued while the block runs, grouped by the table read or written."""
-
-    def __init__(self) -> None:
-        self.statements: list[str] = []
-
-    def matching(self, fragment: str) -> int:
-        return sum(1 for s in self.statements if fragment in s)
-
-    @property
-    def total(self) -> int:
-        return len(self.statements)
-
-
-@pytest.fixture
-def counted(engine):
-    counter = Counted()
-    recording = {"on": False}
-
-    @event.listens_for(engine, "before_cursor_execute")
-    def _record(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
-        if recording["on"]:
-            counter.statements.append(" ".join(statement.split()))
-
-    def start():
-        counter.statements.clear()
-        recording["on"] = True
-        return counter
-
-    yield start
-    recording["on"] = False
-    event.remove(engine, "before_cursor_execute", _record)
+from app.services.sales import (
+    PaymentInput,
+    ReturnLineInput,
+    SaleInput,
+    SaleLineInput,
+    SaleReturnInput,
+    create_sale,
+    create_sale_return,
+)
 
 
 def _products(business, count: int):
@@ -264,3 +238,54 @@ def test_posting_a_count_looks_up_its_catalogue_once(business, counted):
     business.db.flush()
     assert counter.matching("FROM product_variants") <= 1
     assert counter.matching("FROM stock_locations") <= 1
+
+
+# --------------------------------------------------------------------------- #
+# Reading
+# --------------------------------------------------------------------------- #
+
+
+def _sale_with_a_return(business, product):
+    sale = create_sale(
+        business.db,
+        business.ctx,
+        SaleInput(
+            lines=[SaleLineInput(variant_id=product.default_variant.id, quantity=Decimal("2"))],
+            payments=[PaymentInput(method=PaymentMethod.CASH, amount=Decimal("200.00"))],
+        ),
+    ).sale
+    create_sale_return(
+        business.db,
+        business.ctx,
+        sale.id,
+        SaleReturnInput(
+            lines=[ReturnLineInput(sale_line_id=sale.lines[0].id, quantity=Decimal("1"))],
+            reason="Customer changed their mind",
+        ),
+    )
+    return sale
+
+
+def test_listing_sales_with_returns_is_flat_in_the_number_of_sales(
+    client, business, counted
+):
+    product = business.add_product("Teff", selling_price="100", opening_stock="200")
+    for _ in range(8):
+        _sale_with_a_return(business, product)
+    business.db.flush()
+    business.db.expire_all()
+
+    counter = counted()
+    response = client.get("/api/v1/sales?limit=50", headers=business.headers())
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 8
+
+    returns_reads = counter.matching("FROM sale_returns")
+    assert returns_reads <= 1, (
+        f"listing 8 sales read sale_returns {returns_reads} times; selectin "
+        "should fetch them for the whole page in one query"
+    )
+    lines_reads = counter.matching("FROM sale_return_lines")
+    assert lines_reads <= 1, (
+        f"listing 8 sales read sale_return_lines {lines_reads} times"
+    )

@@ -10,14 +10,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
 from app.core.clock import local_today
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, PlanLimitReached
+from app.models.access import MembershipStatus, TenantMembership
+from app.models.catalogue import Product
+from app.models.organisation import Branch
 from app.models.platform import (
     Subscription,
+    SubscriptionPlan,
     SubscriptionStatus,
     Tenant,
     TenantStatus,
@@ -205,3 +209,141 @@ def set_tenant_status(
     )
     db.flush()
     return tenant
+
+
+# --------------------------------------------------------------------------- #
+# Plan limits (PRD 17)
+# --------------------------------------------------------------------------- #
+#
+# A plan may cap branches, staff and products.  The rules, and why:
+#
+# * ``None`` means unlimited, and a business on no plan at all — a trial that
+#   has not chosen one — has no caps.  A limit applies because a plan says so,
+#   never by default.
+# * A business already over a cap, because it was moved to a smaller plan,
+#   keeps everything it has.  Only the next addition is refused.  This is the
+#   same promise trial expiry makes: nothing is deleted because of billing.
+# * An invitation holds a seat.  Counting only active members would let a
+#   three-seat business invite thirty people and have them all walk in.
+# * Deactivating a branch or product frees its slot, which is how a business
+#   makes room without deleting history.
+
+
+@dataclass(slots=True)
+class PlanLimit:
+    """One cap, what is used against it, and what the plan allows."""
+
+    name: str
+    used: int
+    allowed: int | None
+
+    @property
+    def unlimited(self) -> bool:
+        return self.allowed is None
+
+    @property
+    def remaining(self) -> int | None:
+        return None if self.allowed is None else max(0, self.allowed - self.used)
+
+    def would_exceed(self, adding: int) -> bool:
+        return self.allowed is not None and self.used + adding > self.allowed
+
+    def as_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "used": self.used,
+            "allowed": self.allowed,
+            "remaining": self.remaining,
+        }
+
+
+def _plan_for(db: Session, tenant_id: uuid.UUID) -> SubscriptionPlan | None:
+    return db.execute(
+        select(SubscriptionPlan)
+        .join(Subscription, Subscription.plan_id == SubscriptionPlan.id)
+        .where(Subscription.tenant_id == tenant_id)
+    ).scalar_one_or_none()
+
+
+def _count(db: Session, model: type, tenant_id: uuid.UUID, *criteria) -> int:
+    return int(
+        db.execute(
+            select(func.count())
+            .select_from(model)
+            .where(model.tenant_id == tenant_id, *criteria)
+        ).scalar_one()
+        or 0
+    )
+
+
+def branches_used(db: Session, tenant_id: uuid.UUID) -> int:
+    return _count(db, Branch, tenant_id, Branch.is_active.is_(True))
+
+
+def users_used(db: Session, tenant_id: uuid.UUID) -> int:
+    """Active members plus outstanding invitations — an invitation holds a seat."""
+    return _count(
+        db,
+        TenantMembership,
+        tenant_id,
+        TenantMembership.status.in_([MembershipStatus.ACTIVE, MembershipStatus.INVITED]),
+    )
+
+
+def products_used(db: Session, tenant_id: uuid.UUID) -> int:
+    return _count(db, Product, tenant_id, Product.is_active.is_(True))
+
+
+_USAGE = {
+    "branches": (branches_used, "max_branches", "branch", "branches"),
+    "users": (users_used, "max_users", "staff account", "staff accounts"),
+    "products": (products_used, "max_products", "product", "products"),
+}
+
+
+def limits(db: Session, tenant_id: uuid.UUID) -> list[PlanLimit]:
+    """Every cap with its current usage, for the subscription screen."""
+    plan = _plan_for(db, tenant_id)
+    return [
+        PlanLimit(
+            name=name,
+            used=counter(db, tenant_id),
+            allowed=getattr(plan, attribute) if plan else None,
+        )
+        for name, (counter, attribute, _singular, _plural) in _USAGE.items()
+    ]
+
+
+def check_limit(db: Session, tenant_id: uuid.UUID, what: str, *, adding: int = 1) -> None:
+    """Refuse an addition the plan does not allow (PRD 17).
+
+    ``what`` is one of ``branches``, ``users`` or ``products``.  ``adding`` is
+    how many are about to be created, so a spreadsheet import can be refused
+    whole rather than part-way through.
+    """
+    counter, attribute, singular, plural = _USAGE[what]
+    plan = _plan_for(db, tenant_id)
+    allowed = getattr(plan, attribute) if plan else None
+    if allowed is None:
+        return
+
+    limit = PlanLimit(name=what, used=counter(db, tenant_id), allowed=allowed)
+    if not limit.would_exceed(adding):
+        return
+
+    def noun(count: int) -> str:
+        return singular if count == 1 else plural
+
+    raise PlanLimitReached(
+        f"Your plan allows {allowed} {noun(allowed)} and {limit.used} "
+        f"{'is' if limit.used == 1 else 'are'} in use, so {adding} more "
+        f"{noun(adding)} would not fit. Upgrade the plan, or deactivate "
+        f"{'one' if adding == 1 else 'some'} you no longer need.",
+        details={
+            "limit": what,
+            "used": limit.used,
+            "allowed": allowed,
+            "adding": adding,
+            "plan": plan.code if plan else None,
+        },
+    )

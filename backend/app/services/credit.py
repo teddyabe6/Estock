@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
@@ -90,10 +90,35 @@ def is_overdue(transaction: CreditTransaction, *, today: date | None = None) -> 
     return transaction.due_date < (today or date.today()) and transaction.balance > ZERO
 
 
+def settling_direction(kind: CreditKind) -> PaymentDirection:
+    """Which way money moves to settle this kind of balance.
+
+    A customer's receivable is settled by money coming in; a supplier's
+    payable by money going out.  Anything moving the other way — a refund on a
+    returned sale — undoes settlement rather than adding to it.
+    """
+    return PaymentDirection.IN if kind == CreditKind.RECEIVABLE else PaymentDirection.OUT
+
+
 def recalculate(db: Session, transaction: CreditTransaction, *, today: date | None = None) -> None:
-    """Refresh the cached ``amount_paid`` from the payment ledger, then status."""
+    """Refresh the cached ``amount_paid`` from the payment ledger, then status.
+
+    Summed with a sign, so a movement against the grain of the balance reduces
+    what is settled instead of adding to it.
+    """
+    settles = settling_direction(transaction.kind)
     total_paid = db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Payment.direction == settles, Payment.amount),
+                        else_=-Payment.amount,
+                    )
+                ),
+                0,
+            )
+        ).where(
             Payment.credit_transaction_id == transaction.id,
             Payment.is_reversed.is_(False),
         )

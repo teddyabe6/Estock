@@ -200,6 +200,45 @@ class PaymentOut(Schema):
     reversal_reason: str | None = None
 
 
+class SaleReturnLineOut(Schema):
+    id: uuid.UUID
+    sale_line_id: uuid.UUID
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    discount_amount: Decimal
+    tax_rate: Decimal
+    tax_amount: Decimal
+    line_total: Decimal
+    restock: bool
+    unit_cost: Decimal | None = None
+
+
+class SaleReturnOut(Schema):
+    id: uuid.UUID
+    number: str
+    sale_id: uuid.UUID
+    branch_id: uuid.UUID
+    customer_id: uuid.UUID | None = None
+    returned_at: datetime
+    reason: str
+    subtotal: Decimal
+    discount_total: Decimal
+    tax_total: Decimal
+    total_amount: Decimal
+    currency: str
+    refund_method: str
+    #: Money handed back.
+    refunded_amount: Decimal
+    #: Value taken off what the customer still owed.
+    credited_amount: Decimal
+    note: str | None = None
+    lines: list[SaleReturnLineOut] = []
+    cost_total: Decimal | None = None
+
+
 class SaleOut(Schema):
     id: uuid.UUID
     number: str
@@ -220,6 +259,10 @@ class SaleOut(Schema):
     payments: list[PaymentOut] = []
     cost_total: Decimal | None = None
     gross_profit: Decimal | None = None
+    #: Value taken back, and what the customer is liable for after it.
+    returned_total: Decimal = Decimal("0.00")
+    effective_total: Decimal | None = None
+    returns: list[SaleReturnOut] = []
 
 
 class SaleResponse(BaseModel):
@@ -230,6 +273,24 @@ class SaleResponse(BaseModel):
 
 class VoidSaleIn(BaseModel):
     reason: str = Field(min_length=3, max_length=255)
+
+
+class SaleReturnLineIn(BaseModel):
+    sale_line_id: uuid.UUID
+    quantity: Decimal = Field(gt=0)
+    #: False when the goods cannot be sold again; they still come back on the
+    #: ledger and are then written off, so the loss has a reason.
+    restock: bool = True
+
+
+class SaleReturnIn(BaseModel):
+    lines: list[SaleReturnLineIn] = Field(min_length=1)
+    reason: str = Field(min_length=3, max_length=255)
+    #: How money goes back when any is owed.  Defaults to the method the
+    #: customer paid with.
+    refund_method: str | None = None
+    note: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=160)
 
 
 # --------------------------------------------------------------------------- #

@@ -206,6 +206,54 @@ exactly.
 Receiving updates a weighted average cost: stock already on hand keeps its cost,
 the new units bring theirs.
 
+## Returns are documents, not edits
+
+A sale keeps the prices, discounts, tax and cost snapshots it was agreed at. A
+return is a separate numbered document against it (`SR-2026-000001`), holding
+what came back, when, who took it and what it was worth. Three things have to
+agree, so each is derived rather than supplied:
+
+- **Goods.** Returned units come back on the stock ledger as `SALE_RETURN`.
+  Units not fit to sell again come back and are then written off as `LOSS`, so
+  the damage is a movement with a reason and an actor rather than a silent
+  absence — the same choice made for transfer shortfalls.
+- **Value.** Carried from the sale's own line, pro-rata for a part return. The
+  return that takes the *rest* of a line takes exactly what is left, so
+  returning a line in two goes gives back precisely what returning it in one
+  would and no cent is lost to rounding.
+- **Money.** An outstanding balance on the sale absorbs the value first; only
+  what is left is handed back, and never more than was actually taken for that
+  sale. Settling a receivable is a `Payment` row with method `credit_note`
+  against the receivable alone — the single payment ledger still holds every
+  movement of value, and cash reports can tell it from money through the till.
+
+Two consequences worth stating. `Sale.amount_paid` nets money out against
+money in, so a refund does not read as a further payment; and
+`credit.recalculate` sums with a sign relative to the direction that settles
+that kind of balance, so a refund reduces what is settled instead of adding to
+it — a receivable settles with money in, a payable with money out.
+
+A sale with returns cannot be voided: voiding reverses the whole sale's stock
+and money, which on top of a return would reverse the returned units twice.
+
+## Plan limits
+
+A plan may cap branches, staff accounts and products. `None` means unlimited,
+and a business on no plan at all — a trial that has not chosen one — has no
+caps: a limit applies because a plan says so, never by default.
+
+A business pushed over a cap by a downgrade keeps everything it has. Only the
+next addition is refused, which is the same promise trial expiry makes: nothing
+is deleted or hidden because of billing. An outstanding invitation holds a
+seat, or a three-seat business could invite thirty people and have them all
+walk in; deactivating a branch, product or member frees its slot, which is how
+a business makes room without deleting history.
+
+A spreadsheet import is checked for the whole batch before any row is written,
+so a long file is refused as an import rather than stopping part-way and
+reporting a single product. The preview reports the same thing, so the wizard
+can say so before anyone confirms.
+
 ## Idempotency
 
 Sales, purchases, stock movements and credit payments all accept an idempotency
@@ -344,4 +392,5 @@ and untouched, new posting is refused with a clear message. Nothing is deleted.
 | Shared rate limits across workers | Implement the window behind `RateLimiter` in `app/core/ratelimit.py` |
 | One payment across many invoices | Add `PaymentAllocation`; `Payment` already has the links |
 | Custom role bundles | `Role` and `RolePermission` are already per-tenant rows |
+| A new permission | Add to `Permission` and the role bundles, **and** write a migration backfilling `role_permissions` — those rows are written once per business at registration, so a new permission is otherwise invisible to every business that already exists, owners included |
 | A mobile client | Same API; the OpenAPI document generates typed models |

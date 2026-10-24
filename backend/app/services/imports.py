@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import AuditAction, record_audit
 from app.core.db import utcnow
-from app.core.errors import ConflictError, ValidationError
+from app.core.errors import ConflictError, PlanLimitReached, ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
 from app.models.catalogue import Product, ProductVariant
@@ -29,6 +29,7 @@ from app.services.storage import (
     get_storage,
     validate_upload,
 )
+from app.services.subscription import check_limit
 
 #: Fields an uploaded column can be mapped to, and whether they are required.
 IMPORTABLE_FIELDS: dict[str, dict] = {
@@ -112,6 +113,10 @@ class ImportPreview:
     duplicate_rows: int
     sample: list[dict] = field(default_factory=list)
     issues: list[RowIssue] = field(default_factory=list)
+    #: Set when the valid rows would pass the plan's product limit.  Reported
+    #: here rather than raised, so the preview can still be read and the
+    #: numbers seen; applying the import is what gets refused.
+    plan_limit: dict | None = None
 
 
 def parse_spreadsheet(content: bytes, filename: str) -> tuple[list[str], list[ParsedRow]]:
@@ -415,7 +420,32 @@ def validate_import(
         duplicate_rows=duplicates,
         sample=sample,
         issues=issues,
+        plan_limit=_plan_limit_warning(db, ctx, valid),
     )
+
+
+def _plan_limit_warning(db: Session, ctx: AuthContext, adding: int) -> dict | None:
+    """What applying this import would do to the plan's product limit."""
+    try:
+        check_limit(db, ctx.tenant_id, "products", adding=adding)
+    except PlanLimitReached as limit:
+        return {"message": limit.message, **(limit.details or {})}
+    return None
+
+
+def _importable_count(
+    rows: list[ParsedRow], bad_rows: set[int], mapping: dict[str, str]
+) -> int:
+    """How many products the commit step would create, by the same rules."""
+    count = 0
+    for row in rows:
+        if row.row_number in bad_rows:
+            continue
+        _fields, row_issues = _row_to_fields(row, mapping)
+        if row_issues:
+            continue
+        count += 1
+    return count
 
 
 def commit_import(
@@ -443,6 +473,11 @@ def commit_import(
     content = _job_content(db, ctx, job)
     _, rows = parse_spreadsheet(content, job.original_filename)
     bad_rows = {error.row_number for error in job.row_errors}
+
+    # Checked for the whole batch before anything is written.  create_product
+    # checks one at a time, which would otherwise stop part-way through a long
+    # file and report a single product rather than the import.
+    check_limit(db, ctx.tenant_id, "products", adding=_importable_count(rows, bad_rows, mapping))
 
     created = skipped = 0
     for row in rows:

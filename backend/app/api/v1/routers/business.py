@@ -136,6 +136,7 @@ def list_branches(ctx: Ctx, db: DbSession) -> list[BranchOut]:
 @router.post("/branches", response_model=BranchOut, status_code=status.HTTP_201_CREATED)
 def create_branch(payload: BranchIn, ctx: Ctx, db: DbSession) -> BranchOut:
     ctx.require(Permission.BRANCH_MANAGE)
+    subscription_service.check_limit(db, ctx.tenant_id, "branches")
     branch = Branch(
         tenant_id=ctx.tenant_id,
         name=payload.name.strip(),
@@ -353,7 +354,13 @@ def get_setup_progress(ctx: Ctx, db: DbSession) -> list[dict]:
 @router.get("/subscription")
 def get_subscription(ctx: Ctx, db: DbSession) -> dict:
     ctx.require(Permission.BUSINESS_VIEW)
-    return subscription_service.describe(db, ctx.tenant).as_dict()
+    payload = subscription_service.describe(db, ctx.tenant).as_dict()
+    # What the plan allows and what is used, so a business can see a ceiling
+    # coming instead of meeting it when a branch or product is refused.
+    payload["limits"] = [
+        limit.as_dict() for limit in subscription_service.limits(db, ctx.tenant_id)
+    ]
+    return payload
 
 
 @router.get("/audit-events")

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.clock import day_end, day_start, local_date, local_today
@@ -24,7 +24,16 @@ from app.models.catalogue import Category, Product, ProductVariant
 from app.models.credit import CreditKind, CreditStatus, CreditTransaction
 from app.models.inventory import StockBalance
 from app.models.organisation import Branch
-from app.models.sales import Payment, Sale, SaleLine, SaleStatus
+from app.models.sales import (
+    Payment,
+    PaymentDirection,
+    Sale,
+    SaleLine,
+    SaleReturn,
+    SaleReturnLine,
+    SaleStatus,
+)
+from app.services.pricing import quantize_money
 
 ZERO = Decimal("0.00")
 
@@ -93,6 +102,62 @@ def _sales_scope(
     )
 
 
+def _returns_scope(
+    ctx: AuthContext, db: Session, period: DateRange, branch_ids: list[uuid.UUID] | None
+) -> Select:
+    """Returns taken in the period, scoped exactly like the sales they undo.
+
+    Dated by when the goods came back, not when they were sold: a return in
+    October against a September sale belongs in October's figures, which is
+    when the money moved.
+    """
+    allowed = ctx.visible_branch_ids(db)
+    if branch_ids:
+        for branch_id in branch_ids:
+            ctx.require_branch(branch_id)
+        allowed = [b for b in allowed if b in set(branch_ids)]
+    return tenant_query(SaleReturn, ctx.tenant_id).where(
+        SaleReturn.returned_at >= period.start_dt,
+        SaleReturn.returned_at <= period.end_dt,
+        SaleReturn.branch_id.in_(allowed),
+    )
+
+
+@dataclass(slots=True)
+class ReturnsTotals:
+    count: int = 0
+    items: Decimal = ZERO
+    value: Decimal = ZERO
+    tax: Decimal = ZERO
+    cost: Decimal = ZERO
+
+
+def _returns_totals(
+    db: Session, ctx: AuthContext, period: DateRange, branch_ids: list[uuid.UUID] | None
+) -> ReturnsTotals:
+    scope = _returns_scope(ctx, db, period, branch_ids).subquery()
+    row = db.execute(
+        select(
+            func.count().label("count"),
+            func.coalesce(func.sum(scope.c.total_amount), 0).label("value"),
+            func.coalesce(func.sum(scope.c.tax_total), 0).label("tax"),
+            func.coalesce(func.sum(scope.c.cost_total), 0).label("cost"),
+        ).select_from(scope)
+    ).one()
+    items = db.execute(
+        select(func.coalesce(func.sum(SaleReturnLine.quantity), 0))
+        .select_from(SaleReturnLine)
+        .join(scope, scope.c.id == SaleReturnLine.sale_return_id)
+    ).scalar_one()
+    return ReturnsTotals(
+        count=int(row.count or 0),
+        items=Decimal(items or 0),
+        value=Decimal(row.value or 0),
+        tax=Decimal(row.tax or 0),
+        cost=Decimal(row.cost or 0),
+    )
+
+
 @dataclass(slots=True)
 class SalesSummary:
     period: DateRange
@@ -102,11 +167,25 @@ class SalesSummary:
     gross_sales: Decimal
     discounts: Decimal
     tax: Decimal
+    #: What was sold, before returns.
     net_sales: Decimal
     cost_of_goods: Decimal | None
     gross_profit: Decimal | None
+    #: Returns taken in the period, shown rather than quietly netted off, so
+    #: the difference between what was sold and what was kept is readable.
+    return_count: int = 0
+    items_returned: Decimal = ZERO
+    returns_value: Decimal = ZERO
+    returns_tax: Decimal = ZERO
+    returns_cost: Decimal | None = None
     #: What "profit" means here, stated on every report (PRD 15).
-    profit_basis: str = "net sales excluding tax, minus sale-time cost snapshots"
+    profit_basis: str = (
+        "net sales after returns, excluding tax, minus sale-time cost snapshots"
+    )
+
+    @property
+    def net_after_returns(self) -> Decimal:
+        return self.net_sales - self.returns_value
 
     def as_dict(self, *, include_cost: bool) -> dict:
         payload = {
@@ -118,9 +197,14 @@ class SalesSummary:
             "discounts": str(self.discounts),
             "tax": str(self.tax),
             "net_sales": str(self.net_sales),
+            "return_count": self.return_count,
+            "items_returned": str(self.items_returned),
+            "returns_value": str(self.returns_value),
+            "net_after_returns": str(self.net_after_returns),
         }
         if include_cost:
             payload["cost_of_goods"] = str(self.cost_of_goods or ZERO)
+            payload["returns_cost"] = str(self.returns_cost or ZERO)
             payload["gross_profit"] = str(self.gross_profit or ZERO)
             payload["profit_basis"] = self.profit_basis
         return payload
@@ -155,6 +239,11 @@ def sales_summary(
     tax = Decimal(row.tax or 0)
     cost = Decimal(row.cost or 0)
     has_cost = ctx.has(Permission.COST_VIEW)
+
+    # Goods that came back are not revenue, and their cost was never incurred.
+    # Both sides have to come out or profit is overstated twice over.
+    returns = _returns_totals(db, ctx, period, branch_ids)
+
     return SalesSummary(
         period=period,
         currency=ctx.tenant.currency,
@@ -164,8 +253,17 @@ def sales_summary(
         discounts=Decimal(row.discounts or 0),
         tax=tax,
         net_sales=net,
+        return_count=returns.count,
+        items_returned=returns.items,
+        returns_value=returns.value,
+        returns_tax=returns.tax,
+        returns_cost=returns.cost if has_cost else None,
         cost_of_goods=cost if has_cost else None,
-        gross_profit=(net - tax - cost) if has_cost else None,
+        gross_profit=(
+            (net - returns.value) - (tax - returns.tax) - (cost - returns.cost)
+            if has_cost
+            else None
+        ),
     )
 
 
@@ -194,22 +292,42 @@ def sales_by_payment_method(
 ) -> list[dict]:
     ctx.require(Permission.REPORT_SALES)
     scope = _sales_scope(ctx, db, period, branch_ids).subquery()
+    # Money in and money out are reported apart.  Adding a refund to the
+    # method's takings would make a till that took 500 and gave 200 back read
+    # as having taken 700, or 300, depending which way the signs fell.
+    received = func.sum(
+        case((Payment.direction == PaymentDirection.IN, Payment.amount), else_=0)
+    )
+    refunded = func.sum(
+        case((Payment.direction == PaymentDirection.OUT, Payment.amount), else_=0)
+    )
     rows = db.execute(
         select(
             Payment.method,
             func.count().label("count"),
-            func.coalesce(func.sum(Payment.amount), 0).label("total"),
+            func.coalesce(received, 0).label("received"),
+            func.coalesce(refunded, 0).label("refunded"),
         )
         .select_from(Payment)
         .join(scope, scope.c.id == Payment.sale_id)
         .where(Payment.is_reversed.is_(False))
         .group_by(Payment.method)
-        .order_by(func.sum(Payment.amount).desc())
+        .order_by(func.coalesce(received, 0).desc())
     )
-    return [
-        {"method": str(row.method), "count": int(row.count), "total": str(Decimal(row.total or 0))}
-        for row in rows
-    ]
+    results = []
+    for row in rows:
+        taken = Decimal(row.received or 0)
+        given = Decimal(row.refunded or 0)
+        results.append(
+            {
+                "method": str(row.method),
+                "count": int(row.count),
+                "received": str(taken),
+                "refunded": str(given),
+                "total": str(taken - given),
+            }
+        )
+    return results
 
 
 def product_performance(
@@ -242,19 +360,68 @@ def product_performance(
         .order_by(func.sum(SaleLine.line_total).desc())
         .limit(limit)
     )
+
+    returned = _returns_by_product(db, ctx, period, branch_ids)
+
     results = []
     for row in rows:
+        back = returned.get(row.id, (ZERO, ZERO, ZERO))
+        revenue = quantize_money(Decimal(row.revenue or 0))
+        returns_value = quantize_money(back[1])
         entry = {
             "product_id": str(row.id),
             "name": row.name,
             "quantity_sold": str(Decimal(row.quantity or 0)),
-            "revenue": str(Decimal(row.revenue or 0)),
+            "revenue": str(revenue),
+            "quantity_returned": str(back[0]),
+            "returns_value": str(returns_value),
+            "net_revenue": str(revenue - returns_value),
         }
         if include_cost:
-            entry["cost"] = str(Decimal(row.cost or 0))
-            entry["gross_profit"] = str(Decimal(row.revenue or 0) - Decimal(row.cost or 0))
+            # quantity is Numeric(14,3) and unit_cost Numeric(14,2), so their
+            # product carries five decimals on PostgreSQL.  Money is money:
+            # quantize before it reaches a reader.
+            cost = quantize_money(Decimal(row.cost or 0))
+            returns_cost = quantize_money(back[2])
+            entry["cost"] = str(cost)
+            entry["returns_cost"] = str(returns_cost)
+            entry["gross_profit"] = str((revenue - returns_value) - (cost - returns_cost))
         results.append(entry)
     return results
+
+
+def _returns_by_product(
+    db: Session,
+    ctx: AuthContext,
+    period: DateRange,
+    branch_ids: list[uuid.UUID] | None,
+) -> dict[uuid.UUID, tuple[Decimal, Decimal, Decimal]]:
+    """Units, value and cost returned per product in the period."""
+    scope = _returns_scope(ctx, db, period, branch_ids).subquery()
+    rows = db.execute(
+        select(
+            SaleReturnLine.product_id,
+            func.coalesce(func.sum(SaleReturnLine.quantity), 0),
+            func.coalesce(func.sum(SaleReturnLine.line_total), 0),
+            func.coalesce(
+                func.sum(
+                    SaleReturnLine.quantity * func.coalesce(SaleReturnLine.unit_cost, 0)
+                ),
+                0,
+            ),
+        )
+        .select_from(SaleReturnLine)
+        .join(scope, scope.c.id == SaleReturnLine.sale_return_id)
+        .group_by(SaleReturnLine.product_id)
+    )
+    return {
+        row[0]: (
+            Decimal(row[1] or 0),
+            quantize_money(Decimal(row[2] or 0)),
+            quantize_money(Decimal(row[3] or 0)),
+        )
+        for row in rows
+    }
 
 
 def category_performance(

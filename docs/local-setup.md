@@ -55,7 +55,8 @@ Two things are optional:
 
 The demo business is **Merkato Wholesale**: two branches, four staff, twelve
 products (two with Amharic names), stock, sales, a supplier payable, an overdue
-receivable, a published storefront and a proforma.
+receivable, a part return with damaged goods written off, a published
+storefront and a proforma.
 
 Every password is `demo-password-123`.
 

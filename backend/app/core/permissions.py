@@ -38,6 +38,10 @@ class Permission(StrEnum):
     SALE_VIEW = "sale:view"
     SALE_CREATE = "sale:create"
     SALE_VOID = "sale:void"
+    #: Take goods back and give value back.  Separate from sale:void, because
+    #: a void cancels a whole transaction while a return is a new one — a shop
+    #: may well want a cashier who can accept returns but not void sales.
+    SALE_REFUND = "sale:refund"
     DISCOUNT_APPROVE = "discount:approve"
 
     # Purchasing
@@ -107,6 +111,7 @@ _MANAGER_PERMISSIONS: frozenset[Permission] = frozenset(
         Permission.SALE_VIEW,
         Permission.SALE_CREATE,
         Permission.SALE_VOID,
+        Permission.SALE_REFUND,
         Permission.DISCOUNT_APPROVE,
         Permission.PURCHASE_VIEW,
         Permission.PURCHASE_CREATE,

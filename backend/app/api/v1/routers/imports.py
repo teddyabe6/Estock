@@ -105,6 +105,9 @@ def validate(job_id: uuid.UUID, payload: MappingIn, ctx: WritableCtx, db: DbSess
         "error_rows": preview.error_rows,
         "duplicate_rows": preview.duplicate_rows,
         "sample": preview.sample,
+        # Non-null when applying the import would pass the plan's product
+        # limit; the apply step refuses it, this lets the wizard say so first.
+        "plan_limit": preview.plan_limit,
         "issues": [
             {
                 "row_number": issue.row_number,

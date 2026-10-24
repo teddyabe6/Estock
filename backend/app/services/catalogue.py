@@ -29,6 +29,7 @@ from app.models.catalogue import Category, Product, ProductVariant
 from app.models.inventory import MovementReason, StockBalance
 from app.services.inventory import StockPosting, post_movement
 from app.services.pricing import quantize_money
+from app.services.subscription import check_limit
 
 ZERO = Decimal("0.00")
 
@@ -122,6 +123,7 @@ def _assert_unique_code(
 
 def create_product(db: Session, ctx: AuthContext, data: ProductInput) -> Product:
     ctx.require(Permission.PRODUCT_MANAGE)
+    check_limit(db, ctx.tenant_id, "products")
     if not data.name or not data.name.strip():
         raise ValidationError("Product name is required")
 

@@ -25,6 +25,8 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Security: rate limiting, account recovery, read-only support access | `test_repeated_failed_sign_ins_are_rate_limited`, `test_password_reset_round_trip`, `test_support_access_can_look_but_not_touch` |
 | Concurrent sales, duplicate submissions and retries | `test_concurrency.py`, including a PostgreSQL-only test of two transactions numbering at once |
 | A transfer received short keeps every unit accounted for | `test_a_transfer_shortfall_is_posted_as_a_loss_movement` |
+| A partial return puts stock and money back without rewriting the sale | `test_returns.py` (32 tests: part returns, rounding across several returns, damaged goods written off, cash against credit, reports net of returns) |
+| Plan limits hold without taking data away on a downgrade | `test_plan_limits.py` (15 tests, including a spreadsheet import refused whole) |
 
 The web app now covers every MVP workflow end to end: onboarding, import,
 products, sales and receipts, receiving with supplier credit, adjustments and
@@ -62,12 +64,10 @@ Ordered by what a first real shop would miss soonest.
    page shows it for every pending invitation with a copy button.
 3. **Receipt and proforma PDFs.** Both pages print cleanly today; a server-side
    renderer would make sharing more reliable on low-end phones.
-4. **Enforce plan limits.** `SubscriptionPlan` carries max branches, users and
-   products; nothing enforces them yet.
-5. **Barcode scanning with the camera.** The sale screens already accept
+4. **Barcode scanning with the camera.** The sale screens already accept
    scanner input (a scanner types and presses Enter); using the phone camera
    needs a plugin and a permissions flow.
-7. **Stock counts in the web app.** The API has the count workflow (start,
+5. **Stock counts in the web app.** The API has the count workflow (start,
    record lines, review variances, post); the web app does not yet have a
    screen for it.
 
@@ -100,8 +100,12 @@ customer communications, marketplace and discovery, accounting integrations.
 
 ## Known gaps worth naming
 
-- **Refunds** are not a first-class flow. A sale can be voided in full; partial
-  returns to stock with money back are not yet modelled.
+- **Returns have no web screen yet.** The API covers the whole flow — what is
+  returnable, taking a return, listing returns against a sale — and the typed
+  client has the calls, but no page uses them. This is the next thing to build.
+- **Purchase returns** are not modelled. Goods going back to a supplier is the
+  mirror of a sale return and `PURCHASE_RETURN` exists as a movement reason,
+  but nothing creates one.
 - **Reminder scheduling** runs hourly from a single worker. That is right for
   the current scale and will need a proper queue before it is not.
 - **Query counts** are pinned only for the operations that post one stock

@@ -14,7 +14,7 @@ from app.models.catalogue import Product, ProductVariant
 from app.models.commerce import Quotation
 from app.models.credit import CreditTransaction
 from app.models.inventory import StockBalance
-from app.models.sales import Sale
+from app.models.sales import Sale, SaleReturn
 from app.schemas.catalogue import ProductOut, VariantOut
 from app.schemas.operations import (
     CreditTransactionOut,
@@ -22,6 +22,8 @@ from app.schemas.operations import (
     QuotationOut,
     SaleLineOut,
     SaleOut,
+    SaleReturnLineOut,
+    SaleReturnOut,
 )
 from app.services.inventory import classify_stock_level
 from app.services.storage import public_file_url
@@ -108,6 +110,47 @@ def product_out(
     )
 
 
+def sale_return_out(ctx: AuthContext, sale_return: SaleReturn) -> SaleReturnOut:
+    show_cost = ctx.has(Permission.COST_VIEW)
+    return SaleReturnOut(
+        id=sale_return.id,
+        number=sale_return.number,
+        sale_id=sale_return.sale_id,
+        branch_id=sale_return.branch_id,
+        customer_id=sale_return.customer_id,
+        returned_at=sale_return.returned_at,
+        reason=sale_return.reason,
+        subtotal=sale_return.subtotal,
+        discount_total=sale_return.discount_total,
+        tax_total=sale_return.tax_total,
+        total_amount=sale_return.total_amount,
+        currency=sale_return.currency,
+        refund_method=str(sale_return.refund_method),
+        refunded_amount=sale_return.refunded_amount,
+        credited_amount=sale_return.credited_amount,
+        note=sale_return.note,
+        lines=[
+            SaleReturnLineOut(
+                id=line.id,
+                sale_line_id=line.sale_line_id,
+                product_id=line.product_id,
+                variant_id=line.variant_id,
+                description=line.description,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                discount_amount=line.discount_amount,
+                tax_rate=line.tax_rate,
+                tax_amount=line.tax_amount,
+                line_total=line.line_total,
+                restock=line.restock,
+                unit_cost=line.unit_cost if show_cost else None,
+            )
+            for line in sale_return.lines
+        ],
+        cost_total=sale_return.cost_total if show_cost else None,
+    )
+
+
 def sale_out(ctx: AuthContext, sale: Sale) -> SaleOut:
     show_cost = ctx.has(Permission.COST_VIEW)
     return SaleOut(
@@ -145,6 +188,9 @@ def sale_out(ctx: AuthContext, sale: Sale) -> SaleOut:
         payments=[PaymentOut.model_validate(p) for p in sale.payments],
         cost_total=sale.cost_total if show_cost else None,
         gross_profit=sale.gross_profit if show_cost else None,
+        returned_total=sale.returned_total,
+        effective_total=sale.effective_total,
+        returns=[sale_return_out(ctx, r) for r in sale.returns],
     )
 
 

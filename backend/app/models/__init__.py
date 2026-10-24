@@ -64,8 +64,11 @@ from app.models.sales import (  # noqa: F401
     Payment,
     PaymentDirection,
     PaymentMethod,
+    RefundMethod,
     Sale,
     SaleLine,
+    SaleReturn,
+    SaleReturnLine,
     SaleStatus,
 )
 from app.models.sequences import DocumentSequence  # noqa: F401

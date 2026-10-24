@@ -388,6 +388,59 @@ export type Sale = {
   payments: Payment[];
   cost_total?: string | null;
   gross_profit?: string | null;
+  /** Value taken back, and what the customer owes once it is accounted for. */
+  returned_total: string;
+  effective_total: string | null;
+  returns: SaleReturn[];
+};
+
+export type SaleReturnLine = {
+  id: string;
+  sale_line_id: string;
+  product_id: string;
+  variant_id: string;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  discount_amount: string;
+  tax_rate: string;
+  tax_amount: string;
+  line_total: string;
+  /** False when the goods were not fit to sell again. */
+  restock: boolean;
+  unit_cost: string | null;
+};
+
+export type SaleReturn = {
+  id: string;
+  number: string;
+  sale_id: string;
+  branch_id: string;
+  customer_id: string | null;
+  returned_at: string;
+  reason: string;
+  subtotal: string;
+  discount_total: string;
+  tax_total: string;
+  total_amount: string;
+  currency: string;
+  /** cash, credit, mixed or none — where the value went. */
+  refund_method: string;
+  refunded_amount: string;
+  credited_amount: string;
+  note: string | null;
+  lines: SaleReturnLine[];
+  cost_total: string | null;
+};
+
+export type ReturnableLine = {
+  sale_line_id: string;
+  variant_id: string;
+  description: string;
+  quantity_sold: string;
+  quantity_returned: string;
+  quantity_returnable: string;
+  unit_price: string;
 };
 
 export type SaleResponse = {
@@ -897,6 +950,24 @@ export const api = {
     request<Transfer>(`/stock/transfers/${id}/receive`, { method: "POST", body: { received } }),
 
   // Purchasing
+  returnableLines: (saleId: string) =>
+    request<{ sale_id: string; lines: ReturnableLine[] }>(
+      `/sales/${saleId}/returnable`,
+    ),
+  saleReturns: (saleId: string) =>
+    request<SaleReturn[]>(`/sales/${saleId}/returns`),
+  recordReturn: (
+    saleId: string,
+    body: {
+      lines: { sale_line_id: string; quantity: string; restock?: boolean }[];
+      reason: string;
+      refund_method?: string;
+      note?: string;
+      idempotency_key?: string;
+    },
+  ) =>
+    request<SaleReturn>(`/sales/${saleId}/returns`, { method: "POST", body }),
+
   purchases: (params: { limit?: number } = {}) =>
     request<Page<Purchase>>(`/purchases${toQuery(params)}`),
   receivePurchase: (body: Record<string, unknown>) =>

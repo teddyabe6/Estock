@@ -35,7 +35,15 @@ from app.services.commerce import (
 )
 from app.services.onboarding import register_business
 from app.services.purchasing import PurchaseInput, PurchaseLineInput, receive_purchase
-from app.services.sales import PaymentInput, SaleInput, SaleLineInput, create_sale
+from app.services.sales import (
+    PaymentInput,
+    ReturnLineInput,
+    SaleInput,
+    SaleLineInput,
+    SaleReturnInput,
+    create_sale,
+    create_sale_return,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("estock.seed")
@@ -293,6 +301,7 @@ def _record_sales(db, ctx, products, customers) -> None:
     now = utcnow()
 
     # A few paid sales spread over the last week.
+    paid_sales = []
     for days_ago, (product, quantity, method) in enumerate(
         [
             (products[6], "12", PaymentMethod.CASH),
@@ -303,14 +312,16 @@ def _record_sales(db, ctx, products, customers) -> None:
     ):
         variant = product.default_variant
         total = Decimal(variant.selling_price) * Decimal(quantity)
-        create_sale(
-            db,
-            ctx,
-            SaleInput(
-                lines=[SaleLineInput(variant_id=variant.id, quantity=Decimal(quantity))],
-                payments=[PaymentInput(method=method, amount=total)],
-                sold_at=now - timedelta(days=days_ago),
-            ),
+        paid_sales.append(
+            create_sale(
+                db,
+                ctx,
+                SaleInput(
+                    lines=[SaleLineInput(variant_id=variant.id, quantity=Decimal(quantity))],
+                    payments=[PaymentInput(method=method, amount=total)],
+                    sold_at=now - timedelta(days=days_ago),
+                ),
+            ).sale
         )
 
     # A credit sale with a due date, and an overdue one, so the credit screens
@@ -336,6 +347,30 @@ def _record_sales(db, ctx, products, customers) -> None:
             due_date=date.today() - timedelta(days=6),
             credit_note="Was due last week; follow up.",
             sold_at=now - timedelta(days=20),
+        ),
+    )
+    db.flush()
+    _record_return(db, ctx, paid_sales[0])
+
+
+def _record_return(db, ctx, sale) -> None:
+    """One part return, so the refund flow has something real to show.
+
+    Two of the twelve bags came back damaged: the goods are back on the ledger
+    and then written off as a loss, and because the sale was paid in cash the
+    customer gets cash back.
+    """
+    create_sale_return(
+        db,
+        ctx,
+        sale.id,
+        SaleReturnInput(
+            lines=[
+                ReturnLineInput(
+                    sale_line_id=sale.lines[0].id, quantity=Decimal("2"), restock=False
+                )
+            ],
+            reason="Two bags split in transit",
         ),
     )
     db.flush()

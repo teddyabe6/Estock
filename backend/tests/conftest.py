@@ -19,7 +19,7 @@ os.environ.setdefault("DEFAULT_TRIAL_DAYS", "14")
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -178,6 +178,36 @@ class Business:
         self.db.refresh(membership)
         return user, build_auth_context(user, self.tenant, membership)
 
+    def put_on_plan(
+        self,
+        *,
+        max_branches: int | None = None,
+        max_users: int | None = None,
+        max_products: int | None = None,
+        code: str | None = None,
+    ):
+        """Attach a plan with the given ceilings to this business."""
+        from app.models.platform import Subscription, SubscriptionPlan
+
+        plan = SubscriptionPlan(
+            code=code or f"test-{uuid.uuid4().hex[:8]}",
+            name="Test plan",
+            max_branches=max_branches,
+            max_users=max_users,
+            max_products=max_products,
+        )
+        self.db.add(plan)
+        self.db.flush()
+        subscription = self.db.execute(
+            select(Subscription).where(Subscription.tenant_id == self.tenant.id)
+        ).scalar_one_or_none()
+        if subscription is None:
+            subscription = Subscription(tenant_id=self.tenant.id)
+            self.db.add(subscription)
+        subscription.plan_id = plan.id
+        self.db.flush()
+        return plan
+
     def grant(self, membership: TenantMembership, permission, *, granted: bool = True) -> None:
         """Add or revoke one permission on top of a membership's role bundle."""
         from app.models.access import UserPermissionGrant
@@ -268,6 +298,40 @@ class Business:
                 **kwargs,
             ),
         )
+
+
+class Counted:
+    """SQL issued while the block runs, grouped by the table read or written."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def matching(self, fragment: str) -> int:
+        return sum(1 for s in self.statements if fragment in s)
+
+    @property
+    def total(self) -> int:
+        return len(self.statements)
+
+
+@pytest.fixture
+def counted(engine):
+    counter = Counted()
+    recording = {"on": False}
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _record(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        if recording["on"]:
+            counter.statements.append(" ".join(statement.split()))
+
+    def start():
+        counter.statements.clear()
+        recording["on"] = True
+        return counter
+
+    yield start
+    recording["on"] = False
+    event.remove(engine, "before_cursor_execute", _record)
 
 
 @pytest.fixture

@@ -8,24 +8,31 @@ from datetime import date
 from fastapi import APIRouter, Query, status
 from sqlalchemy import func, select
 
-from app.api.v1.serializers import sale_out
+from app.api.v1.serializers import sale_out, sale_return_out
 from app.core.clock import day_end, day_start
 from app.core.deps import Ctx, DbSession, WritableCtx
+from app.core.errors import ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
-from app.models.sales import Sale, SaleStatus
+from app.models.sales import PaymentMethod, Sale, SaleStatus
 from app.schemas.common import Page
 from app.schemas.operations import (
     SaleIn,
     SaleOut,
     SaleResponse,
+    SaleReturnIn,
+    SaleReturnOut,
     VoidSaleIn,
 )
 from app.services.sales import (
     PaymentInput,
+    ReturnLineInput,
     SaleInput,
     SaleLineInput,
+    SaleReturnInput,
     create_sale,
+    create_sale_return,
+    returnable,
     void_sale,
 )
 
@@ -123,6 +130,67 @@ def get_sale(sale_id: uuid.UUID, ctx: Ctx, db: DbSession) -> SaleOut:
     sale = get_tenant_object(db, Sale, sale_id, ctx.tenant_id, label="Sale")
     ctx.require_branch(sale.branch_id)
     return sale_out(ctx, sale)
+
+
+@router.get("/{sale_id}/returnable")
+def returnable_lines(sale_id: uuid.UUID, ctx: Ctx, db: DbSession) -> dict:
+    """What can still come back from this sale, line by line."""
+    return {"sale_id": str(sale_id), "lines": returnable(db, ctx, sale_id)}
+
+
+@router.post(
+    "/{sale_id}/returns",
+    response_model=SaleReturnOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_return(
+    sale_id: uuid.UUID, payload: SaleReturnIn, ctx: WritableCtx, db: DbSession
+) -> SaleReturnOut:
+    """Take goods back from a sale and give the value back (PRD 1, 10).
+
+    Stock, value and money all follow from the sale's own lines: the goods come
+    back on the ledger, the amount is what the customer paid for those units,
+    and an outstanding balance on the sale absorbs the value before any cash
+    leaves the till.
+    """
+    method = None
+    if payload.refund_method:
+        try:
+            method = PaymentMethod(payload.refund_method)
+        except ValueError as exc:
+            raise ValidationError(
+                f"'{payload.refund_method}' is not a payment method",
+                details={"allowed": [m.value for m in PaymentMethod]},
+            ) from exc
+
+    sale_return = create_sale_return(
+        db,
+        ctx,
+        sale_id,
+        SaleReturnInput(
+            lines=[
+                ReturnLineInput(
+                    sale_line_id=line.sale_line_id,
+                    quantity=line.quantity,
+                    restock=line.restock,
+                )
+                for line in payload.lines
+            ],
+            reason=payload.reason,
+            refund_method=method,
+            note=payload.note,
+            idempotency_key=payload.idempotency_key,
+        ),
+    )
+    return sale_return_out(ctx, sale_return)
+
+
+@router.get("/{sale_id}/returns", response_model=list[SaleReturnOut])
+def list_returns(sale_id: uuid.UUID, ctx: Ctx, db: DbSession) -> list[SaleReturnOut]:
+    ctx.require(Permission.SALE_VIEW)
+    sale = get_tenant_object(db, Sale, sale_id, ctx.tenant_id, label="Sale")
+    ctx.require_branch(sale.branch_id)
+    return [sale_return_out(ctx, r) for r in sale.returns]
 
 
 @router.get("/{sale_id}/receipt")
