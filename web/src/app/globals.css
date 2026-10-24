@@ -1327,3 +1327,44 @@ button.link {
 .request-details p {
   margin: 2px 0;
 }
+
+/* --------------------------------------------------------------------------- */
+/* The platform console                                                        */
+/* --------------------------------------------------------------------------- */
+/* The operator's console and a shop can be open in the same browser at once,
+   and confusing them is expensive: a status change here shuts a real business
+   out. So the console says what it is before anything else does, with a band
+   across the top and a darker header than any shop screen has. */
+
+.shell.admin {
+  border-top: 3px solid var(--brand-strong);
+}
+
+.shell.admin .topbar {
+  background: var(--brand-tint);
+  border-bottom-color: var(--brand);
+}
+
+.shell.admin .topbar .brand {
+  color: var(--brand-strong);
+}
+
+.shell.admin .store-brand .who {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--brand-strong);
+  text-align: left;
+}
+
+.shell.admin .store-footer {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+}
+
+/* A console table is read across, so it needs to breathe more than a shop's
+   compact lists do. */
+.shell.admin table td {
+  vertical-align: top;
+}

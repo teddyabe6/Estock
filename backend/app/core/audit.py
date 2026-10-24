@@ -52,6 +52,7 @@ class AuditAction:
     SUBSCRIPTION_RENEWED = "subscription.renewed"
     SUBSCRIPTION_LAPSED = "subscription.lapsed"
     PLATFORM_SUPPORT_ACCESS = "platform.support_access"
+    PLATFORM_SETTING_CHANGED = "platform.setting_changed"
 
 
 def record_audit(

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.db import utcnow
 from app.core.deps import Ctx, CurrentUser, DbSession, client_ip, login_limiter
-from app.core.errors import AuthenticationError
+from app.core.errors import AuthenticationError, RegistrationClosed
 from app.core.security import create_access_token, verify_password
 from app.core.tenancy import tenant_query
 from app.models.access import MembershipStatus, TenantMembership, User
@@ -25,6 +25,7 @@ from app.schemas.auth import (
     UserOut,
 )
 from app.schemas.common import Message
+from app.services import platform_settings
 from app.services import subscription as subscription_service
 from app.services.onboarding import (
     accept_invitation,
@@ -38,7 +39,17 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DbSession, request: Request) -> TokenResponse:
-    """Create the business, its first branch and the owner account (PRD 6)."""
+    """Create the business, its first branch and the owner account (PRD 6).
+
+    The platform owner can close self-registration, which is what makes the
+    platform invitation-only without touching any shop that already exists
+    (``services/platform_settings``).
+    """
+    if not platform_settings.is_enabled(db, "registration_open"):
+        raise RegistrationClosed(
+            "This platform is not accepting new businesses at the moment. "
+            "Contact the operator to be set up."
+        )
     result = register_business(
         db,
         business_name=payload.business_name,

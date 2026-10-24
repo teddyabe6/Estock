@@ -512,6 +512,44 @@ The daily run bills before it lapses, so a shop is asked for the next period
 while it still has service rather than after it is cut off, and there is always
 an invoice waiting to be paid to come back.
 
+## The platform console
+
+`/admin` is the operator's console, and it is a **separate identity** from any
+shop (PRD 5.2). The operator signs in at `/platform/login` against
+`platform_admins`, and the token is kept under its own key in the browser, so
+the console and a shop can be open in the same browser without either signing
+the other in or out — a test drives exactly that, because getting it wrong
+would be silent and bad.
+
+The console cannot act *as* a shop. Looking inside one goes through support
+access, which mints a short-lived, read-only token and records the reason in
+that shop's own audit log before handing anything back. Everything else the
+operator does — a status change, a plan move, a payment recorded — is written
+to the affected shop's log too, which is why the console says so in its footer.
+
+Screens: the money and the shops needing a decision (`/admin`), every shop
+(`/admin/shops`), one shop with all its levers (`/admin/shops/<id>`), invoices
+across shops (`/admin/billing`), plans (`/admin/plans`), the platform switches
+(`/admin/settings`) and the cross-shop trail (`/admin/audit`).
+
+### Switches that do something
+
+`feature_flags` has existed since the first migration and the admin API could
+write rows to it, but nothing anywhere read one — so every switch was a note to
+self. `app/services/platform_settings.py` is the registry of switches the
+system actually enforces, and an unknown key is now refused with the list of
+real ones rather than stored as a setting that does nothing.
+
+A flag resolves as: this shop's row, else the platform-wide row, else the
+documented default. A missing row is never simply "off", because an empty table
+must not disable the platform. The per-shop row winning is what makes "closed
+to new shops, except this one" expressible.
+
+Two switches exist, and each is enforced: `registration_open` gates
+`POST /auth/register`, which is how the platform goes invitation-only without
+touching a shop that already exists; `marketplace_open` gates cross-shop
+requests, which pauses the marketplace without unlisting anybody's products.
+
 ## Where extension points are
 
 | Need | Where |

@@ -76,10 +76,16 @@ storefront and a proforma.
 | Manager | `manager@merkato-demo.et` | `demo-password-123` |
 | Salesperson | `cashier@merkato-demo.et` | `demo-password-123` |
 | Stock user | `store@merkato-demo.et` | `demo-password-123` |
-| Platform admin | `admin@estock.et` | `admin-password-123` |
+| Platform operator | `admin@estock.et` | `admin-password-123` |
 
 Sign in as the salesperson to see permissions at work: no cost, no profit, no
 business-wide reports, no Shop or Reports tab.
+
+The platform operator signs in at `/admin`, which is a separate console with a
+separate account: shops and their access, subscriptions and what each has paid,
+plans, the switches that open or close registration and the marketplace, and
+everything recorded across every shop. It can be open at the same time as a
+shop session without disturbing it.
 
 The demo catalogue includes Amharic product names, so you can see Ethiopic text
 rendering in both clients.
@@ -118,7 +124,7 @@ CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ## Tests
 
 ```bash
-make test              # 435 backend tests on SQLite + 35 mobile tests
+make test              # 449 backend tests on SQLite + 35 mobile tests
 make test-backend-pg   # the same backend suite against PostgreSQL, plus a real concurrency test
 ```
 
@@ -151,11 +157,13 @@ backend/            FastAPI service — the only place business rules live
   app/api/v1/       HTTP routes and response shaping
   app/workers/      Scheduled reminders, alerts and trial expiry
   alembic/          Migrations
-  tests/            435 tests
+  tests/            449 tests
 web/                Next.js app: home, sales and receipts, products and import,
                     stock (receive, adjust, transfer, ledger), online shop
                     (storefront, enquiries, proformas), the central marketplace
                     (browse every shop, cross-shop basket, request tracking),
+                    the platform console at /admin (shops, billing, plans,
+                    switches, cross-shop activity — a separate sign-in),
                     reports, credit, contacts, notifications, settings,
                     share links
 mobile/             Flutter app for the shop floor, works offline

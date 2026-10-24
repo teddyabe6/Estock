@@ -66,7 +66,7 @@ Every password is `demo-password-123`.
 | `manager@merkato-demo.et` | Operations for the Bole branch only |
 | `cashier@merkato-demo.et` | Sales only — no cost, no profit, no reports |
 | `store@merkato-demo.et` | Stock only — cannot record a sale |
-| `admin@estock.et` | Platform admin, at `/docs` (password `admin-password-123`) |
+| `admin@estock.et` | Platform operator, at `/admin` (password `admin-password-123`) |
 
 Signing in as the cashier and then the owner is the quickest way to see the
 permission rules working: the cashier has no Reports tab and no profit figures

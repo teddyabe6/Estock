@@ -73,13 +73,21 @@ type RequestOptions = {
   /** Public storefront endpoints are called without a token. */
   anonymous?: boolean;
   signal?: AbortSignal;
+  /**
+   * Use this bearer token instead of the signed-in shop's. The platform
+   * console is a separate identity with its own token, and the two must not
+   * share one: signing in as the operator would otherwise take over whatever
+   * shop session was open in the same browser.
+   */
+  token?: string | null;
 };
 
-function authHeaders(anonymous: boolean): Record<string, string> {
+function authHeaders(anonymous: boolean, token?: string | null): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (!anonymous) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
+    // undefined means "use the shop session"; null means "no token at all".
+    const bearer = token === undefined ? getToken() : token;
+    if (bearer) headers.Authorization = `Bearer ${bearer}`;
   }
   return headers;
 }
@@ -103,9 +111,9 @@ const NETWORK_MESSAGE = "Could not reach the server. Check your connection and t
 
 export async function request<T>(
   path: string,
-  { method = "GET", body, anonymous = false, signal }: RequestOptions = {},
+  { method = "GET", body, anonymous = false, signal, token }: RequestOptions = {},
 ): Promise<T> {
-  const headers = authHeaders(anonymous);
+  const headers = authHeaders(anonymous, token);
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   let response: Response;

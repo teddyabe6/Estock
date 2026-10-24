@@ -19,7 +19,7 @@ from app.core.audit import AuditAction, record_audit
 from app.core.config import settings
 from app.core.db import utcnow
 from app.core.deps import DbSession, PlatformAdminUser, client_ip, login_limiter
-from app.core.errors import AuthenticationError, NotFoundError
+from app.core.errors import AuthenticationError, NotFoundError, ValidationError
 from app.core.security import create_access_token, verify_password
 from app.models.access import MembershipStatus, TenantMembership
 from app.models.catalogue import Product
@@ -35,7 +35,7 @@ from app.models.platform import (
     TenantStatus,
 )
 from app.models.sales import PaymentMethod, Sale
-from app.services import billing
+from app.services import billing, platform_settings
 from app.services import subscription as subscription_service
 
 router = APIRouter(prefix="/platform", tags=["platform admin"])
@@ -281,26 +281,79 @@ def set_tenant_plan(
 
 
 class FeatureFlagIn(BaseModel):
+    """A switch to turn, named from the ones the system actually reads."""
+
     key: str = Field(min_length=2, max_length=64)
     enabled: bool
+    #: Set for one business only; left out, it is the platform-wide setting.
     tenant_id: uuid.UUID | None = None
-    description: str | None = None
+    reason: str | None = None
 
 
-@router.put("/feature-flags")
-def set_feature_flag(payload: FeatureFlagIn, admin: PlatformAdminUser, db: DbSession) -> dict:
-    flag = db.execute(
+@router.get("/settings")
+def platform_switches(admin: PlatformAdminUser, db: DbSession) -> dict:
+    """The switches the platform owner controls, and where each one stands.
+
+    Only switches something enforces are listed.  A flag nothing reads is
+    worse than no flag, because it looks like control and is not.
+    """
+    return {"settings": platform_settings.describe(db)}
+
+
+@router.put("/settings")
+def set_platform_switch(
+    payload: FeatureFlagIn, admin: PlatformAdminUser, db: DbSession
+) -> dict:
+    """Turn a switch, platform-wide or for one business.
+
+    An unknown key is refused with the list of real ones rather than quietly
+    stored, which is how the old endpoint let a typo look like a setting.
+    """
+    flag = platform_settings.known(payload.key)
+    if payload.tenant_id is not None and not flag.per_tenant:
+        raise ValidationError(
+            f"'{flag.key}' is a platform-wide switch; it cannot be set for one business."
+        )
+    if payload.tenant_id is not None and db.get(Tenant, payload.tenant_id) is None:
+        raise NotFoundError("Business not found")
+
+    # The effective value before this change, not the column's: a switch that
+    # has never been set is at its default, and an audit line reading
+    # "None → False" would say it was unset rather than on.
+    was = platform_settings.is_enabled(db, payload.key, tenant_id=payload.tenant_id)
+
+    row = db.execute(
         select(FeatureFlag).where(
             FeatureFlag.key == payload.key, FeatureFlag.tenant_id == payload.tenant_id
         )
     ).scalar_one_or_none()
-    if flag is None:
-        flag = FeatureFlag(key=payload.key, tenant_id=payload.tenant_id)
-        db.add(flag)
-    flag.enabled = payload.enabled
-    flag.description = payload.description
+    if row is None:
+        row = FeatureFlag(key=payload.key, tenant_id=payload.tenant_id)
+        db.add(row)
+    row.enabled = payload.enabled
+    row.description = flag.description
+
+    record_audit(
+        db,
+        action=AuditAction.PLATFORM_SETTING_CHANGED,
+        tenant_id=payload.tenant_id,
+        actor_platform_admin_id=admin.id,
+        actor_label=admin.email,
+        entity_type="feature_flag",
+        entity_id=row.id,
+        summary=(
+            f"{flag.key}: {'on' if was else 'off'} → "
+            f"{'on' if payload.enabled else 'off'}"
+        ),
+        payload={"reason": payload.reason, "scope": "tenant" if payload.tenant_id else "platform"},
+    )
     db.flush()
-    return {"key": flag.key, "enabled": flag.enabled, "tenant_id": str(flag.tenant_id) if flag.tenant_id else None}
+    return {
+        "key": row.key,
+        "enabled": row.enabled,
+        "tenant_id": str(row.tenant_id) if row.tenant_id else None,
+        "description": flag.description,
+    }
 
 
 class SupportAccessIn(BaseModel):
@@ -631,11 +684,56 @@ def _tenant_billing_payload(db, tenant: Tenant, *, limit: int, offset: int) -> d
         and not row.invoice.voided_at
         and billing.balance_due(row.invoice, paid=row.paid) > 0
     ]
+    plan = (
+        db.get(SubscriptionPlan, subscription.plan_id)
+        if subscription and subscription.plan_id
+        else None
+    )
     return {
         "tenant_id": str(tenant.id),
         "tenant_name": tenant.name,
         "tenant_status": str(tenant.status),
         "currency": tenant.currency,
+        # What it is on now, so the screen can say so rather than offering a
+        # change against an unknown starting point.
+        "plan": (
+            {
+                "id": str(plan.id),
+                "code": plan.code,
+                "name": plan.name,
+                "monthly_price": str(plan.monthly_price),
+                "currency": plan.currency,
+                "max_branches": plan.max_branches,
+                "max_users": plan.max_users,
+                "max_products": plan.max_products,
+                "is_active": plan.is_active,
+            }
+            if plan
+            else None
+        ),
+        "subscription_status": str(subscription.status) if subscription else None,
+        "trial_ends_on": (
+            subscription.trial_ends_on.isoformat()
+            if subscription and subscription.trial_ends_on
+            else None
+        ),
+        # So one shop's screen does not have to page through every shop to
+        # show three numbers about this one.
+        "usage": {
+            "users": db.execute(
+                select(func.count())
+                .select_from(TenantMembership)
+                .where(TenantMembership.tenant_id == tenant.id)
+            ).scalar_one(),
+            "products": db.execute(
+                select(func.count())
+                .select_from(Product)
+                .where(Product.tenant_id == tenant.id)
+            ).scalar_one(),
+            "sales": db.execute(
+                select(func.count()).select_from(Sale).where(Sale.tenant_id == tenant.id)
+            ).scalar_one(),
+        },
         "paid_until": (
             subscription.current_period_ends_on.isoformat()
             if subscription and subscription.current_period_ends_on

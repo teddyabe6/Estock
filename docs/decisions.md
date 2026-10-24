@@ -114,6 +114,18 @@ open, because it only asked for subscription *state*, not subscription money:
 | Is a shop on no plan billed? | **No**, it is skipped and the reason is reported. | There is no price to charge. Inventing one is worse than raising nothing. |
 | Is a trial charged for? | No. The first invoice starts the day after the trial ends. | A trial is service already given. A shop is never charged for days it was given free. |
 
+## The platform console
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Does the operator sign in with a shop account? | **No.** A separate account, a separate endpoint, and a separate token key in the browser. | They are different identities against different tables (PRD 5.2). Sharing a token would mean signing into the console takes over whatever shop session is open in the same browser — silent, and bad. |
+| Can the console act as a shop? | Only through support access: short-lived, read-only, and recorded in that shop's own log with the reason before any token is handed back. | A platform owner who can quietly become a shop is indistinguishable from one who has. |
+| Does the console look different from a shop? | Yes — its own band, header colour and a footer saying what it is. | Both can be open at once, and a status change here shuts a real business out. |
+| What happens to a switch nothing reads? | It is refused. Only keys in the registry can be set. | The feature-flag table was write-only for its whole life. A switch that looks like control and is not is worse than no switch. |
+| What is a flag with no row at all? | Its documented default, never "off". | An empty table must not disable registration or the marketplace. |
+| Which wins, the shop's flag or the platform's? | The shop's. | So that "closed, except for this one" can be said. |
+| Does closing registration affect shops that exist? | **No.** It only turns away new sign-ups. | They have already registered; taking their service away would be a different decision, and a much larger one. |
+
 ## Decisions made while building that the PRD did not raise
 
 | Decision | Reasoning |

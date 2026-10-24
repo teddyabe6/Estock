@@ -62,3 +62,15 @@ class PlanLimitReached(DomainError):
 
     status_code = 402
     code = "plan_limit_reached"
+
+
+class RegistrationClosed(DomainError):
+    """Self-registration is switched off platform-wide.
+
+    403 rather than 422: nothing about the request is wrong, and nothing the
+    caller can change about it would help.  The platform is simply not open to
+    new businesses right now.
+    """
+
+    status_code = 403
+    code = "registration_closed"
