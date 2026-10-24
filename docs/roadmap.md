@@ -29,6 +29,8 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Plan limits hold without taking data away on a downgrade | `test_plan_limits.py` (15 tests, including a spreadsheet import refused whole) |
 | Products from every shop appear in one catalogue without crossing tenant isolation anywhere else | `test_marketplace.py` (30 tests: opt-in at both levels, suspended and lapsed shops excluded, the projection refusing cost and quantity) |
 | One basket spanning shops becomes one request each shop answers alone | `test_marketplace.py` — fan-out, per-shop isolation, tracking, withdrawal |
+| The platform can tell who has paid, who owes and what is overdue | `test_billing.py` (65 tests: derived balances, reversal and void, idempotent payment, the billing run, the platform's own totals) |
+| Paying restores service; a lapsed period withdraws it without deleting anything | `test_billing.py` — renewal, a suspension that paying cannot lift, lapse with every figure still readable |
 
 The web app now covers every MVP workflow end to end: onboarding, import,
 products, sales and receipts, receiving with supplier credit, adjustments and
@@ -106,9 +108,10 @@ customer communications, marketplace and discovery, accounting integrations.
   status, trials, plans, feature flags, read-only support access, the
   cross-shop audit trail — but it is used through the Swagger page at `/docs`.
   A dashboard over it is the next thing a platform owner needs.
-- **Subscription payments are not modelled.** A subscription has a plan, a
-  status and period dates; there is no invoice or payment row, so "track what
-  shops have paid" has no data behind it.
+- **Billing has no web screen.** Invoices, payments, the platform's own
+  totals and the billing run are all in the API, and a shop sees what it owes
+  on its own subscription screen, but the platform side of it is used through
+  the Swagger page at `/docs` along with the rest of the admin API.
 - **Returns have no web screen yet.** The API covers the whole flow — what is
   returnable, taking a return, listing returns against a sale — and the typed
   client has the calls, but no page uses them. This is the next thing to build.

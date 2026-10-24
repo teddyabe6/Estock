@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 
 from app.core.db import SessionLocal
+from app.services.billing import expire_lapsed_subscriptions, run_billing_cycle
 from app.services.notifications import run_due_reminders, run_low_stock_alerts
 from app.services.subscription import expire_lapsed_trials, warn_expiring_trials
 
@@ -41,6 +42,8 @@ class DailyRunResult:
     low_stock_alerts: int = 0
     trials_expired: int = 0
     trials_warned: int = 0
+    subscriptions_lapsed: int = 0
+    invoices_raised: int = 0
 
 
 def run_daily_jobs(*, on: date | None = None) -> DailyRunResult:
@@ -58,6 +61,14 @@ def run_daily_jobs(*, on: date | None = None) -> DailyRunResult:
             result.low_stock_alerts = run_low_stock_alerts(db).alerts_created
             result.trials_expired = len(expire_lapsed_trials(db, today=on))
             result.trials_warned = warn_expiring_trials(db, today=on)
+
+            # Bill before lapsing, so a shop is always asked for the next
+            # period while it still has service rather than after it is cut
+            # off.  Lapsing then acts on the period that really has run out.
+            result.invoices_raised = len(run_billing_cycle(db, today=on).raised)
+            result.subscriptions_lapsed = len(
+                expire_lapsed_subscriptions(db, today=on)
+            )
 
             db.commit()
         except Exception:

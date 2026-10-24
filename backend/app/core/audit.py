@@ -45,6 +45,12 @@ class AuditAction:
     QUOTATION_CANCELLED = "quotation.cancelled"
     QUOTATION_CONVERTED = "quotation.converted"
     SUBSCRIPTION_CHANGED = "subscription.changed"
+    SUBSCRIPTION_INVOICE_ISSUED = "subscription.invoice_issued"
+    SUBSCRIPTION_INVOICE_VOIDED = "subscription.invoice_voided"
+    SUBSCRIPTION_PAYMENT_RECORDED = "subscription.payment_recorded"
+    SUBSCRIPTION_PAYMENT_REVERSED = "subscription.payment_reversed"
+    SUBSCRIPTION_RENEWED = "subscription.renewed"
+    SUBSCRIPTION_LAPSED = "subscription.lapsed"
     PLATFORM_SUPPORT_ACCESS = "platform.support_access"
 
 

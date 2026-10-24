@@ -1,4 +1,10 @@
-"""Platform-level models: tenants, subscriptions, feature flags and audit."""
+"""Platform-level models: tenants, subscriptions, billing, flags and audit.
+
+``PaymentMethod`` is imported from the sales models: it is a vocabulary of
+payment instruments — cash, telebirr, CBE Birr, a bank transfer — rather
+than anything about a shop's own sales, and defining it once keeps the two
+from drifting as Ethiopian payment rails change.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import GUID, Base, Money, Percent, UTCDateTime
@@ -19,6 +35,7 @@ from app.models.base import (
     UUIDPrimaryKey,
     enum_column,
 )
+from app.models.sales import PaymentMethod
 
 
 class TenantStatus(StrEnum):
@@ -170,3 +187,155 @@ class AuditEvent(UUIDPrimaryKey, Base):
     summary: Mapped[str | None] = mapped_column(Text)
     payload_json: Mapped[str | None] = mapped_column(Text)
     ip_address: Mapped[str | None] = mapped_column(String(64))
+
+
+# --------------------------------------------------------------------------- #
+# Billing: what a shop was charged, and what it paid
+# --------------------------------------------------------------------------- #
+#
+# A subscription on its own says which plan a shop is on and when its period
+# ends.  It cannot answer "has this shop paid?", which is the question the
+# platform owner actually runs the business on.  These two tables answer it.
+#
+# They sit beside Subscription rather than in a tenant-scoped module because
+# the money is between the platform and the shop, not inside the shop's books.
+# A shop's own sales ledger has nothing to do with what it owes for the
+# software.  So, like Subscription, they carry ``tenant_id`` as a plain
+# foreign key and are not ``TenantScoped``: the platform reads them across
+# shops as a matter of course, and a shop reads its own through one endpoint
+# that filters explicitly.
+
+
+class SubscriptionInvoiceStatus(StrEnum):
+    """Where an invoice stands.
+
+    Derived from its payments, its dates and whether it was voided — never
+    stored.  A stored column would have to be rewritten on every payment and
+    again every midnight as an invoice fell overdue, and would be wrong in
+    between.  The same reasoning as credit status.
+    """
+
+    #: Raised but not yet sent to the shop.  Still editable.
+    DRAFT = "draft"
+    #: Issued, nothing paid yet.
+    OPEN = "open"
+    PART_PAID = "part_paid"
+    PAID = "paid"
+    #: Issued, still owing, and the due date has passed.
+    OVERDUE = "overdue"
+    #: Cancelled by the platform.  Kept, never deleted.
+    VOID = "void"
+
+
+class SubscriptionInvoice(UUIDPrimaryKey, Timestamped, Base):
+    """One period's charge to one shop (PRD 17).
+
+    The plan's name and price are copied onto the invoice when it is raised.
+    Renaming a plan or changing its price must not rewrite what a shop was
+    already billed, exactly as a sale snapshots its prices.
+    """
+
+    __tablename__ = "subscription_invoices"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "number", name="uq_subscription_invoices_tenant_number"
+        ),
+        # One *live* invoice per shop per period, so the billing run is safe
+        # to repeat.  Partial, because voiding is how an invoice raised in
+        # error is undone and the period has to be billable again afterwards —
+        # a plain unique constraint would make a mistake permanent.
+        Index(
+            "uq_subscription_invoices_live_period",
+            "tenant_id",
+            "period_start",
+            "period_end",
+            unique=True,
+            postgresql_where=text("voided_at IS NULL"),
+            sqlite_where=text("voided_at IS NULL"),
+        ),
+        Index("ix_subscription_invoices_tenant", "tenant_id"),
+        Index("ix_subscription_invoices_due", "due_on"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Sequential per shop, from the same locked-row numbering as its own
+    #: documents: ``SUB-2026-000001``.
+    number: Mapped[str] = mapped_column(CodeText, nullable=False)
+
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("subscription_plans.id", ondelete="SET NULL")
+    )
+    #: Snapshotted, so a renamed or deleted plan does not rewrite history.
+    plan_code: Mapped[str | None] = mapped_column(CodeText)
+    plan_name: Mapped[str | None] = mapped_column(ShortText)
+
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ETB", nullable=False)
+    #: Optional, and an invoice with no due date is never overdue — the same
+    #: rule customer credit follows (PRD 11.3).
+    due_on: Mapped[date | None] = mapped_column(Date)
+
+    #: Null while the invoice is a draft.  Issuing it is the deliberate step
+    #: that makes it something the shop owes.
+    issued_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    voided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    void_reason: Mapped[str | None] = mapped_column(MediumText)
+    note: Mapped[str | None] = mapped_column(Text)
+    raised_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(GUID)
+
+    payments: Mapped[list[SubscriptionPayment]] = relationship(
+        back_populates="invoice", cascade="all, delete-orphan", lazy="selectin"
+    )
+    tenant: Mapped[Tenant] = relationship()
+
+
+class SubscriptionPayment(UUIDPrimaryKey, Timestamped, Base):
+    """Money a shop paid the platform against one invoice.
+
+    Append-only in spirit: a mistake is reversed, never deleted, so the record
+    of what was recorded and corrected survives (PRD 11.6, 20).
+    """
+
+    __tablename__ = "subscription_payments"
+    __table_args__ = (
+        UniqueConstraint(
+            "invoice_id", "idempotency_key", name="uq_subscription_payments_idempotency"
+        ),
+        Index("ix_subscription_payments_tenant_paid", "tenant_id", "paid_on"),
+        Index("ix_subscription_payments_invoice", "invoice_id"),
+    )
+
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("subscription_invoices.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Repeated from the invoice so the platform can total a shop's payments
+    #: without joining, and so a report survives an invoice being reassigned.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+
+    method: Mapped[PaymentMethod] = mapped_column(
+        enum_column(PaymentMethod), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ETB", nullable=False)
+    #: A date, not a timestamp: a telebirr transfer or a bank deposit has a
+    #: value date, and that is the day the platform was paid.
+    paid_on: Mapped[date] = mapped_column(Date, nullable=False)
+    #: The telebirr transaction number, the bank slip, the deposit reference —
+    #: what the platform owner checks the money against.
+    reference: Mapped[str | None] = mapped_column(ShortText)
+    note: Mapped[str | None] = mapped_column(Text)
+    recorded_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(GUID)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+
+    is_reversed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reversed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    reversed_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(GUID)
+    reversal_reason: Mapped[str | None] = mapped_column(MediumText)
+
+    invoice: Mapped[SubscriptionInvoice] = relationship(back_populates="payments")

@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.core.clock import local_today
 from app.core.db import SessionLocal
 from app.core.permissions import RoleName
 from app.core.security import hash_password
@@ -117,6 +118,7 @@ def seed() -> None:
         _publish_store(db, tenant.id, products)
         _add_proforma(db, ctx, products)
         _add_storefront_request(db, tenant, products)
+        _add_billing_history(db, tenant)
 
         db.commit()
 
@@ -445,6 +447,63 @@ def _add_storefront_request(db, tenant, products) -> None:
         message="Please deliver on Saturday morning if possible.",
     )
     db.flush()
+
+
+def _add_billing_history(db, tenant) -> None:
+    """Put the demo shop on a plan and give it a paid month and an open one.
+
+    Without this the platform screens have nothing in them: a shop on no plan
+    has no price, so nothing can be billed and every figure reads zero.  Two
+    invoices show the states that matter — one settled, one still owing — so
+    the summary has a collected total and an outstanding total rather than a
+    column of noughts.
+    """
+    from datetime import timedelta
+
+    from app.models.platform import Subscription, SubscriptionPlan
+    from app.models.sales import PaymentMethod
+    from app.services import billing
+
+    plan = db.execute(
+        select(SubscriptionPlan).where(SubscriptionPlan.code == "growth")
+    ).scalar_one()
+    subscription = db.execute(
+        select(Subscription).where(Subscription.tenant_id == tenant.id)
+    ).scalar_one()
+    subscription.plan_id = plan.id
+    db.flush()
+
+    today = local_today(tenant.timezone)
+    last_month = today - timedelta(days=30)
+
+    settled = billing.raise_invoice(
+        db,
+        tenant.id,
+        period_start=last_month,
+        period_end=today - timedelta(days=1),
+        actor_label="seed",
+        today=today,
+    )
+    billing.record_payment(
+        db,
+        settled.id,
+        amount=Decimal(plan.monthly_price),
+        method=PaymentMethod.TELEBIRR,
+        paid_on=last_month + timedelta(days=2),
+        reference="TB-DEMO-00412",
+        actor_label="seed",
+        today=today,
+    )
+
+    # This month's, still open, so the platform screen has something owing.
+    billing.raise_invoice(
+        db,
+        tenant.id,
+        period_start=today,
+        period_end=today + timedelta(days=29),
+        actor_label="seed",
+        today=today,
+    )
 
 
 if __name__ == "__main__":

@@ -31,6 +31,9 @@ PREFIXES = {
     "count": "SC",
     "credit": "CR",
     "enquiry": "ENQ",
+    # The platform's charge to one shop.  Numbered per shop, like that
+    # shop's own documents, so each sees a sequence of its own.
+    "subscription_invoice": "SUB",
 }
 
 _SUFFIX = re.compile(r"(\d+)$")

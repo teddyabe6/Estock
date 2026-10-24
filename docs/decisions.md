@@ -93,6 +93,27 @@ answer:
 | Who may list a product on the marketplace? | `shop:manage`, by whichever route — the dedicated toggle or the generic product update. | Listing publishes to a platform-wide audience, which is a shop-level decision rather than a catalogue-editing one. Gating only the dedicated endpoint would make the gate decoration, since `product:manage` could flip the field through a `PATCH`. |
 | Does a request reserve stock? | **No**, exactly as for a single-shop request. Only a shop converting its own proforma to a sale moves anything. | Unchanged from the existing rule, and the reason is the same: anyone with a link could otherwise deplete availability. |
 
+## The billing policy
+
+The platform charges shops for the software. That raises questions the PRD left
+open, because it only asked for subscription *state*, not subscription money:
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Does the platform take payment online? | **No.** A payment is recorded by the platform owner after the money arrives — telebirr, CBE Birr, a bank deposit, cash. | The same reasoning as the marketplace: a gateway means settlement, refunds and reconciliation, and Ethiopian B2B software is paid for by transfer and confirmed by hand. Recording what arrived is the honest model of what happens. |
+| Is a credit note a way of paying? | **No**, refused with the methods that are. | It offsets a receivable inside a shop's own books. No money reaches the platform, so counting it as payment would overstate collection. |
+| Where does the money live? | In `subscription_invoices` and `subscription_payments`, beside `subscriptions`. Neither is tenant-scoped. | It is money between the platform and the shop, not inside the shop's books. A shop's sales ledger has nothing to do with what it owes for the software. |
+| Is an invoice's status stored? | **No.** It, and what is paid and owed, are summed from the payment rows on read. | A stored status would need rewriting on every payment and again every midnight as invoices fell overdue, and would be wrong in between. One invoice a month per shop means there is nothing to optimise. |
+| What happens to a mistake? | A payment is reversed and an invoice voided; neither is deleted. An invoice with payments against it cannot be voided until they are reversed. | What was recorded, and then corrected, has to stay readable. Voiding an invoice with money against it would leave that payment belonging to nothing. |
+| Can a voided period be billed again? | **Yes** — the unique index is partial (`WHERE voided_at IS NULL`). | Voiding is how an error is undone. A plain unique constraint would make the error permanent. |
+| How are invoices numbered? | Sequentially per shop, like that shop's own documents: `SUB-2026-000001`. | A platform-wide sequence would serialise every shop behind one lock. Each shop seeing its own series is also what a shop expects of a supplier. |
+| Does paying restore access? | Paying in full extends the period and lifts read-only. It never lifts a **suspension**. | A platform whose sanctions can be bought off has no sanctions. The money is still recorded and the period still extends — the shop did pay — but readmission is a deliberate, audited judgement. |
+| Does reversing a payment cut a shop off? | **No.** The invoice goes back to owing; the daily lapse run decides access on the period's terms. | A bookkeeping correction is not a judgement about a shop. |
+| What happens when a paid period runs out? | Read-only, exactly as a lapsed trial. Nothing is deleted. | Without it, a shop that stops paying keeps the service for good. With any harsher rule, billing would become a reason to destroy someone's records. |
+| Does the billing run or the lapse run go first? | Billing, then lapsing. | A shop should be asked for the next period while it still has service, and should always have an invoice waiting that it can pay to come back. |
+| Is a shop on no plan billed? | **No**, it is skipped and the reason is reported. | There is no price to charge. Inventing one is worse than raising nothing. |
+| Is a trial charged for? | No. The first invoice starts the day after the trial ends. | A trial is service already given. A shop is never charged for days it was given free. |
+
 ## Decisions made while building that the PRD did not raise
 
 | Decision | Reasoning |

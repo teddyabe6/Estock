@@ -10,14 +10,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.audit import AuditAction, record_audit
+from app.core.db import ZERO_MONEY
 from app.core.deps import Ctx, DbSession
 from app.core.errors import ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
 from app.models.access import BranchAssignment, MembershipStatus, Role, TenantMembership
 from app.models.organisation import Branch, LocationKind, StockLocation
-from app.models.platform import AuditEvent
+from app.models.platform import AuditEvent, Subscription
 from app.schemas.auth import BranchOut, InviteRequest, MembershipOut, UserOut, normalise_et_phone
+from app.services import billing
 from app.services import subscription as subscription_service
 from app.services.onboarding import invitation_link, invite_user, setup_progress
 
@@ -360,6 +362,33 @@ def get_subscription(ctx: Ctx, db: DbSession) -> dict:
     payload["limits"] = [
         limit.as_dict() for limit in subscription_service.limits(db, ctx.tenant_id)
     ]
+    # What the business has been charged and what it still owes.  Read-only
+    # here by design: the invoice is the platform's document, and a business
+    # editing what it was billed would be nonsense.
+    subscription = db.execute(
+        select(Subscription).where(Subscription.tenant_id == ctx.tenant_id)
+    ).scalar_one_or_none()
+    rows, _ = billing.invoices_for_tenant(
+        db, ctx.tenant_id, limit=12, with_payments=True
+    )
+    owing = [
+        billing.balance_due(row.invoice, paid=row.paid)
+        for row in rows
+        if row.invoice.issued_at
+        and not row.invoice.voided_at
+        and billing.balance_due(row.invoice, paid=row.paid) > 0
+    ]
+    payload["billing"] = {
+        "paid_until": (
+            subscription.current_period_ends_on.isoformat()
+            if subscription and subscription.current_period_ends_on
+            else None
+        ),
+        "balance_due": str(sum(owing, ZERO_MONEY)),
+        "unpaid_count": len(owing),
+        "currency": ctx.tenant.currency,
+        "invoices": [row.as_dict(include_payments=True) for row in rows],
+    }
     return payload
 
 

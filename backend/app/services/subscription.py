@@ -113,7 +113,7 @@ def expire_lapsed_trials(db: Session, *, today: date | None = None) -> list[uuid
             entity_id=subscription.id,
             summary="Trial expired; account set to read-only. No data was deleted.",
         )
-        _notify_owners(
+        notify_owners(
             db,
             tenant,
             title="Your trial has ended",
@@ -142,7 +142,7 @@ def warn_expiring_trials(db: Session, *, today: date | None = None) -> int:
         days = (subscription.trial_ends_on - (today or local_today(tenant.timezone))).days
         if days not in EXPIRY_WARNING_DAYS:
             continue
-        if _notify_owners(
+        if notify_owners(
             db,
             tenant,
             title=f"Your trial ends in {days} day(s)",
@@ -153,8 +153,20 @@ def warn_expiring_trials(db: Session, *, today: date | None = None) -> int:
     return warned
 
 
-def _notify_owners(db: Session, tenant: Tenant, *, title: str, body: str) -> int:
-    """Notify each owner once per day for a given notice; returns how many were told."""
+def notify_owners(
+    db: Session,
+    tenant: Tenant,
+    *,
+    title: str,
+    body: str,
+    kind: NotificationKind = NotificationKind.TRIAL_EXPIRY,
+) -> int:
+    """Notify each owner once per day for a given notice; returns how many were told.
+
+    ``kind`` matters as well as the title: the daily de-duplication keys on
+    both, so a trial-expiry notice and a subscription-lapse notice do not
+    suppress one another.
+    """
     from app.core.permissions import Permission
     from app.services.notifications import already_notified_today, recipients_for
 
@@ -164,7 +176,7 @@ def _notify_owners(db: Session, tenant: Tenant, *, title: str, body: str) -> int
             db,
             tenant=tenant,
             user_id=membership.user_id,
-            kind=NotificationKind.TRIAL_EXPIRY,
+            kind=kind,
             title=title,
         ):
             continue
@@ -173,7 +185,7 @@ def _notify_owners(db: Session, tenant: Tenant, *, title: str, body: str) -> int
             Notification(
                 tenant_id=tenant.id,
                 user_id=membership.user_id,
-                kind=NotificationKind.TRIAL_EXPIRY,
+                kind=kind,
                 title=title,
                 body=body,
                 link="/settings#subscription",

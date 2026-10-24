@@ -185,13 +185,16 @@ class Business:
         max_users: int | None = None,
         max_products: int | None = None,
         code: str | None = None,
+        monthly_price: Decimal | str | int = 0,
+        name: str = "Test plan",
     ):
-        """Attach a plan with the given ceilings to this business."""
+        """Attach a plan with the given ceilings and price to this business."""
         from app.models.platform import Subscription, SubscriptionPlan
 
         plan = SubscriptionPlan(
             code=code or f"test-{uuid.uuid4().hex[:8]}",
-            name="Test plan",
+            name=name,
+            monthly_price=Decimal(str(monthly_price)),
             max_branches=max_branches,
             max_users=max_users,
             max_products=max_products,

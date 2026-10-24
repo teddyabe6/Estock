@@ -30,6 +30,9 @@ class NotificationKind(StrEnum):
     #: A customer accepted or declined a proforma.
     PROFORMA_RESPONSE = "proforma_response"
     TRIAL_EXPIRY = "trial_expiry"
+    #: A paid subscription period ran out.  Distinct from TRIAL_EXPIRY so
+    #: the two notices cannot suppress each other in the daily de-duplication.
+    SUBSCRIPTION_EXPIRY = "subscription_expiry"
     IMPORT_COMPLETE = "import_complete"
     GENERAL = "general"
 

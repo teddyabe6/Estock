@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field
@@ -27,11 +28,14 @@ from app.models.platform import (
     FeatureFlag,
     PlatformAdmin,
     Subscription,
+    SubscriptionInvoice,
+    SubscriptionInvoiceStatus,
     SubscriptionPlan,
     Tenant,
     TenantStatus,
 )
-from app.models.sales import Sale
+from app.models.sales import PaymentMethod, Sale
+from app.services import billing
 from app.services import subscription as subscription_service
 
 router = APIRouter(prefix="/platform", tags=["platform admin"])
@@ -217,6 +221,65 @@ def create_plan(payload: PlanIn, admin: PlatformAdminUser, db: DbSession) -> dic
     return {"id": str(plan.id), "code": plan.code}
 
 
+class TenantPlanIn(BaseModel):
+    plan_id: uuid.UUID
+    reason: str | None = None
+
+
+@router.patch("/tenants/{tenant_id}/plan")
+def set_tenant_plan(
+    tenant_id: uuid.UUID, payload: TenantPlanIn, admin: PlatformAdminUser, db: DbSession
+) -> dict:
+    """Move a business onto a plan.
+
+    This is what gives it a price to be billed and ceilings to be held to.
+    Changing plan never takes data away: a business pushed over a ceiling by a
+    smaller plan keeps everything it has and is only refused the next addition
+    (``services/subscription.check_limit``).
+    """
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise NotFoundError("Business not found")
+    plan = db.get(SubscriptionPlan, payload.plan_id)
+    if plan is None:
+        raise NotFoundError("Plan not found")
+
+    subscription = db.execute(
+        select(Subscription).where(Subscription.tenant_id == tenant_id)
+    ).scalar_one_or_none()
+    if subscription is None:
+        subscription = Subscription(tenant_id=tenant_id)
+        db.add(subscription)
+    previous = subscription.plan_id
+    subscription.plan_id = plan.id
+
+    record_audit(
+        db,
+        action=AuditAction.SUBSCRIPTION_CHANGED,
+        tenant_id=tenant_id,
+        actor_platform_admin_id=admin.id,
+        actor_label=admin.email,
+        entity_type="subscription",
+        entity_id=subscription.id,
+        summary=f"Plan set to {plan.code} ({plan.monthly_price} {plan.currency})",
+        payload={"reason": payload.reason, "previous_plan_id": str(previous) if previous else None},
+    )
+    db.flush()
+    return {
+        "tenant_id": str(tenant_id),
+        "plan": {
+            "id": str(plan.id),
+            "code": plan.code,
+            "name": plan.name,
+            "monthly_price": str(plan.monthly_price),
+            "currency": plan.currency,
+        },
+        "limits": [
+            limit.as_dict() for limit in subscription_service.limits(db, tenant_id)
+        ],
+    }
+
+
 class FeatureFlagIn(BaseModel):
     key: str = Field(min_length=2, max_length=64)
     enabled: bool
@@ -337,6 +400,10 @@ def run_daily_jobs(admin: PlatformAdminUser, db: DbSession) -> dict:
     low_stock = run_low_stock_alerts(db)
     expired = subscription_service.expire_lapsed_trials(db)
     warned = subscription_service.warn_expiring_trials(db)
+    # Bill before lapsing, so a shop is asked for the next period while it
+    # still has service rather than after it is cut off.
+    raised = billing.run_billing_cycle(db)
+    lapsed = billing.expire_lapsed_subscriptions(db)
     return {
         "reminders": {
             "considered": reminders.considered,
@@ -347,4 +414,237 @@ def run_daily_jobs(admin: PlatformAdminUser, db: DbSession) -> dict:
         "low_stock_alerts": low_stock.alerts_created,
         "trials_expired": len(expired),
         "trials_warned": warned,
+        "invoices_raised": len(raised.raised),
+        "subscriptions_lapsed": len(lapsed),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Billing: invoices and payments
+# --------------------------------------------------------------------------- #
+
+
+class InvoiceIn(BaseModel):
+    """Charge one shop for one period.
+
+    Everything but the business is optional: left alone, the period follows on
+    from whatever the shop has already paid for and the amount comes from its
+    plan.  All of it can be set, because a platform owner negotiates.
+    """
+
+    tenant_id: uuid.UUID
+    period_start: date | None = None
+    period_end: date | None = None
+    amount: Decimal | None = Field(default=None, ge=0)
+    due_on: date | None = None
+    terms_days: int = Field(billing.DEFAULT_TERMS_DAYS, ge=0, le=365)
+    note: str | None = None
+    #: False raises it as a draft: recorded, editable, not yet owed.
+    issue: bool = True
+
+
+@router.get("/invoices")
+def list_invoices(
+    admin: PlatformAdminUser,
+    db: DbSession,
+    tenant_id: uuid.UUID | None = None,
+    status_filter: SubscriptionInvoiceStatus | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Every shop's invoices, or one shop's, filterable by derived status."""
+    rows, total = billing.list_invoices(
+        db, tenant_id=tenant_id, status=status_filter, limit=limit, offset=offset
+    )
+    names = _tenant_names(db, [row.invoice.tenant_id for row in rows])
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": [
+            {**row.as_dict(), "tenant_name": names.get(row.invoice.tenant_id)}
+            for row in rows
+        ],
+    }
+
+
+@router.post("/invoices", status_code=status.HTTP_201_CREATED)
+def raise_invoice(payload: InvoiceIn, admin: PlatformAdminUser, db: DbSession) -> dict:
+    invoice = billing.raise_invoice(
+        db,
+        payload.tenant_id,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
+        amount=payload.amount,
+        due_on=payload.due_on,
+        terms_days=payload.terms_days,
+        note=payload.note,
+        issue=payload.issue,
+        admin_id=admin.id,
+        actor_label=admin.email,
+    )
+    return billing.invoice_as_dict(invoice)
+
+
+@router.get("/invoices/{invoice_id}")
+def get_invoice(invoice_id: uuid.UUID, admin: PlatformAdminUser, db: DbSession) -> dict:
+    invoice = db.get(SubscriptionInvoice, invoice_id)
+    if invoice is None:
+        raise NotFoundError("Invoice not found")
+    return billing.invoice_as_dict(invoice)
+
+
+@router.post("/invoices/{invoice_id}/issue")
+def issue_invoice(invoice_id: uuid.UUID, admin: PlatformAdminUser, db: DbSession) -> dict:
+    """Turn a draft into something the shop owes."""
+    invoice = billing.issue_invoice(
+        db, invoice_id, admin_id=admin.id, actor_label=admin.email
+    )
+    return billing.invoice_as_dict(invoice)
+
+
+class VoidInvoiceIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/invoices/{invoice_id}/void")
+def void_invoice(
+    invoice_id: uuid.UUID, payload: VoidInvoiceIn, admin: PlatformAdminUser, db: DbSession
+) -> dict:
+    """Cancel an invoice raised in error.  It is kept, never deleted."""
+    invoice = billing.void_invoice(
+        db, invoice_id, reason=payload.reason, admin_id=admin.id, actor_label=admin.email
+    )
+    return billing.invoice_as_dict(invoice)
+
+
+class SubscriptionPaymentIn(BaseModel):
+    amount: Decimal = Field(gt=0)
+    method: PaymentMethod
+    paid_on: date | None = None
+    #: The telebirr transaction number, the bank slip, the deposit reference.
+    reference: str | None = Field(default=None, max_length=120)
+    note: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=160)
+
+
+@router.post("/invoices/{invoice_id}/payments", status_code=status.HTTP_201_CREATED)
+def record_subscription_payment(
+    invoice_id: uuid.UUID,
+    payload: SubscriptionPaymentIn,
+    admin: PlatformAdminUser,
+    db: DbSession,
+) -> dict:
+    """Record money received, and renew the service if it settles the invoice."""
+    result = billing.record_payment(
+        db,
+        invoice_id,
+        amount=payload.amount,
+        method=payload.method,
+        paid_on=payload.paid_on,
+        reference=payload.reference,
+        note=payload.note,
+        idempotency_key=payload.idempotency_key,
+        admin_id=admin.id,
+        actor_label=admin.email,
+    )
+    return {
+        "payment": billing.payment_as_dict(result.payment),
+        "invoice": billing.invoice_as_dict(result.invoice),
+        "renewed": result.renewed,
+        "tenant_status": str(result.tenant_status) if result.tenant_status else None,
+        "warnings": result.warnings,
+    }
+
+
+class ReversePaymentIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/payments/{payment_id}/reverse")
+def reverse_subscription_payment(
+    payment_id: uuid.UUID,
+    payload: ReversePaymentIn,
+    admin: PlatformAdminUser,
+    db: DbSession,
+) -> dict:
+    """Undo a payment recorded in error, keeping the original row."""
+    payment = billing.reverse_payment(
+        db, payment_id, reason=payload.reason, admin_id=admin.id, actor_label=admin.email
+    )
+    return {
+        "payment": billing.payment_as_dict(payment),
+        "invoice": billing.invoice_as_dict(payment.invoice) if payment.invoice else None,
+    }
+
+
+@router.get("/billing/summary")
+def billing_summary(admin: PlatformAdminUser, db: DbSession) -> dict:
+    """What the platform has billed, taken and is owed, across every shop."""
+    return billing.billing_summary(db).as_dict()
+
+
+@router.get("/tenants/{tenant_id}/billing")
+def tenant_billing(
+    tenant_id: uuid.UUID,
+    admin: PlatformAdminUser,
+    db: DbSession,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """One shop's billing history, and what it currently owes."""
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise NotFoundError("Business not found")
+    return _tenant_billing_payload(db, tenant, limit=limit, offset=offset)
+
+
+@router.post("/billing/run")
+def run_billing(admin: PlatformAdminUser, db: DbSession) -> dict:
+    """Raise the next invoice for every shop whose period is nearly up.
+
+    Safe to run twice: a shop already billed for its next period is skipped.
+    """
+    return billing.run_billing_cycle(db).as_dict()
+
+
+def _tenant_names(db: DbSession, tenant_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """Named once for the whole page rather than once per row."""
+    if not tenant_ids:
+        return {}
+    rows = db.execute(select(Tenant).where(Tenant.id.in_(set(tenant_ids)))).scalars()
+    return {tenant.id: tenant.name for tenant in rows}
+
+
+def _tenant_billing_payload(db, tenant: Tenant, *, limit: int, offset: int) -> dict:
+    # One shop's own screen: show what it actually paid, and when.
+    rows, total = billing.invoices_for_tenant(
+        db, tenant.id, limit=limit, offset=offset, with_payments=True
+    )
+    subscription = db.execute(
+        select(Subscription).where(Subscription.tenant_id == tenant.id)
+    ).scalar_one_or_none()
+    owing = [
+        billing.balance_due(row.invoice, paid=row.paid)
+        for row in rows
+        if row.invoice.issued_at
+        and not row.invoice.voided_at
+        and billing.balance_due(row.invoice, paid=row.paid) > 0
+    ]
+    return {
+        "tenant_id": str(tenant.id),
+        "tenant_name": tenant.name,
+        "tenant_status": str(tenant.status),
+        "currency": tenant.currency,
+        "paid_until": (
+            subscription.current_period_ends_on.isoformat()
+            if subscription and subscription.current_period_ends_on
+            else None
+        ),
+        "balance_due": str(sum(owing, Decimal("0.00"))),
+        "unpaid_count": len(owing),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "invoices": [row.as_dict(include_payments=True) for row in rows],
     }

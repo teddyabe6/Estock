@@ -450,6 +450,68 @@ When a trial lapses the business becomes read-only: existing data stays visible
 and untouched, new posting is refused with a clear message. Nothing is deleted.
 `require_writable` is the dependency that enforces it on posting routes.
 
+A paid subscription that runs out does exactly the same thing
+(`billing.expire_lapsed_subscriptions`). Without that, a shop that stopped
+paying would keep the service for good; with a different promise, billing would
+be a reason to delete someone's books. It is the same rule, applied to the same
+state, for the same reason.
+
+## Billing
+
+A subscription said which plan a shop was on and when its period ended. That is
+enough to decide whether to let it in, and not enough to run a platform: "which
+shops have paid, which owe me, how much is overdue" had no answer.
+`SubscriptionInvoice` and `SubscriptionPayment` are that answer, and
+`app/services/billing.py` holds the rules.
+
+Neither table is tenant-scoped. The money is between the platform and the shop
+rather than inside the shop's own books, so both carry `tenant_id` as a plain
+foreign key and sit beside `subscriptions`, which does the same. The platform
+reads them across shops as a matter of course; a shop reads its own through one
+endpoint that filters explicitly, and can never write to them — the invoice is
+the platform's document.
+
+Nothing about the money is stored twice. An invoice holds what was charged and
+payments hold what arrived; what is paid, owed, overdue or settled is summed
+from those rows on read. A shop gets one invoice a month, so there is nothing to
+optimise, and a derived figure cannot disagree with the rows it came from. There
+is no `status` or `amount_paid` column to fall out of step — the same reasoning
+as the derived credit status and the derived marketplace request status.
+
+A correction keeps the original. A payment recorded in error is reversed, not
+deleted; an invoice raised in error is voided, not removed. An invoice with
+money against it refuses to be voided at all, because voiding it would leave
+that payment belonging to nothing — reverse the payments first, and both
+corrections are on the record in the order they happened.
+
+Invoices are numbered per shop, from the same locked-sequence machinery as that
+shop's own sales and proformas: `SUB-2026-000001`. A platform-wide sequence
+would serialise every shop behind one lock, which is the same reason a
+cross-shop marketplace request gets a random reference instead.
+
+The database constraint is a **partial** unique index — one invoice per shop per
+period *where `voided_at IS NULL`*. A plain unique constraint would have made a
+mistake permanent: voiding is how an invoice raised in error is undone, so the
+period has to be billable again afterwards. Both PostgreSQL and SQLite support
+partial indexes, and `scripts/demo.sh` migrates SQLite.
+
+### Billing decides access, in one direction only
+
+Paying an invoice in full extends the paid-for period and can bring a shop back
+from read-only. It can never lift a suspension. Suspension is a decision about
+conduct, and a platform whose sanctions can be bought off has no sanctions; the
+money is still recorded and the period still extends, because the shop did pay,
+but getting back in takes a deliberate, audited change of status.
+
+Reversing a payment does not take access away either. The invoice goes back to
+owing, which is the honest state, but a bookkeeping correction is not a
+judgement about a shop — the daily lapse run makes that on the period's own
+terms.
+
+The daily run bills before it lapses, so a shop is asked for the next period
+while it still has service rather than after it is cut off, and there is always
+an invoice waiting to be paid to come back.
+
 ## Where extension points are
 
 | Need | Where |
