@@ -39,7 +39,7 @@ from app.models.sales import (
     SaleStatus,
 )
 from app.services import credit as credit_service
-from app.services.inventory import StockPosting, post_movement
+from app.services.inventory import MovementRefs, StockPosting, post_movement
 from app.services.numbering import next_number
 from app.services.pricing import quantize_money
 
@@ -215,12 +215,18 @@ def create_sale(db: Session, ctx: AuthContext, data: SaleInput) -> SaleResult:
         Decimal(ctx.tenant.default_tax_rate) if ctx.tenant.default_tax_rate is not None else None
     )
 
+    # Every line's variant and the one location, resolved in two queries for
+    # the whole sale rather than per line — and shared with post_movement,
+    # which needs the same objects.
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in data.lines],
+        location_ids=[location.id],
+    )
+
     for index, line_input in enumerate(data.lines):
-        variant = db.execute(
-            tenant_query(ProductVariant, ctx.tenant_id).where(
-                ProductVariant.id == line_input.variant_id
-            )
-        ).scalar_one_or_none()
+        variant = refs.get_variant(line_input.variant_id)
         if variant is None:
             raise NotFoundError("Product not found")
         if not variant.is_active or not variant.product.is_active:
@@ -275,6 +281,7 @@ def create_sale(db: Session, ctx: AuthContext, data: SaleInput) -> SaleResult:
                     idempotency_key=f"sale:{sale.id}:{index}",
                     note=f"Sale {sale.number}",
                 ),
+                refs=refs,
                 occurred_at=sold_at,
             )
 
@@ -406,6 +413,12 @@ def void_sale(db: Session, ctx: AuthContext, sale_id: uuid.UUID, *, reason: str)
     if not reason:
         raise ValidationError("A reason is required to void a sale")
 
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in sale.lines],
+        location_ids=[sale.location_id],
+    )
     for index, line in enumerate(sale.lines):
         post_movement(
             db,
@@ -421,6 +434,7 @@ def void_sale(db: Session, ctx: AuthContext, sale_id: uuid.UUID, *, reason: str)
                 idempotency_key=f"sale-void:{sale.id}:{index}",
                 note=f"Void of sale {sale.number}: {reason}",
             ),
+            refs=refs,
         )
 
     credit_transaction = db.execute(

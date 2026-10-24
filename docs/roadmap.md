@@ -20,7 +20,7 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | Publish online and receive an enquiry from the same catalogue | `test_the_storefront_uses_the_same_catalogue_and_stock`, `test_an_enquiry_reserves_no_stock` |
 | Share a proforma without posting a sale or reducing stock | `test_a_proforma_is_not_a_sale_until_it_is_converted` |
 | A customer fills a basket, requests a proforma, and the seller confirms it | `test_storefront.py` (22 tests: pricing from the catalogue, customer matching, review, sending, cancelling, photos) |
-| Reports agree with transactions and respect permissions | `test_permissions.py`, `test_profit_figures_are_withheld_without_cost_view` |
+| Reports agree with transactions and respect permissions | `test_permissions.py`, `test_profit_figures_are_withheld_without_cost_view`, and a sweep of every cost-bearing route for a caller without `cost:view` |
 | Trial expiry applies the policy without deleting data | `test_an_expired_trial_restricts_access_without_deleting_data` |
 | Security: rate limiting, account recovery, read-only support access | `test_repeated_failed_sign_ins_are_rate_limited`, `test_password_reset_round_trip`, `test_support_access_can_look_but_not_touch` |
 | Concurrent sales, duplicate submissions and retries | `test_concurrency.py`, including a PostgreSQL-only test of two transactions numbering at once |
@@ -104,6 +104,13 @@ customer communications, marketplace and discovery, accounting integrations.
   returns to stock with money back are not yet modelled.
 - **Reminder scheduling** runs hourly from a single worker. That is right for
   the current scale and will need a proper queue before it is not.
+- **Query counts** are pinned only for the operations that post one stock
+  movement per line (`test_query_counts.py`). List and report endpoints have no
+  such guard, so an N+1 there would not be caught by the suite.
+- **The test suite is not safe to run twice at once** against one PostgreSQL
+  database: the session fixture drops and recreates the schema, so two
+  concurrent runs destroy each other. Use separate databases, or the SQLite
+  path, when running in parallel.
 - **Rate limiting** is per process. Sign-in, password reset and storefront
   submissions are limited in memory, which is right for one container; a
   multi-worker deployment needs the same limits at the reverse proxy or a

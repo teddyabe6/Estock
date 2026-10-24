@@ -25,6 +25,7 @@ from app.services.inventory import (
     start_count,
     update_average_cost,
 )
+from app.services.purchasing import PurchaseInput, PurchaseLineInput, receive_purchase
 
 
 def test_opening_stock_creates_an_auditable_movement(business):
@@ -378,6 +379,43 @@ def test_weighted_average_cost_after_a_receipt(business):
 
     update_average_cost(variant, Decimal("10"), Decimal("20"), Decimal("10"))
     assert variant.average_cost == Decimal("15.00")
+
+
+def test_average_cost_compounds_across_two_lines_for_the_same_variant(business):
+    """Receiving one variant on two lines of a purchase costs each line in turn.
+
+    The before-quantity for each line comes from the movement that line
+    posted, so the second line must see the first line's units already on
+    hand.  10 on hand at 10.00, then 10 at 20.00, then 20 at 40.00 gives
+    15.00 and then 27.50 — not 20.00, which is what pricing both lines
+    against the opening balance would give.
+    """
+    product = business.add_product("Sugar", purchase_price="10", opening_stock="10")
+    variant = product.default_variant
+    supplier = business.add_supplier()
+    assert variant.average_cost == Decimal("10.00")
+
+    receive_purchase(
+        business.db,
+        business.ctx,
+        PurchaseInput(
+            lines=[
+                PurchaseLineInput(
+                    variant_id=variant.id, quantity=Decimal("10"), unit_cost=Decimal("20")
+                ),
+                PurchaseLineInput(
+                    variant_id=variant.id, quantity=Decimal("20"), unit_cost=Decimal("40")
+                ),
+            ],
+            supplier_id=supplier.id,
+        ),
+    )
+    business.db.flush()
+
+    assert variant.average_cost == Decimal("27.50")
+    assert get_balance(
+        business.db, business.ctx.tenant_id, variant.id, business.location.id
+    ) == Decimal("40")
 
 
 def test_average_cost_takes_over_when_nothing_is_on_hand(business):

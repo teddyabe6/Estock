@@ -10,6 +10,7 @@ import pytest
 
 from app.core.errors import PermissionDenied
 from app.core.permissions import Permission, RoleName, permissions_for_role
+from app.core.tenancy import COST_BEARING_FIELDS
 from app.services.catalogue import ProductInput, create_product
 from app.services.inventory import adjust_stock
 from app.services.reports import DateRange, branch_comparison, sales_summary
@@ -231,6 +232,121 @@ def test_api_hides_cost_fields_from_a_salesperson(client, business):
     assert owner_view["items"][0]["variants"][0]["landed_cost"] == "60.00"
     assert sales_view["items"][0]["variants"][0]["landed_cost"] is None
     assert sales_view["items"][0]["variants"][0]["selling_price"] == "100.00"
+
+
+#: Routes a cost-blind user can reach that return priced records.  Each is
+#: swept for every name in ``COST_BEARING_FIELDS``, so a new endpoint that
+#: forgets to withhold cost fails here rather than in production.
+COST_BEARING_ROUTES = (
+    "/api/v1/products",
+    "/api/v1/stock/levels",
+    "/api/v1/sales",
+    "/api/v1/dashboard",
+)
+
+
+def _cost_values(payload, found=None):
+    """Every value in a response that sits under a cost-bearing field name."""
+    found = [] if found is None else found
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in COST_BEARING_FIELDS:
+                found.append((key, value))
+            else:
+                _cost_values(value, found)
+    elif isinstance(payload, list):
+        for item in payload:
+            _cost_values(item, found)
+    return found
+
+
+def test_no_route_leaks_a_cost_field_to_a_user_without_cost_view(client, business):
+    """The invariant, swept rather than trusted to each endpoint (PRD 8.2).
+
+    The owner's view of the same routes must carry real cost figures, or this
+    test would pass by looking at nothing.
+    """
+    product = business.add_product(
+        "Swept", selling_price="100", purchase_price="60", opening_stock="5"
+    )
+    business.sell(product, quantity="2")
+    user, _ = business.add_user(RoleName.SALESPERSON)
+
+    seen_for_owner = 0
+    for route in COST_BEARING_ROUTES:
+        as_owner = client.get(route, headers=business.headers())
+        assert as_owner.status_code == 200, (route, as_owner.json())
+        owner_costs = _cost_values(as_owner.json())
+        seen_for_owner += sum(1 for _, value in owner_costs if value is not None)
+
+        as_salesperson = client.get(route, headers=business.headers(user))
+        assert as_salesperson.status_code == 200, (route, as_salesperson.json())
+        leaked = [
+            (name, value)
+            for name, value in _cost_values(as_salesperson.json())
+            if value is not None
+        ]
+        assert leaked == [], f"{route} leaked {leaked}"
+
+    assert seen_for_owner > 0, "the sweep found no cost fields at all; it proves nothing"
+
+
+def test_purchase_costs_are_not_reachable_by_granting_purchase_view(client, business):
+    """A cost-blind user granted purchase:view must still not see unit costs.
+
+    Every default role that holds purchase:view also holds cost:view, so the
+    purchasing routes could rely on that coincidence instead of checking cost
+    visibility themselves.  One per-user grant breaks the coincidence, and a
+    purchase carries the unit and landed cost of everything received.
+    """
+    product = business.add_product("Thing", purchase_price="60", opening_stock="0")
+    supplier = business.add_supplier()
+    client.post(
+        "/api/v1/purchases",
+        json={
+            "supplier_id": str(supplier.id),
+            "lines": [
+                {
+                    "variant_id": str(product.default_variant.id),
+                    "quantity": "10",
+                    "unit_cost": "60.00",
+                }
+            ],
+        },
+        headers=business.headers(),
+    ).raise_for_status()
+
+    user, _ = business.add_user(RoleName.SALESPERSON)
+    membership = _membership_of(business, user)
+    business.grant(membership, Permission.PURCHASE_VIEW)
+
+    listed = client.get("/api/v1/purchases", headers=business.headers(user))
+    assert listed.status_code == 403, listed.json()
+    assert "cost:view" in listed.json()["details"]["missing_permissions"]
+
+
+def test_cost_view_alone_does_not_open_purchasing(client, business):
+    """The two permissions are both required, not interchangeable."""
+    user, _ = business.add_user(RoleName.SALESPERSON)
+    membership = _membership_of(business, user)
+    business.grant(membership, Permission.COST_VIEW)
+
+    response = client.get("/api/v1/purchases", headers=business.headers(user))
+    assert response.status_code == 403
+    assert "purchase:view" in response.json()["details"]["missing_permissions"]
+
+
+def _membership_of(business, user):
+    from app.models.access import TenantMembership
+
+    return (
+        business.db.query(TenantMembership)
+        .filter(
+            TenantMembership.tenant_id == business.tenant.id,
+            TenantMembership.user_id == user.id,
+        )
+        .one()
+    )
 
 
 def test_api_refuses_a_forbidden_action_with_403(client, business):

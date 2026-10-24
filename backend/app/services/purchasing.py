@@ -33,8 +33,8 @@ from app.models.purchasing import Purchase, PurchaseLine, PurchaseStatus
 from app.models.sales import Payment, PaymentDirection, PaymentMethod
 from app.services import credit as credit_service
 from app.services.inventory import (
+    MovementRefs,
     StockPosting,
-    get_balance,
     post_movement,
     update_average_cost,
 )
@@ -114,17 +114,22 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
     )
     received_at = data.received_at or utcnow()
 
+    # Every line's variant and the one location, resolved in two queries for
+    # the whole purchase and shared with post_movement below.  get_variant
+    # rather than variant so an unknown id stays a ValidationError here.
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in data.lines],
+        location_ids=[location.id],
+    )
     variants: list[ProductVariant] = []
     for line in data.lines:
         if Decimal(line.quantity) <= 0:
             raise ValidationError("Purchase quantities must be positive")
         if Decimal(line.unit_cost) < 0:
             raise ValidationError("Unit cost cannot be negative")
-        variant = db.execute(
-            tenant_query(ProductVariant, ctx.tenant_id).where(
-                ProductVariant.id == line.variant_id
-            )
-        ).scalar_one_or_none()
+        variant = refs.get_variant(line.variant_id)
         if variant is None:
             raise ValidationError("Product not found")
         variants.append(variant)
@@ -184,8 +189,7 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
         landed_unit_cost = quantize_money(purchase_line.landed_unit_cost)
 
         if variant.product.track_stock:
-            on_hand_before = get_balance(db, ctx.tenant_id, variant.id, location.id)
-            post_movement(
+            movement = post_movement(
                 db,
                 ctx,
                 StockPosting(
@@ -200,7 +204,11 @@ def receive_purchase(db: Session, ctx: AuthContext, data: PurchaseInput) -> Purc
                     note=f"Purchase {purchase.number}",
                 ),
                 occurred_at=received_at,
+                refs=refs,
             )
+            # The movement already read the balance under its lock, so take the
+            # before-quantity from it rather than reading the same row again.
+            on_hand_before = Decimal(movement.balance_after) - Decimal(movement.quantity)
             update_average_cost(variant, quantity, landed_unit_cost, on_hand_before)
         else:
             variant.average_cost = landed_unit_cost

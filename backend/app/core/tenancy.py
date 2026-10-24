@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from sqlalchemy import ColumnElement, Select, or_, select
 from sqlalchemy.orm import Session
@@ -184,21 +184,29 @@ def resolve_location(
     return location
 
 
-def scrub_cost_fields(ctx: AuthContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """Drop cost and profit fields for users without ``cost:view`` (PRD 8.2)."""
-    if ctx.has(Permission.COST_VIEW):
-        return payload
-    hidden = {
+#: Response fields that reveal what something cost or what it earned, and so
+#: must not reach a caller without ``cost:view`` (PRD 8.2).
+#:
+#: Serializers withhold these at the point they build a response — see
+#: ``variant_out`` and ``sale_out`` in ``app/api/v1/serializers.py``.  Keeping
+#: the names in one place is what lets ``test_permissions`` sweep every
+#: cost-bearing route and fail if a new one forgets, rather than relying on
+#: whoever adds the next endpoint to remember.
+COST_BEARING_FIELDS: frozenset[str] = frozenset(
+    {
         "purchase_price",
         "transport_cost",
         "other_costs",
         "landed_cost",
         "average_cost",
+        "allocated_cost",
         "cost_total",
+        "cost_of_goods",
         "unit_cost",
+        "goods_total",
         "gross_profit",
         "profit",
         "margin",
         "stock_value_at_cost",
     }
-    return {k: v for k, v in payload.items() if k not in hidden}
+)

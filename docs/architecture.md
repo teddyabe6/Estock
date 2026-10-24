@@ -67,6 +67,17 @@ require touching business logic.
 Per-user grants and revocations sit on top of the bundle, so one cashier can be
 given cost visibility without inventing a new role.
 
+That flexibility is also why cost visibility cannot be inferred from another
+permission. Every default role holding `purchase:view` also holds `cost:view`,
+so the purchasing routes could read a purchase — unit cost, landed cost,
+allocated transport — while checking only the former. One grant separates the
+two. Reading a purchase now requires both, and `COST_BEARING_FIELDS` in
+`app/core/tenancy.py` names every field that reveals cost or profit so
+`test_permissions.py` can sweep each route and fail if a new one forgets,
+rather than relying on whoever adds the next endpoint to remember. Receiving a
+purchase is the exception, and says so: the caller supplies the costs, so the
+response tells them nothing they did not send.
+
 ### 3. Stock is an append-only ledger with a proven cache
 
 `StockMovement` is the source of truth: every change is a signed row with a
@@ -208,6 +219,43 @@ a sale is *captured*, not when it is sent, so a queued sale replayed after an
 ambiguous failure returns the record the server already created instead of
 producing a second one. Without server-side idempotency, an offline queue would
 be a duplicate-sales generator.
+
+## One lookup per operation, not per line
+
+A sale, purchase, transfer or stock count posts one movement per line, and
+`post_movement` needs two things every time: the line's variant (for
+`track_stock` and the product id) and the operation's location (for its
+branch). Resolving those inside the loop made the query count grow about five
+times faster than the number of lines — and the variant's product was
+lazy-loaded on top, one row at a time.
+
+`MovementRefs` resolves them once for the whole operation and is passed down to
+each posting. Every object still comes through `tenant_query`, so the tenant
+check is exactly where it was; it happens once per operation instead of once
+per line. Constructed with no ids it behaves as before — each object fetched on
+first use, then reused — so callers posting a single movement are unaffected.
+
+At thirty lines:
+
+| Operation | Queries before | After |
+| --- | --- | --- |
+| Post a sale | 285 | 168 |
+| Receive a purchase | 322 | 204 |
+| Draft a transfer | 41 | 12 (flat) |
+| Dispatch a transfer | 184 | 126 |
+| Receive a transfer | 214 | 156 |
+| Post a stock count | 184 | 126 |
+
+What remains per line is the work a line genuinely needs: its idempotency
+check, the `SELECT … FOR UPDATE` on its balance row, and the writes. The
+idempotency keys could be batch-checked too, which would save one more query a
+line, but that check is what makes offline replay safe and it is not worth
+putting a cache in front of for the sake of fifteen percent.
+
+`tests/test_query_counts.py` pins the shape rather than a number: adding lines
+may add the writes a line needs, but it must not add another read of the
+catalogue or the location. An absolute budget would break on any unrelated
+query change and teach people to raise the number.
 
 ## Portability, and why the tests run on two databases
 

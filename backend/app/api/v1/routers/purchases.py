@@ -24,7 +24,12 @@ router = APIRouter(prefix="/purchases", tags=["purchasing"])
 
 @router.post("", response_model=PurchaseResponse, status_code=status.HTTP_201_CREATED)
 def receive(payload: PurchaseIn, ctx: WritableCtx, db: DbSession) -> PurchaseResponse:
-    """Receive stock, allocate shared costs and open a payable if unpaid."""
+    """Receive stock, allocate shared costs and open a payable if unpaid.
+
+    This one does not need ``cost:view``, unlike reading a purchase back: the
+    caller supplies the unit and shared costs in the request, so the response
+    tells them nothing they did not already send.
+    """
     result = receive_purchase(
         db,
         ctx,
@@ -72,7 +77,12 @@ def list_purchases(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Page[PurchaseOut]:
-    ctx.require(Permission.PURCHASE_VIEW)
+    # A purchase is a cost document: unit cost, landed cost and allocated
+    # transport for everything received.  Reading one therefore needs cost
+    # visibility as well as purchasing access — every default role that holds
+    # purchase:view also holds cost:view, but a per-user grant can separate
+    # them, and the costs must not follow (PRD 8.2).
+    ctx.require(Permission.PURCHASE_VIEW, Permission.COST_VIEW)
     allowed = ctx.visible_branch_ids(db)
     if branch_id is not None:
         ctx.require_branch(branch_id)
@@ -96,7 +106,7 @@ def list_purchases(
 
 @router.get("/{purchase_id}", response_model=PurchaseOut)
 def get_purchase(purchase_id: uuid.UUID, ctx: Ctx, db: DbSession) -> PurchaseOut:
-    ctx.require(Permission.PURCHASE_VIEW)
+    ctx.require(Permission.PURCHASE_VIEW, Permission.COST_VIEW)
     purchase = get_tenant_object(db, Purchase, purchase_id, ctx.tenant_id, label="Purchase")
     ctx.require_branch(purchase.branch_id)
     return PurchaseOut.model_validate(purchase)

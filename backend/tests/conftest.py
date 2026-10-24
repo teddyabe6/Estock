@@ -178,6 +178,18 @@ class Business:
         self.db.refresh(membership)
         return user, build_auth_context(user, self.tenant, membership)
 
+    def grant(self, membership: TenantMembership, permission, *, granted: bool = True) -> None:
+        """Add or revoke one permission on top of a membership's role bundle."""
+        from app.models.access import UserPermissionGrant
+
+        self.db.add(
+            UserPermissionGrant(
+                membership_id=membership.id, permission=permission, granted=granted
+            )
+        )
+        self.db.flush()
+        self.db.refresh(membership)
+
     def add_branch(self, name: str) -> tuple[Branch, StockLocation]:
         branch = Branch(tenant_id=self.tenant.id, name=name)
         self.db.add(branch)

@@ -8,12 +8,13 @@ codebase writes ``StockBalance``.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.audit import AuditAction, record_audit
 from app.core.db import supports_row_locks, utcnow
@@ -55,13 +56,103 @@ class StockPosting:
     idempotency_key: str | None = None
 
 
-def _load_variant(db: Session, tenant_id: uuid.UUID, variant_id: uuid.UUID) -> ProductVariant:
+def _variant_query(tenant_id: uuid.UUID):
+    """Variants with their product joined in.
+
+    ``track_stock`` and ``is_active`` live on the product, so every caller
+    reaches for it; joining beats a lazy load per row.  ``product`` is
+    many-to-one, so the join adds no duplicate rows.
+    """
+    return tenant_query(ProductVariant, tenant_id).options(
+        joinedload(ProductVariant.product)
+    )
+
+
+def load_variant(db: Session, tenant_id: uuid.UUID, variant_id: uuid.UUID) -> ProductVariant:
+    """One variant, or :class:`NotFoundError`."""
     variant = db.execute(
-        tenant_query(ProductVariant, tenant_id).where(ProductVariant.id == variant_id)
+        _variant_query(tenant_id).where(ProductVariant.id == variant_id)
     ).scalar_one_or_none()
     if variant is None:
         raise NotFoundError("Product not found")
     return variant
+
+
+class MovementRefs:
+    """Variants and locations resolved once for an operation posting many movements.
+
+    :func:`post_movement` needs the variant on every call (for ``track_stock``
+    and the product id) and the location (for its branch).  An operation that
+    posts one movement per line — a sale, a purchase, a transfer, a count —
+    was resolving both again for every line, against the same location each
+    time, and lazy-loading the variant's product on top of that.
+
+    Prefetching turns that into two queries for the whole operation.  Every
+    object still comes through :func:`tenant_query`, so the tenant check is
+    exactly where it was; it just happens once instead of once per line.
+
+    Passing no ids keeps the old behaviour: each object is fetched on first
+    use and then reused, so callers that post a single movement are unaffected.
+    """
+
+    __slots__ = ("_db", "_tenant_id", "_variants", "_locations")
+
+    def __init__(
+        self,
+        db: Session,
+        tenant_id: uuid.UUID,
+        *,
+        variant_ids: Iterable[uuid.UUID] = (),
+        location_ids: Iterable[uuid.UUID] = (),
+    ):
+        self._db = db
+        self._tenant_id = tenant_id
+        self._variants: dict[uuid.UUID, ProductVariant] = {}
+        self._locations: dict[uuid.UUID, StockLocation] = {}
+
+        wanted_variants = {vid for vid in variant_ids if vid is not None}
+        if wanted_variants:
+            rows = db.execute(
+                _variant_query(tenant_id).where(ProductVariant.id.in_(wanted_variants))
+            ).scalars()
+            self._variants = {row.id: row for row in rows}
+
+        wanted_locations = {lid for lid in location_ids if lid is not None}
+        if wanted_locations:
+            rows = db.execute(
+                tenant_query(StockLocation, tenant_id).where(
+                    StockLocation.id.in_(wanted_locations)
+                )
+            ).scalars()
+            self._locations = {row.id: row for row in rows}
+
+    def get_variant(self, variant_id: uuid.UUID) -> ProductVariant | None:
+        """The variant, or ``None`` — for callers that raise their own error."""
+        if variant_id not in self._variants:
+            found = self._db.execute(
+                _variant_query(self._tenant_id).where(ProductVariant.id == variant_id)
+            ).scalar_one_or_none()
+            if found is None:
+                return None
+            self._variants[variant_id] = found
+        return self._variants[variant_id]
+
+    def variant(self, variant_id: uuid.UUID) -> ProductVariant:
+        variant = self.get_variant(variant_id)
+        if variant is None:
+            raise NotFoundError("Product not found")
+        return variant
+
+    def location(self, location_id: uuid.UUID) -> StockLocation:
+        if location_id not in self._locations:
+            self._locations[location_id] = get_tenant_object(
+                self._db,
+                StockLocation,
+                location_id,
+                self._tenant_id,
+                label="Stock location",
+            )
+        return self._locations[location_id]
 
 
 def _lock_balance(
@@ -111,11 +202,16 @@ def post_movement(
     *,
     occurred_at: datetime | None = None,
     allow_negative: bool | None = None,
+    refs: MovementRefs | None = None,
 ) -> StockMovement:
     """Append a ledger entry and update the cached balance atomically.
 
     Refuses to drive stock negative unless the business has explicitly enabled
     it and the actor may approve the exception (PRD 9).
+
+    An operation posting several movements should pass a :class:`MovementRefs`
+    prefetched with its variants and locations, so they are resolved once for
+    the operation rather than once per movement.
     """
     quantity = Decimal(posting.quantity)
     if quantity == 0:
@@ -125,10 +221,9 @@ def post_movement(
     if posting.reason in STOCK_OUT_REASONS and quantity > 0:
         raise ValidationError(f"{posting.reason} must reduce stock")
 
-    variant = _load_variant(db, ctx.tenant_id, posting.variant_id)
-    location = get_tenant_object(
-        db, StockLocation, posting.location_id, ctx.tenant_id, label="Stock location"
-    )
+    refs = refs or MovementRefs(db, ctx.tenant_id)
+    variant = refs.variant(posting.variant_id)
+    location = refs.location(posting.location_id)
 
     if posting.idempotency_key:
         existing = db.execute(
@@ -318,10 +413,11 @@ def create_transfer(
     db.add(transfer)
     db.flush()
 
+    refs = MovementRefs(db, ctx.tenant_id, variant_ids=[variant_id for variant_id, _ in lines])
     for variant_id, quantity in lines:
         if Decimal(quantity) <= 0:
             raise ValidationError("Transfer quantities must be positive")
-        variant = _load_variant(db, ctx.tenant_id, variant_id)
+        variant = refs.variant(variant_id)
         transfer.lines.append(
             StockTransferLine(
                 transfer_id=transfer.id,
@@ -343,6 +439,12 @@ def dispatch_transfer(db: Session, ctx: AuthContext, transfer_id: uuid.UUID) -> 
     if transfer.status != TransferStatus.DRAFT:
         raise ConflictError(f"Transfer is already {transfer.status}")
 
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in transfer.lines],
+        location_ids=[transfer.from_location_id],
+    )
     for line in transfer.lines:
         post_movement(
             db,
@@ -357,6 +459,7 @@ def dispatch_transfer(db: Session, ctx: AuthContext, transfer_id: uuid.UUID) -> 
                 idempotency_key=f"transfer-out:{transfer.id}:{line.id}",
                 note=f"Transfer {transfer.reference}",
             ),
+            refs=refs,
         )
 
     transfer.status = TransferStatus.DISPATCHED
@@ -397,6 +500,12 @@ def receive_transfer(
         raise ConflictError("Only a dispatched transfer can be received")
 
     received = received or {}
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in transfer.lines],
+        location_ids=[transfer.to_location_id],
+    )
     for line in transfer.lines:
         quantity_received = Decimal(received.get(line.id, line.quantity_sent))
         if quantity_received < 0:
@@ -421,6 +530,7 @@ def receive_transfer(
                 idempotency_key=f"transfer-in:{transfer.id}:{line.id}",
                 note=f"Transfer {transfer.reference}",
             ),
+            refs=refs,
         )
         shortfall = Decimal(line.quantity_sent) - quantity_received
         if shortfall > 0:
@@ -442,6 +552,7 @@ def receive_transfer(
                 ),
                 # The loss is a correction of what just arrived, not a sale from it.
                 allow_negative=True,
+                refs=refs,
             )
             line.note = ((line.note or "") + f" Shortfall {shortfall} posted as loss.").strip()
 
@@ -511,7 +622,7 @@ def record_count_line(
     if count.status != StockCountStatus.IN_PROGRESS:
         raise ConflictError("This count is no longer open")
 
-    variant = _load_variant(db, ctx.tenant_id, variant_id)
+    variant = load_variant(db, ctx.tenant_id, variant_id)
     expected = get_balance(db, ctx.tenant_id, variant_id, count.location_id)
 
     line = next((line for line in count.lines if line.variant_id == variant_id), None)
@@ -542,6 +653,12 @@ def post_count(db: Session, ctx: AuthContext, count_id: uuid.UUID) -> StockCount
         raise ConflictError("This count has already been posted")
 
     adjustments = 0
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in count.lines],
+        location_ids=[count.location_id],
+    )
     for line in count.lines:
         variance = line.variance
         if variance is None or variance == 0:
@@ -559,6 +676,7 @@ def post_count(db: Session, ctx: AuthContext, count_id: uuid.UUID) -> StockCount
                 source_id=count.id,
                 idempotency_key=f"count:{count.id}:{line.id}",
             ),
+            refs=refs,
         )
         adjustments += 1
 

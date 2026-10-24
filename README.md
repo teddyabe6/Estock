@@ -114,7 +114,7 @@ CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ## Tests
 
 ```bash
-make test              # 279 backend tests on SQLite + 35 mobile tests
+make test              # 290 backend tests on SQLite + 35 mobile tests
 make test-backend-pg   # the same backend suite against PostgreSQL, plus a real concurrency test
 ```
 
@@ -147,7 +147,7 @@ backend/            FastAPI service — the only place business rules live
   app/api/v1/       HTTP routes and response shaping
   app/workers/      Scheduled reminders, alerts and trial expiry
   alembic/          Migrations
-  tests/            279 tests
+  tests/            290 tests
 web/                Next.js app: home, sales and receipts, products and import,
                     stock (receive, adjust, transfer, ledger), online shop
                     (storefront, enquiries, proformas), reports, credit,
