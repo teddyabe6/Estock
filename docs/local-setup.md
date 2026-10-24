@@ -56,7 +56,7 @@ Two things are optional:
 The demo business is **Merkato Wholesale**: two branches, four staff, twelve
 products (two with Amharic names), stock, sales, a supplier payable, an overdue
 receivable, a part return with damaged goods written off, a published
-storefront and a proforma.
+storefront, a marketplace listing and a proforma.
 
 Every password is `demo-password-123`.
 
@@ -90,6 +90,19 @@ phone-sized viewport if you like. Filter by category, open a product, add a few
 things to the basket and request a proforma with your name and phone. You land
 on a tracking link; keep it. Note that stock did not move: a request never
 reserves anything.
+
+**The marketplace.** Open http://localhost:3000/market — the central catalogue,
+where every shop that opted in appears together. The demo shop's published
+products are listed there. The basket spans shops: add from two and the bar
+reads *2 items from 2 shops*. Checking out creates one request of yours
+(`MR-2026-…`) and one proforma per shop, and the tracking link shows each
+shop's reply as it arrives.
+
+To see it with two vendors, register a second business, turn on *List on the
+central marketplace* under Shop, and list a few of its products. Then put
+something from each in one basket and check out: each shop gets only its own
+lines, marked **marketplace** in its Proformas tab, and neither is told who
+else was asked.
 
 **Confirming the request.** As the owner, Shop → Proformas lists it under *New
 requests*, priced from the catalogue. Adjust a price or add a delivery charge,

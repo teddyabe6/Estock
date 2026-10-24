@@ -1064,3 +1064,266 @@ button.link {
   color: var(--text-muted);
   font-size: 0.82rem;
 }
+
+/* --------------------------------------------------------------------------
+   The central marketplace
+
+   Reuses the storefront's cards, chips and basket bar. What is new is the
+   grouping by shop: a buyer needs to see at a glance that one basket means
+   several separate quotations.
+   -------------------------------------------------------------------------- */
+
+/* The browse page marks the active chip with .active, matching the shop page. */
+.chip.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.shop-badge {
+  display: inline-block;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--border);
+}
+
+.shop-badge:hover {
+  color: var(--brand);
+}
+
+.product-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px 6px;
+}
+
+.result-count {
+  margin: 4px 0 10px;
+}
+
+.filter-note,
+.shop-directory,
+.my-requests {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+
+.filter-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.shop-directory ul,
+.my-requests ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.shop-directory summary,
+.my-requests summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.crumbs {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* A product page, where the shop matters as much as the product. */
+.product-detail {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 720px) {
+  .product-detail {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    align-items: start;
+  }
+}
+
+.product-detail .hero {
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  display: grid;
+  place-items: center;
+}
+
+.product-detail .hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.product-info h1 {
+  margin: 0 0 4px;
+}
+
+.sold-by {
+  margin: 6px 0 10px;
+}
+
+.price.large {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.variant-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.product-description h2 {
+  font-size: 1rem;
+  margin: 18px 0 6px;
+}
+
+/* The basket, grouped by shop — one group becomes one quotation. */
+.basket-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin: 12px 0;
+  overflow: hidden;
+}
+
+.basket-group > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.basket-group h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.basket-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.basket-lines > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.basket-lines > li:last-child {
+  border-bottom: 0;
+}
+
+.line-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.line-body p {
+  margin: 2px 0 0;
+}
+
+.basket-total {
+  margin: 10px 0 18px;
+  padding: 0 12px;
+  text-align: right;
+}
+
+/* The caveat reads as its own sentence rather than trailing off the edge. */
+.basket-total .muted {
+  display: block;
+  text-align: left;
+  margin-top: 4px;
+}
+
+.checkout {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.checkout h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+/* The buyer's tracking page: one row per shop. */
+.request-shops {
+  list-style: none;
+  margin: 14px 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.request-shop {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px;
+}
+
+.request-shop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.request-shop-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.request-shop-body p {
+  margin: 0;
+}
+
+.request-details {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 6px;
+}
+
+.request-details h2 {
+  font-size: 1rem;
+  margin: 0 0 6px;
+}
+
+.request-details p {
+  margin: 2px 0;
+}

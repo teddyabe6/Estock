@@ -376,6 +376,74 @@ Product photos are the one kind of upload served without a token. An asset is
 served only when it is flagged public, its id is unguessable, and a new upload
 always gets a new id, so the URL can be cached indefinitely.
 
+## The marketplace, and the one place tenants are crossed
+
+Every shop runs independently and can publish its own storefront at
+`/shop/<slug>`. The marketplace is the other thing: one catalogue at `/market`
+holding the products of every shop that opted in, so a buyer can compare
+vendors and fill one basket from several.
+
+That crosses the line the rest of the system rests on. Everywhere else a read
+goes through `tenant_query(Model, tenant_id)`, which cannot be called without
+a tenant id. The marketplace has to read across shops by definition, so the
+crossing is made **once**, in `app/services/marketplace.py`, and `tenant_query`
+itself names that module as its only exception. The crossing is narrow by
+construction:
+
+- it reads products, variants, categories, stores and stock balances, and
+  nothing else — no customer, credit, sale, purchase, cost or audit row is
+  reachable from a marketplace request;
+- it returns a projection built field by field, never a model instance a
+  caller could walk relationships from;
+- stock is reduced to a boolean, so a rival cannot watch a shop's quantities
+  by polling;
+- it lists only shops that opted in **and** can answer. A suspended shop, or
+  one whose trial has lapsed into read-only, cannot reply to a request, so
+  soliciting it would waste the buyer's time.
+
+Listing is opt-in at two levels and both default to off: the shop joins
+(`OnlineStore.list_on_marketplace`) and marks the products it wants listed
+(`Product.on_marketplace`). Deliberately separate from `is_published`, which
+controls the shop's own page: running your own storefront is not the same
+decision as appearing next to competitors, and a shop may want either, both or
+neither.
+
+## One basket, several shops
+
+A buyer's cross-shop basket becomes one `MarketplaceRequest` — the only
+operational table with no `tenant_id`, because it belongs to the buyer rather
+than to any shop — and one `Quotation` per shop, each priced from that shop's
+own catalogue and each following the review-and-send lifecycle it already had.
+
+Three rules hold it together:
+
+- **Each shop sees only its own part.** A quotation records that it came from
+  the marketplace, because knowing the buyer is probably asking others is fair
+  and useful to a seller. It does not record who else was asked, and nothing
+  joins from a quotation to its siblings.
+- **The buyer sees everything**, through one tracking link given at once.
+  Acceptance is per shop, so they can take one price and leave another.
+- **Nothing reserves stock**, exactly as for a single-shop request.
+
+The request's overall status is derived from its quotations, exactly as a
+customer's credit status is derived from their transactions. A stored column
+would have to be rewritten every time any one of several shops answered, and
+would read "open" forever the first time that was missed. The only thing stored
+about a request's own progress is `withdrawn_at`, which no quotation can imply.
+
+The buyer's reference (`MR-2026-DEDDPF`) is random rather than sequential.
+Tenant documents get their numbers from a locked per-business row, but a
+request spans businesses: a shared sequence would serialise every shop on the
+platform behind one lock, and a sequential public reference would tell anyone
+who asked for two how many requests the platform handles. Each shop's own
+proforma keeps its ordinary sequential number.
+
+Withdrawal cancels the proformas no shop has answered yet and leaves the ones
+already sent alone — silently cancelling work a shop has done would be rude,
+and the buyer declines those individually. Either way it is written to each
+shop's own audit log, with the buyer named as the actor since they have no
+account.
+
 ## Trial expiry
 
 When a trial lapses the business becomes read-only: existing data stays visible

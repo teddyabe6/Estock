@@ -200,6 +200,23 @@ class PaymentOut(Schema):
     reversal_reason: str | None = None
 
 
+class MarketplaceBasketItemIn(BaseModel):
+    variant_id: uuid.UUID
+    quantity: Decimal = Field(gt=0)
+
+
+class MarketplaceRequestIn(BaseModel):
+    """A basket that may span several shops."""
+
+    items: list[MarketplaceBasketItemIn] = Field(min_length=1)
+    contact_name: str = Field(min_length=2, max_length=120)
+    contact_phone: str = Field(min_length=6, max_length=32)
+    contact_email: str | None = None
+    company: str | None = Field(default=None, max_length=120)
+    delivery_location: str | None = Field(default=None, max_length=255)
+    message: str | None = Field(default=None, max_length=2000)
+
+
 class SaleReturnLineOut(Schema):
     id: uuid.UUID
     sale_line_id: uuid.UUID
@@ -502,6 +519,9 @@ class StoreSettingsIn(BaseModel):
     telegram_username: str | None = Field(None, max_length=120)
     address: str | None = Field(None, max_length=255)
     is_published: bool | None = None
+    #: Joining the marketplace is a separate decision from publishing your own
+    #: page: a shop may do either, both or neither.
+    list_on_marketplace: bool | None = None
     show_prices: bool | None = None
     default_terms: str | None = Field(None, max_length=4000)
     checkout_note: str | None = Field(None, max_length=2000)
@@ -518,10 +538,14 @@ class StoreOut(Schema):
     telegram_username: str | None = None
     address: str | None = None
     is_published: bool
+    #: Whether this shop's listed products appear on the central marketplace.
+    list_on_marketplace: bool = False
     show_prices: bool
     default_terms: str | None = None
     checkout_note: str | None = None
     public_url: str | None = None
+    #: Where this shop's own page lives, when it publishes one.
+    marketplace_url: str | None = None
 
 
 class EnquiryItemIn(BaseModel):
@@ -606,7 +630,9 @@ class QuotationOut(Schema):
     id: uuid.UUID
     number: str
     status: str
-    #: "storefront" when a customer requested it from their basket, else "staff".
+    #: "staff", "storefront" or "marketplace" — where the request came from.
+    #: A marketplace request means the buyer is likely asking other shops too;
+    #: it never says which.
     source: str = "staff"
     #: Whether the seller may still change lines, prices and terms.
     can_edit: bool = False

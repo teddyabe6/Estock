@@ -66,6 +66,8 @@ def _store(db, ctx) -> OnlineStore:
 def _store_out(store: OnlineStore) -> StoreOut:
     payload = StoreOut.model_validate(store)
     payload.public_url = f"{settings.public_base_url}/shop/{store.slug}"
+    if store.list_on_marketplace:
+        payload.marketplace_url = f"{settings.public_base_url}/market?shop={store.slug}"
     return payload
 
 

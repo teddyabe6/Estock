@@ -35,6 +35,7 @@ from app.services.catalogue import (
     find_by_barcode,
     remove_product_image,
     search_products,
+    set_on_marketplace,
     set_product_image,
     set_published,
     stock_by_branch,
@@ -203,8 +204,20 @@ def product_stock(product_id: uuid.UUID, ctx: Ctx, db: DbSession) -> list[dict]:
 def publish_product(
     product_id: uuid.UUID, ctx: Ctx, db: DbSession, published: bool = True
 ) -> ProductOut:
-    """The online availability toggle (PRD 13)."""
+    """Show this product on the shop's own storefront (PRD 13)."""
     product = set_published(db, ctx, product_id, published)
+    return product_out(ctx, product, stock_totals(db, ctx, [product.id]))
+
+
+@router.post("/products/{product_id}/marketplace", response_model=ProductOut)
+def list_on_marketplace(
+    product_id: uuid.UUID, ctx: Ctx, db: DbSession, listed: bool = True
+) -> ProductOut:
+    """Show this product on the central marketplace, alongside other shops'.
+
+    A separate decision from the storefront toggle above.
+    """
+    product = set_on_marketplace(db, ctx, product_id, listed)
     return product_out(ctx, product, stock_totals(db, ctx, [product.id]))
 
 

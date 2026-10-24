@@ -139,7 +139,10 @@ function Storefront() {
     }
   }
 
-  async function setFlag(key: "is_published" | "show_prices", value: boolean) {
+  async function setFlag(
+    key: "is_published" | "show_prices" | "list_on_marketplace",
+    value: boolean,
+  ) {
     try {
       setStore(await api.updateStore({ [key]: value }));
     } catch (cause) {
@@ -153,6 +156,15 @@ function Storefront() {
       setProducts((all) => all.map((p) => (p.id === product.id ? updated : p)));
     } catch (cause) {
       setError(describeError(cause, "Could not change availability"));
+    }
+  }
+
+  async function toggleMarketplace(product: Product) {
+    try {
+      const updated = await api.listProductOnMarketplace(product.id, !product.on_marketplace);
+      setProducts((all) => all.map((p) => (p.id === product.id ? updated : p)));
+    } catch (cause) {
+      setError(describeError(cause, "Could not change the marketplace listing"));
     }
   }
 
@@ -193,6 +205,22 @@ function Storefront() {
               checked={store.show_prices}
               onChange={(v) => void setFlag("show_prices", v)}
             />
+          )}
+          {manage && (
+            <Toggle
+              label="List on the central marketplace"
+              hint="your products appear alongside other shops', where a buyer can put several shops in one basket and ask you all for prices; a separate choice from publishing your own page above"
+              checked={store.list_on_marketplace}
+              onChange={(v) => void setFlag("list_on_marketplace", v)}
+            />
+          )}
+          {store.marketplace_url && (
+            <p className="muted" style={{ fontSize: "0.9rem", marginBottom: 0 }}>
+              Your listing:{" "}
+              <a href={store.marketplace_url} target="_blank" rel="noreferrer">
+                {store.marketplace_url}
+              </a>
+            </p>
           )}
         </div>
       )}
@@ -293,12 +321,30 @@ function Storefront() {
                     <td className="num">{money(product.variants[0]?.selling_price, currency)}</td>
                     <td>
                       <Badge status={product.is_published ? "ok" : "muted"} label={product.is_published ? "published" : "hidden"} />
+                      {store?.list_on_marketplace && (
+                        <Badge
+                          status={product.on_marketplace ? "ok" : "muted"}
+                          label={product.on_marketplace ? "on marketplace" : "not listed"}
+                        />
+                      )}
                     </td>
                     {manage && (
                       <td className="num">
                         <button type="button" className="link" onClick={() => void togglePublish(product)}>
                           {product.is_published ? "Hide" : "Publish"}
                         </button>
+                        {store?.list_on_marketplace && (
+                          <>
+                            {" · "}
+                            <button
+                              type="button"
+                              className="link"
+                              onClick={() => void toggleMarketplace(product)}
+                            >
+                              {product.on_marketplace ? "Unlist" : "List"}
+                            </button>
+                          </>
+                        )}
                       </td>
                     )}
                   </tr>

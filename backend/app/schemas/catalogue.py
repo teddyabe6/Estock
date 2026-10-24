@@ -88,6 +88,7 @@ class ProductUpdate(BaseModel):
     preferred_supplier_id: uuid.UUID | None = None
     is_active: bool | None = None
     is_published: bool | None = None
+    on_marketplace: bool | None = None
     online_description: str | None = None
     track_stock: bool | None = None
 
@@ -140,7 +141,10 @@ class ProductOut(BaseModel):
     category_id: uuid.UUID | None = None
     category_name: str | None = None
     is_active: bool = True
+    #: On this shop's own storefront.
     is_published: bool = False
+    #: On the central marketplace, beside other shops'.
+    on_marketplace: bool = False
     track_stock: bool = True
     image_asset_id: uuid.UUID | None = None
     image_url: str | None = None

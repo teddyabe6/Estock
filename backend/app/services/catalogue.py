@@ -277,10 +277,18 @@ def add_variant(
     return variant
 
 
+#: Where a product is shown to the public.  Both have a dedicated endpoint
+#: that asks for ``shop:manage``, so editing them through the generic update
+#: has to ask for the same thing — otherwise the gate is decoration.
+_PUBLICATION_FIELDS = {"is_published", "on_marketplace"}
+
+
 def update_product(
     db: Session, ctx: AuthContext, product_id: uuid.UUID, changes: dict
 ) -> Product:
     ctx.require(Permission.PRODUCT_MANAGE)
+    if _PUBLICATION_FIELDS & set(changes):
+        ctx.require(Permission.SHOP_MANAGE)
     product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
     changes = dict(changes)
 
@@ -425,6 +433,21 @@ def set_published(
     ctx.require(Permission.SHOP_MANAGE)
     product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
     product.is_published = published
+    db.flush()
+    return product
+
+
+def set_on_marketplace(
+    db: Session, ctx: AuthContext, product_id: uuid.UUID, listed: bool
+) -> Product:
+    """List this product on the central marketplace, or take it off.
+
+    Separate from :func:`set_published`, which controls the shop's own page.
+    Appearing beside other shops is its own decision.
+    """
+    ctx.require(Permission.SHOP_MANAGE)
+    product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
+    product.on_marketplace = listed
     db.flush()
     return product
 

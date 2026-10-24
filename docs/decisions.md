@@ -72,6 +72,27 @@ what the code does:
 | What happens to reports? | Returns are shown as their own figures — count, units, value, cost — beside what was sold, and profit takes back both the revenue and the cost of the returned units. | Netting them silently would leave a reader unable to tell a quiet month from a month of returns. Taking back only the revenue would understate profit as badly as taking back neither. |
 | Which day does a return belong to? | The day the goods came back, not the day of the sale. | That is when the money moved. |
 
+## The marketplace policy
+
+The platform went from "software each shop runs" to "one website where a buyer
+sees every shop". That raises questions a single-tenant system never has to
+answer:
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Does the marketplace take orders and payment? | **No.** A buyer asks for prices; every deal closes at the shop. | Direct checkout needs a payment gateway, escrow, settlement, commission accounting and refunds routed across vendors. It is a different product with real money-handling risk, and Ethiopian wholesale already works by asking for a proforma. |
+| How does a product get listed? | The shop joins the marketplace, then marks the products it wants listed. Both default to off, and listing takes effect immediately. | Nobody is opted in by a migration, and a shop that publishes its own page has not thereby agreed to appear beside competitors. |
+| Is listing separate from publishing your own page? | **Yes**, two independent flags. A shop may do either, both or neither. | Running a branded shop page and appearing in a marketplace are different commercial decisions. |
+| Can the marketplace read across shops? | Yes, in exactly one module, through a projection that cannot reach a cost, a customer, a credit balance or a stock quantity. `tenant_query` names that module as its only exception. | The isolation discipline survives only if the exception is single-sited and visible from the rule. A second crossing is the signal to widen the projection, not to add one. |
+| Does the marketplace show stock? | A boolean, never a number. | A rival could otherwise watch a shop's quantities by polling. A buyer deciding whether to ask only needs to know there is some. |
+| Are suspended or lapsed shops listed? | **No.** A shop that cannot post cannot answer a request. | Listing one sends buyers to a dead end and makes the platform look broken. |
+| Does a shop learn who else was asked? | **No.** It is told the request came from the marketplace — which fairly implies competition — and nothing more. | Who a buyer is canvassing is the buyer's business. Nothing joins from a quotation to its siblings. |
+| Can a buyer accept one shop and decline another? | Yes. Acceptance is per shop, on that shop's own proforma. | That is the point of asking several. |
+| How is a cross-shop request numbered? | A random reference (`MR-2026-DEDDPF`), not a sequence. Each shop's own proforma keeps its sequential number. | A shared sequence would serialise every shop on the platform behind one lock, and a sequential public reference would tell anyone who asked for two how many requests the platform handles. |
+| What happens when a buyer withdraws? | Proformas no shop has answered are cancelled; ones already sent are left for the buyer to decline individually. Both are written to each shop's own audit log. | Silently cancelling work a shop has already done would be rude. |
+| Who may list a product on the marketplace? | `shop:manage`, by whichever route — the dedicated toggle or the generic product update. | Listing publishes to a platform-wide audience, which is a shop-level decision rather than a catalogue-editing one. Gating only the dedicated endpoint would make the gate decoration, since `product:manage` could flip the field through a `PATCH`. |
+| Does a request reserve stock? | **No**, exactly as for a single-shop request. Only a shop converting its own proforma to a sale moves anything. | Unchanged from the existing rule, and the reason is the same: anyone with a link could otherwise deplete availability. |
+
 ## Decisions made while building that the PRD did not raise
 
 | Decision | Reasoning |
@@ -91,6 +112,8 @@ what the code does:
 | A business must always keep one active owner | Demoting or disabling the last owner would lock everyone out. |
 | An outstanding invitation holds a seat on the plan | Counting only active members would let a three-seat business invite thirty people and have them all walk in. Deactivating a branch, a product or a member frees its slot, which is how a business makes room without deleting history. |
 | A new permission needs a backfill migration | `role_permissions` rows are written once per business at registration, from the bundle in force then. `sale:refund` would have been invisible to every business that already existed — including its owner — so the migration grants it to the owner and manager roles, matching what a business registering today gets. |
+| A buyer is a separate customer record in each shop | `Customer` is tenant-scoped, so someone buying from three shops becomes three records. That is right for each shop's own books and credit limits. It does mean there is no unified buyer account across the platform; a marketplace-level buyer identity mapping to the per-shop records is the extension point if one is wanted. |
+| A cross-shop request's status is derived, not stored | It depends on several shops' quotations, so a stored column would have to be rewritten whenever any one of them answered, and would read "open" forever the first time that was missed. Only `withdrawn_at` is stored, because no quotation implies it. The same reasoning as derived credit status. |
 | Credit settlement is summed with a sign | A receivable is settled by money in, a payable by money out. A refund moving the other way has to reduce what is settled rather than add to it, so `recalculate` sums against the direction that settles that kind of balance. |
 | Reminders are internal only | The PRD is explicit: a generated reminder is not proof anyone was contacted. Every reminder body says so. |
 | Money stored at two decimals, quantities at three | ETB has two decimals; three on quantity supports goods sold by weight or volume. Inputs are rounded on write, so the value held in memory is the value stored. |

@@ -381,9 +381,16 @@ def _publish_store(db, tenant_id, products) -> None:
         select(OnlineStore).where(OnlineStore.tenant_id == tenant_id)
     ).scalar_one()
     store.is_published = True
+    # Also on the central marketplace, so the demo shows both: the shop's own
+    # page at /shop/<slug> and its products listed at /market beside every
+    # other shop's.  The two are separate choices, which is why both are set.
+    store.list_on_marketplace = True
     store.tagline = "Wholesale grains, spices and building materials in Merkato"
     store.about = "Serving Addis Ababa since 2009. Delivery available across the city."
     store.telegram_username = "merkatowholesale"
+    for product in products:
+        if product.is_published:
+            product.on_marketplace = True
     db.flush()
 
 

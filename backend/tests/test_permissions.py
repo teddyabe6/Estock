@@ -450,3 +450,36 @@ def test_platform_admin_support_grant_is_audited_and_read_only(client, business,
     audit = db.query(AuditEvent).filter(AuditEvent.action == "platform.support_access").one()
     assert audit.tenant_id == business.tenant.id
     assert "wrong stock" in (audit.payload_json or "")
+
+
+def test_listing_a_product_publicly_needs_shop_manage_whichever_route(client, business):
+    """The publication flags have a dedicated endpoint asking for shop:manage.
+
+    They are also writable through the generic product update, which asks for
+    product:manage.  If that route did not ask for shop:manage as well, the
+    dedicated one's gate would be decoration: a user could put a product on
+    the storefront, or on the platform-wide marketplace, by PATCHing the
+    field instead of posting to the toggle.
+    """
+    product = business.add_product("Thing")
+    user, _ = business.add_user(RoleName.SALESPERSON)
+    membership = _membership_of(business, user)
+    business.grant(membership, Permission.PRODUCT_MANAGE)
+
+    for field in ("is_published", "on_marketplace"):
+        patched = client.patch(
+            f"/api/v1/products/{product.id}",
+            json={field: True},
+            headers=business.headers(user),
+        )
+        assert patched.status_code == 403, f"{field}: {patched.json()}"
+        assert "shop:manage" in patched.json()["details"]["missing_permissions"]
+
+    # The same caller may still edit a product's ordinary fields.
+    renamed = client.patch(
+        f"/api/v1/products/{product.id}",
+        json={"name": "Thing, renamed"},
+        headers=business.headers(user),
+    )
+    assert renamed.status_code == 200, renamed.json()
+    assert renamed.json()["name"] == "Thing, renamed"

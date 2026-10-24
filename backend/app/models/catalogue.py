@@ -12,7 +12,7 @@ import uuid
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import GUID, Base, Money, Percent, Quantity
@@ -84,7 +84,18 @@ class Product(UUIDPrimaryKey, Timestamped, TenantScoped, Base):
     )
 
     # Online publication (PRD 13) — a simple availability toggle.
+    #: On this shop's own storefront at /shop/<slug>.
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    #: On the central marketplace, alongside every other shop's.  Deliberately
+    #: separate from ``is_published``: running your own shop page is not the
+    #: same decision as appearing next to competitors, and a shop may want
+    #: either, both or neither.
+    #: ``server_default`` as well as ``default`` because this column was added
+    #: to a populated table: see the marketplace migration for why the database
+    #: default has to stay.
+    on_marketplace: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False, index=True
+    )
     online_description: Mapped[str | None] = mapped_column(Text)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

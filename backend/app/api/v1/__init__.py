@@ -8,6 +8,7 @@ from app.api.v1.routers import (
     contacts,
     credit,
     imports,
+    market,
     notifications,
     platform_admin,
     products,
@@ -33,6 +34,7 @@ api_router.include_router(reports.router)
 api_router.include_router(imports.router)
 api_router.include_router(notifications.router)
 api_router.include_router(public.router)
+api_router.include_router(market.router)
 api_router.include_router(platform_admin.router)
 
 __all__ = ["api_router"]

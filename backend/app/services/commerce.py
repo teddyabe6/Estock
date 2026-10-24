@@ -28,12 +28,14 @@ from app.core.db import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.permissions import Permission
 from app.core.phone import normalise_et_phone
-from app.core.security import generate_share_token
+from app.core.security import generate_public_reference, generate_share_token
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
 from app.models.catalogue import Category, Product, ProductVariant
 from app.models.commerce import (
     CustomerEnquiry,
     EnquiryStatus,
+    MarketplaceRequest,
+    MarketplaceRequestStatus,
     OnlineStore,
     Quotation,
     QuotationLine,
@@ -42,6 +44,7 @@ from app.models.commerce import (
 from app.models.contacts import Customer
 from app.models.inventory import StockBalance
 from app.models.platform import Tenant, TenantStatus
+from app.services.marketplace import UNAVAILABLE_STATUSES
 from app.services.numbering import next_number
 from app.services.pricing import quantize_money
 from app.services.storage import public_file_url
@@ -955,3 +958,321 @@ def convert_to_sale(
     )
     db.flush()
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Cross-shop requests from the marketplace
+# --------------------------------------------------------------------------- #
+#
+# A buyer fills one basket from several shops and asks all of them for prices
+# at once.  That becomes one MarketplaceRequest — theirs, not any shop's — and
+# one Quotation per shop, each priced from that shop's own catalogue and each
+# following the review-and-send lifecycle it already had.
+#
+# Three rules hold the thing together:
+#
+# * **Each shop sees only its own part.**  A quotation records that it came
+#   from the marketplace, because knowing the buyer is probably asking others
+#   is fair and useful.  It does not record who else was asked or what they
+#   quoted, and nothing joins from a quotation to its siblings.
+# * **The buyer sees everything**, through the one tracking link they are given
+#   at once — they submitted it.
+# * **Nothing reserves stock**, exactly as for a single-shop request.  Only an
+#   explicit conversion to a sale moves anything.
+
+#: One basket cannot canvass the whole platform.
+MAX_REQUEST_SHOPS = 10
+#: Across every shop in one request, so a basket cannot price a catalogue.
+MAX_REQUEST_TOTAL_LINES = 60
+
+
+@dataclass(slots=True)
+class MarketplaceBasketItem:
+    variant_id: uuid.UUID
+    quantity: Decimal
+
+
+@dataclass(slots=True)
+class MarketplaceRequestResult:
+    request: MarketplaceRequest
+    #: One per shop, in the order the shops are named.
+    quotations: list[Quotation]
+
+
+def submit_marketplace_request(
+    db: Session,
+    *,
+    items: list[MarketplaceBasketItem],
+    contact_name: str,
+    contact_phone: str,
+    contact_email: str | None = None,
+    company: str | None = None,
+    delivery_location: str | None = None,
+    message: str | None = None,
+    source_ip: str | None = None,
+) -> MarketplaceRequestResult:
+    """Turn one cross-shop basket into a request each shop answers separately."""
+    if not items:
+        raise ValidationError("Your basket is empty")
+    if not contact_name.strip():
+        raise ValidationError("Please give your name")
+    if not contact_phone.strip():
+        raise ValidationError("Please give a phone number the shops can reach you on")
+
+    wanted: dict[uuid.UUID, Decimal] = {}
+    for item in items:
+        quantity = Decimal(item.quantity)
+        if quantity <= 0:
+            raise ValidationError("Quantities must be positive")
+        wanted[item.variant_id] = wanted.get(item.variant_id, ZERO) + quantity
+
+    if len(wanted) > MAX_REQUEST_TOTAL_LINES:
+        raise ValidationError(
+            f"A request can hold at most {MAX_REQUEST_TOTAL_LINES} different items"
+        )
+
+    by_shop = _group_by_shop(db, wanted)
+    if len(by_shop) > MAX_REQUEST_SHOPS:
+        raise ValidationError(
+            f"A single request can go to at most {MAX_REQUEST_SHOPS} shops. "
+            "Split your basket and send them separately."
+        )
+
+    request = MarketplaceRequest(
+        reference=_unique_reference(db),
+        share_token=generate_share_token(),
+        contact_name=contact_name.strip(),
+        contact_phone=normalise_et_phone(contact_phone) or contact_phone.strip(),
+        contact_email=(contact_email or "").strip() or None,
+        company=(company or "").strip() or None,
+        delivery_location=(delivery_location or "").strip() or None,
+        message=(message or "").strip() or None,
+        source_ip=source_ip,
+    )
+    db.add(request)
+    db.flush()
+
+    quotations: list[Quotation] = []
+    for store, tenant, shop_items in by_shop:
+        quotation = request_quotation(
+            db,
+            store,
+            tenant,
+            items=[BasketItem(variant_id, quantity) for variant_id, quantity in shop_items],
+            contact_name=contact_name,
+            contact_phone=contact_phone,
+            contact_email=contact_email,
+            company=company,
+            delivery_location=delivery_location,
+            message=message,
+        )
+        # Appended through the relationship: the request's collection is
+        # eagerly loaded, so attaching by foreign key alone would leave it
+        # stale and shop_count reading zero.
+        request.quotations.append(quotation)
+        quotations.append(quotation)
+    db.flush()
+
+    return MarketplaceRequestResult(request=request, quotations=quotations)
+
+
+def _unique_reference(db: Session, *, attempts: int = 5) -> str:
+    """A reference no other request is using.
+
+    The random space makes a collision unlikely rather than impossible, so
+    this looks before it leaps.  The check is not atomic — two requests could
+    still pick the same reference between the SELECT and the INSERT — which is
+    what the unique constraint on the column is for.  This only keeps that
+    from being the common path.
+    """
+    year = utcnow().year
+    for _ in range(attempts):
+        candidate = generate_public_reference("MR", year=year)
+        taken = db.execute(
+            select(MarketplaceRequest.id).where(
+                MarketplaceRequest.reference == candidate
+            )
+        ).first()
+        if taken is None:
+            return candidate
+    raise ConflictError(
+        "Could not start your request just now. Please try again."
+    )
+
+
+def _group_by_shop(
+    db: Session, wanted: dict[uuid.UUID, Decimal]
+) -> list[tuple[OnlineStore, Tenant, list[tuple[uuid.UUID, Decimal]]]]:
+    """Resolve each variant to the shop that listed it, refusing the unavailable.
+
+    Reads across tenants, so it goes through the marketplace's own rules: a
+    variant counts only if its shop opted in and is in a state to answer.  An
+    item that is no longer listed fails the whole request rather than being
+    dropped quietly — the basket lives in the buyer's browser, so they lose
+    nothing by removing it and trying again, and a request silently missing an
+    item is worse than one refused with a reason.
+    """
+    rows = db.execute(
+        select(ProductVariant, OnlineStore, Tenant)
+        .join(Product, Product.id == ProductVariant.product_id)
+        .join(OnlineStore, OnlineStore.tenant_id == Product.tenant_id)
+        .join(Tenant, Tenant.id == Product.tenant_id)
+        .where(
+            ProductVariant.id.in_(list(wanted)),
+            ProductVariant.is_active.is_(True),
+            Product.is_active.is_(True),
+            Product.on_marketplace.is_(True),
+            OnlineStore.list_on_marketplace.is_(True),
+            Tenant.status.notin_(UNAVAILABLE_STATUSES),
+        )
+    ).all()
+
+    found = {variant.id for variant, _store, _tenant in rows}
+    unavailable = [str(variant_id) for variant_id in wanted if variant_id not in found]
+    if unavailable:
+        raise ValidationError(
+            "Some items in your basket are no longer available. Remove them and try again.",
+            details={"unavailable": unavailable},
+        )
+
+    grouped: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] = {}
+    shops: dict[uuid.UUID, tuple[OnlineStore, Tenant]] = {}
+    for variant, store, tenant in rows:
+        shops[store.tenant_id] = (store, tenant)
+        grouped.setdefault(store.tenant_id, []).append((variant.id, wanted[variant.id]))
+
+    return [
+        (shops[tenant_id][0], shops[tenant_id][1], shop_items)
+        for tenant_id, shop_items in grouped.items()
+    ]
+
+
+def get_marketplace_request(db: Session, token: str) -> MarketplaceRequest:
+    """The buyer's own view, by the tracking link they were given."""
+    request = db.execute(
+        select(MarketplaceRequest).where(MarketplaceRequest.share_token == token)
+    ).scalar_one_or_none()
+    if request is None:
+        raise NotFoundError("Request not found")
+    return request
+
+
+def marketplace_request_state(
+    db: Session, request: MarketplaceRequest, *, today: date | None = None
+) -> dict:
+    """What the buyer's tracking page shows: one row per shop, and the total.
+
+    Each row carries the shop's name so the buyer knows who answered, and the
+    shop's own share link so they can accept that quotation. The per-shop
+    quotation is where acceptance happens, which is why a buyer can take one
+    shop's price and leave another's.
+    """
+    # Not store_for_tenant: that one only finds a *published* storefront, and
+    # a shop may be on the marketplace without running a page of its own.
+    # Fetched for every shop at once, rather than per row.
+    stores = {
+        store.tenant_id: store
+        for store in db.execute(
+            select(OnlineStore).where(
+                OnlineStore.tenant_id.in_(
+                    {quotation.tenant_id for quotation in request.quotations}
+                )
+            )
+        ).scalars()
+    }
+
+    rows = []
+    for quotation in request.quotations:
+        store = stores.get(quotation.tenant_id)
+        status = quotation_status_for(quotation, today=today)
+        answered = status not in (QuotationStatus.REQUESTED,)
+        rows.append(
+            {
+                "shop": store.display_name if store else "Shop",
+                "shop_slug": store.slug if store else None,
+                "number": quotation.number,
+                "status": str(status),
+                "answered": answered,
+                "item_count": len(quotation.lines),
+                "total_amount": (
+                    str(quotation.total_amount)
+                    if answered and quotation.total_amount is not None
+                    else None
+                ),
+                "currency": quotation.currency,
+                "valid_until": quotation.valid_until.isoformat()
+                if quotation.valid_until
+                else None,
+                # The buyer accepts or declines on the shop's own proforma page.
+                "token": quotation.share_token,
+            }
+        )
+    rows.sort(key=lambda row: row["shop"])
+    return {
+        "reference": request.reference,
+        "status": str(_derive_request_status(request, today=today)),
+        "submitted_at": request.created_at.isoformat() if request.created_at else None,
+        "contact_name": request.contact_name,
+        "delivery_location": request.delivery_location,
+        "message": request.message,
+        "shop_count": len(rows),
+        "answered_count": sum(1 for row in rows if row["answered"]),
+        "shops": rows,
+    }
+
+
+def _derive_request_status(
+    request: MarketplaceRequest, *, today: date | None = None
+) -> MarketplaceRequestStatus:
+    """Derived from the quotations, never assigned — as credit status is.
+
+    A request is answered once no shop is still sitting on it, and accepted as
+    soon as the buyer takes any one shop's price.  Those are facts about the
+    children, so reading them from the children means the two can never
+    disagree.
+    """
+    if request.withdrawn_at is not None:
+        return MarketplaceRequestStatus.WITHDRAWN
+    statuses = [quotation_status_for(q, today=today) for q in request.quotations]
+    if any(status == QuotationStatus.ACCEPTED for status in statuses):
+        return MarketplaceRequestStatus.ACCEPTED
+    if statuses and all(status != QuotationStatus.REQUESTED for status in statuses):
+        return MarketplaceRequestStatus.ANSWERED
+    return MarketplaceRequestStatus.OPEN
+
+
+def withdraw_marketplace_request(db: Session, token: str) -> MarketplaceRequest:
+    """The buyer changes their mind before anyone has quoted.
+
+    Cancels every quotation still sitting unanswered, which kills each shop's
+    link to it.  Quotations a shop has already sent are left alone: the buyer
+    can decline those individually, and silently cancelling work a shop has
+    done would be rude.
+    """
+    request = get_marketplace_request(db, token)
+    if request.withdrawn_at is not None:
+        return request
+    for quotation in request.quotations:
+        if quotation.status != QuotationStatus.REQUESTED:
+            continue
+        # Cancelled the same way a shop cancels one of its own: the status is
+        # what stops the link working (get_quotation_by_token refuses a
+        # cancelled proforma), so the token is left alone.
+        quotation.status = QuotationStatus.CANCELLED
+        record_audit(
+            db,
+            action=AuditAction.QUOTATION_CANCELLED,
+            tenant_id=quotation.tenant_id,
+            # No actor: a buyer has no account here.  The label is what the
+            # shop's audit log shows instead of a name.
+            actor_label=f"Buyer ({request.contact_name})",
+            entity_type="quotation",
+            entity_id=quotation.id,
+            summary=(
+                f"Buyer withdrew marketplace request {request.reference}, "
+                f"cancelling proforma {quotation.number}"
+            ),
+        )
+    request.withdrawn_at = utcnow()
+    db.flush()
+    return request

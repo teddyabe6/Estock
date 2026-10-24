@@ -113,6 +113,13 @@ def tenant_query(model: type[ModelT], tenant_id: uuid.UUID) -> Select[tuple[Mode
 
     Prefer this over ``select(Model)`` everywhere; it makes forgetting the
     tenant filter a visible omission rather than a silent leak.
+
+    There is exactly one place that reads across tenants on purpose:
+    ``app/services/marketplace.py``, which serves the central catalogue every
+    shop opts into.  It returns a narrow projection and cannot reach a
+    customer, a cost, a sale or a credit balance.  If you find yourself
+    wanting a second such place, that is the signal to extend the projection
+    rather than to add another crossing.
     """
     return select(model).where(model.tenant_id == tenant_id)  # type: ignore[attr-defined]
 

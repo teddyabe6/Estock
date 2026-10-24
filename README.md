@@ -21,6 +21,8 @@ business can see another's data.
 | Customers and suppliers with transaction history | Done |
 | Credit receivables and payables, partial payments, due dates, reminders, follow-up | Done |
 | Online shop: catalogue by category, product pages with photos, basket, proforma requests, secure share links | Done; a request arrives priced from the catalogue for the seller to confirm, and the customer's link tracks it through to the sale |
+| Central marketplace: every opted-in shop's products in one catalogue, searchable across vendors | Done; listing is opt-in per shop and per product, and a suspended or lapsed shop never appears |
+| One basket spanning shops, and one request each shop answers separately | Done; each vendor sees only its own part, the buyer tracks them all on one link and accepts them one by one |
 | Dashboards and reports for sales, profit, stock, branches and credit | Done, with CSV export |
 | Trial and subscription state, platform-admin surface, audit trail | Done; support access is read-only and audited |
 | Plan limits on branches, staff and products | Done; a downgrade never takes data away, only the next addition is refused |
@@ -116,7 +118,7 @@ CLAUDE_CODE_REMOTE=true ./.claude/hooks/session-start.sh
 ## Tests
 
 ```bash
-make test              # 338 backend tests on SQLite + 35 mobile tests
+make test              # 369 backend tests on SQLite + 35 mobile tests
 make test-backend-pg   # the same backend suite against PostgreSQL, plus a real concurrency test
 ```
 
@@ -144,16 +146,18 @@ analyzes, tests and builds the mobile app.
 backend/            FastAPI service — the only place business rules live
   app/core/         Config, database, security, permissions, tenancy, audit,
                     business-local clock, rate limiting
-  app/models/       SQLAlchemy models (43 tables)
+  app/models/       SQLAlchemy models (46 tables)
   app/services/     Domain logic: pricing, inventory, sales, credit, …
   app/api/v1/       HTTP routes and response shaping
   app/workers/      Scheduled reminders, alerts and trial expiry
   alembic/          Migrations
-  tests/            338 tests
+  tests/            369 tests
 web/                Next.js app: home, sales and receipts, products and import,
                     stock (receive, adjust, transfer, ledger), online shop
-                    (storefront, enquiries, proformas), reports, credit,
-                    contacts, notifications, settings, storefront, share links
+                    (storefront, enquiries, proformas), the central marketplace
+                    (browse every shop, cross-shop basket, request tracking),
+                    reports, credit, contacts, notifications, settings,
+                    share links
 mobile/             Flutter app for the shop floor, works offline
   lib/core/offline/ Outbox, sync service and catalogue cache
   test/             35 tests

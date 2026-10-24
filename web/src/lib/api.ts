@@ -248,7 +248,10 @@ export type Product = {
   category_name: string | null;
   unit_of_measure: string;
   is_active?: boolean;
+  /** On this shop's own storefront. */
   is_published: boolean;
+  /** On the central marketplace, beside other shops'. A separate choice. */
+  on_marketplace: boolean;
   track_stock: boolean;
   image_asset_id?: string | null;
   image_url?: string | null;
@@ -637,10 +640,13 @@ export type Store = {
   telegram_username: string | null;
   address: string | null;
   is_published: boolean;
+  /** Whether this shop's listed products appear on the central marketplace. */
+  list_on_marketplace: boolean;
   show_prices: boolean;
   default_terms: string | null;
   checkout_note: string | null;
   public_url: string | null;
+  marketplace_url: string | null;
 };
 
 export type Enquiry = {
@@ -899,6 +905,8 @@ export const api = {
     request<Variant>(`/variants/${id}`, { method: "PATCH", body }),
   publishProduct: (id: string, published: boolean) =>
     request<Product>(`/products/${id}/publish?published=${published}`, { method: "POST" }),
+  listProductOnMarketplace: (id: string, listed: boolean) =>
+    request<Product>(`/products/${id}/marketplace?listed=${listed}`, { method: "POST" }),
   uploadProductImage: (id: string, file: File) => {
     const form = new FormData();
     form.append("file", file);

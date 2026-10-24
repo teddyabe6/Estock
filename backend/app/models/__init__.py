@@ -22,6 +22,8 @@ from app.models.catalogue import (  # noqa: F401
 from app.models.commerce import (  # noqa: F401
     CustomerEnquiry,
     EnquiryStatus,
+    MarketplaceRequest,
+    MarketplaceRequestStatus,
     OnlineStore,
     Quotation,
     QuotationLine,

@@ -71,5 +71,27 @@ def generate_share_token(nbytes: int = 24) -> str:
     return secrets.token_urlsafe(nbytes)
 
 
+#: No 0/O, 1/I/L — a buyer reads these out over the phone.
+_REFERENCE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+
+
+def generate_public_reference(prefix: str, *, year: int, length: int = 8) -> str:
+    """A short, quotable reference for a record that belongs to no one tenant.
+
+    Tenant documents get sequential numbers from a locked per-business row
+    (``app/services/numbering.py``).  A marketplace request spans businesses,
+    so there is no such row to lock without serialising every shop on the
+    platform behind one sequence — and a sequential public reference would
+    tell anyone who asked for two how many requests the platform handles.
+
+    Random it is, from an alphabet without characters people confuse.  Eight
+    characters of 31 is 8.5e11 combinations, so a collision becomes likely
+    somewhere around a million requests rather than thirty thousand — and the
+    caller retries on one anyway, with a unique constraint behind that.
+    """
+    body = "".join(secrets.choice(_REFERENCE_ALPHABET) for _ in range(length))
+    return f"{prefix}-{year}-{body}"
+
+
 def constant_time_compare(a: str, b: str) -> bool:
     return hmac.compare_digest(a, b)

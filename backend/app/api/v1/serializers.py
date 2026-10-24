@@ -101,6 +101,7 @@ def product_out(
         category_name=product.category.name if product.category else None,
         is_active=product.is_active,
         is_published=product.is_published,
+        on_marketplace=product.on_marketplace,
         track_stock=product.track_stock,
         image_asset_id=product.image_asset_id,
         image_url=public_file_url(product.image_asset_id) if product.image_asset_id else None,
@@ -238,7 +239,13 @@ def quotation_out(quotation: Quotation, *, include_share: bool = True) -> Quotat
 
     payload = QuotationOut.model_validate(quotation)
     payload.status = str(quotation_status_for(quotation))
-    payload.source = "staff" if quotation.created_by_id else "storefront"
+    if quotation.marketplace_request_id is not None:
+        # Worth telling the shop: a marketplace request means the buyer is
+        # probably asking others too, so a sharp price matters.  It says
+        # nothing about who else was asked.
+        payload.source = "marketplace"
+    else:
+        payload.source = "staff" if quotation.created_by_id else "storefront"
     payload.can_edit = quotation.status in EDITABLE_STATUSES
     if include_share:
         payload.share = share_links(quotation)
