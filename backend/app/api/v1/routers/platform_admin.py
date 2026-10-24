@@ -300,6 +300,21 @@ def platform_switches(admin: PlatformAdminUser, db: DbSession) -> dict:
     return {"settings": platform_settings.describe(db)}
 
 
+@router.get("/tenants/{tenant_id}/settings")
+def tenant_switches(
+    tenant_id: uuid.UUID, admin: PlatformAdminUser, db: DbSession
+) -> dict:
+    """The switches that can be set for one shop, and where each stands for it.
+
+    A platform-wide switch is not this shop's business and is not offered
+    against it, so the console cannot accidentally turn the whole platform off
+    from a single shop's screen.
+    """
+    if db.get(Tenant, tenant_id) is None:
+        raise NotFoundError("Business not found")
+    return {"settings": platform_settings.describe_for_tenant(db, tenant_id)}
+
+
 @router.put("/settings")
 def set_platform_switch(
     payload: FeatureFlagIn, admin: PlatformAdminUser, db: DbSession

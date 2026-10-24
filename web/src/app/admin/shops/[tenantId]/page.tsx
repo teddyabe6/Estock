@@ -13,7 +13,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { AdminShell, InvoiceStatus, ShopStatus } from "@/components/AdminShell";
-import { Alert, Empty, Field, PageHead, Stat } from "@/components/ui";
+import { Alert, Empty, Field, PageHead, Stat, Toggle } from "@/components/ui";
 import {
   adminApi,
   methodLabel,
@@ -23,6 +23,7 @@ import {
   type Invoice,
   type Plan,
   type TenantBilling,
+  type TenantSwitch,
 } from "@/lib/admin";
 import { useAdmin, useAdminCall } from "@/lib/adminSession";
 import { money, shortDate } from "@/lib/format";
@@ -35,6 +36,7 @@ export default function AdminShopPage() {
 
   const [billing, setBilling] = useState<TenantBilling | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [switches, setSwitches] = useState<TenantSwitch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,12 +44,14 @@ export default function AdminShopPage() {
 
   const load = useCallback(async () => {
     try {
-      const [bill, planList] = await Promise.all([
+      const [bill, planList, shopSwitches] = await Promise.all([
         adminApi.tenantBilling(tenantId),
         adminApi.plans(),
+        adminApi.tenantSettings(tenantId),
       ]);
       setBilling(bill);
       setPlans(planList);
+      setSwitches(shopSwitches.settings);
       setError(null);
     } catch (cause) {
       setError(describe(cause, "Could not load this shop"));
@@ -162,6 +166,50 @@ export default function AdminShopPage() {
             })
           }
         />
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      <section className="card">
+        <div className="card-title">Marketplace</div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Your switch over this shop, separate from the shop&apos;s own decision to be
+          listed. Turning it off stops its products appearing and stops it receiving
+          requests — the shop&apos;s own setting is left alone and takes effect again
+          the moment you turn this back on.
+        </p>
+        {switches.length === 0 ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          switches.map((item) => (
+            <div key={item.key}>
+              <Toggle
+                label={
+                  item.key === "marketplace_listed"
+                    ? "Taking part in the marketplace"
+                    : item.key.replace(/_/g, " ")
+                }
+                // The card above already explains it; the switch's own
+                // description is written for the platform-wide screen and
+                // would just say the same thing again here.
+                hint={item.enabled ? "buyers can see it and ask it for prices" : "paused"}
+                checked={item.enabled}
+                onChange={(value) =>
+                  act(async () => {
+                    await adminApi.setSwitch(item.key, value, { tenant_id: tenantId });
+                    return value
+                      ? `${billing.tenant_name} is back on the marketplace.`
+                      : `${billing.tenant_name} is paused: buyers will not see it or be able to ask it for prices.`;
+                  })
+                }
+              />
+              {!item.set_for_shop && (
+                <p className="muted" style={{ margin: "0 0 8px", fontSize: "0.85rem" }}>
+                  Following the platform setting ({item.platform_default ? "on" : "off"}).
+                </p>
+              )}
+            </div>
+          ))
+        )}
       </section>
 
       {/* ------------------------------------------------------------------ */}

@@ -152,6 +152,15 @@ export type TenantBilling = {
   invoices: Invoice[];
 };
 
+export type TenantSwitch = {
+  key: string;
+  description: string;
+  enabled: boolean;
+  /** Whether this shop has a setting of its own, or follows the platform. */
+  set_for_shop: boolean;
+  platform_default: boolean;
+};
+
 export type PlatformSwitch = {
   key: string;
   description: string;
@@ -276,6 +285,9 @@ export const adminApi = {
   // -- switches, support and the trail ------------------------------------ //
 
   settings: () => call<{ settings: PlatformSwitch[] }>("/platform/settings"),
+
+  tenantSettings: (tenantId: string) =>
+    call<{ settings: TenantSwitch[] }>(`/platform/tenants/${tenantId}/settings`),
 
   setSwitch: (key: string, enabled: boolean, opts: { tenant_id?: string; reason?: string } = {}) =>
     call<{ key: string; enabled: boolean; tenant_id: string | null }>("/platform/settings", {

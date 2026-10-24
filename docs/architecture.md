@@ -545,10 +545,39 @@ documented default. A missing row is never simply "off", because an empty table
 must not disable the platform. The per-shop row winning is what makes "closed
 to new shops, except this one" expressible.
 
-Two switches exist, and each is enforced: `registration_open` gates
+Three switches exist, and each is enforced. `registration_open` gates
 `POST /auth/register`, which is how the platform goes invitation-only without
-touching a shop that already exists; `marketplace_open` gates cross-shop
-requests, which pauses the marketplace without unlisting anybody's products.
+touching a shop that already exists. `marketplace_open` gates cross-shop
+requests, which pauses the marketplace without unlisting anybody's products —
+people can still browse, they just cannot ask for prices.
+`marketplace_listed` decides whether a shop takes part at all: off, its
+products stop appearing in the catalogue and it stops receiving requests.
+
+Each key means one thing. An earlier version had `marketplace_open` doing both
+jobs — platform-wide it paused requests, per shop it was meant to unlist — and
+the per-shop value was never actually read, so the switch would have been set
+and silently ignored. One key per meaning is what makes each one checkable.
+
+### Pausing one shop
+
+Two separate decisions decide whether a shop is in the catalogue, and keeping
+them apart matters. `OnlineStore.list_on_marketplace` is the **shop's** choice
+to be listed. `marketplace_listed` is the **platform owner's** switch over
+that shop — a way to stop sending buyers to a shop that is not answering,
+without rewriting the shop's own decision, which would otherwise be lost and
+have to be guessed at when the pause was lifted.
+
+The switch resolves for every shop in one query rather than one each:
+`platform_settings.participation_filter` returns a SQL condition the catalogue
+query uses directly, and returns `true()` when nobody has turned anything off,
+so the common case costs nothing. It resolves in both directions — platform
+on means "everyone but the shops explicitly off", platform off means "only the
+shops explicitly on", which is what makes "paused for everyone, except this
+one" work.
+
+The same filter is applied where a basket is grouped by shop, so a basket
+filled before a pause cannot reach a paused shop either; the buyer gets the
+same "no longer available" message as for anything else that has gone.
 
 ## Where extension points are
 

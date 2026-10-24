@@ -65,6 +65,7 @@ def test_a_switch_with_no_row_is_its_documented_default(db):
     """A missing row must not read as off, or an empty table disables everything."""
     assert platform_settings.is_enabled(db, "registration_open") is True
     assert platform_settings.is_enabled(db, "marketplace_open") is True
+    assert platform_settings.is_enabled(db, "marketplace_listed") is True
 
 
 def test_a_platform_row_overrides_the_default(db):
@@ -75,14 +76,16 @@ def test_a_platform_row_overrides_the_default(db):
 
 def test_a_shops_own_row_beats_the_platform_setting(db, business):
     """"Paused for everyone, except this shop" has to be expressible."""
-    db.add(FeatureFlag(key="marketplace_open", tenant_id=None, enabled=False))
-    db.add(FeatureFlag(key="marketplace_open", tenant_id=business.tenant.id, enabled=True))
+    db.add(FeatureFlag(key="marketplace_listed", tenant_id=None, enabled=False))
+    db.add(
+        FeatureFlag(key="marketplace_listed", tenant_id=business.tenant.id, enabled=True)
+    )
     db.flush()
 
-    assert platform_settings.is_enabled(db, "marketplace_open") is False
+    assert platform_settings.is_enabled(db, "marketplace_listed") is False
     assert (
         platform_settings.is_enabled(
-            db, "marketplace_open", tenant_id=business.tenant.id
+            db, "marketplace_listed", tenant_id=business.tenant.id
         )
         is True
     )
@@ -217,7 +220,7 @@ def test_the_settings_screen_lists_only_switches_something_reads(
     listed = client.get("/api/v1/platform/settings", headers=admin_headers)
     assert listed.status_code == 200
     keys = {row["key"] for row in listed.json()["settings"]}
-    assert keys == {"registration_open", "marketplace_open"}
+    assert keys == {"registration_open", "marketplace_open", "marketplace_listed"}
     for row in listed.json()["settings"]:
         assert row["description"], "a switch has to say what it does"
         assert row["set_explicitly"] is False
@@ -279,3 +282,153 @@ def test_a_shop_token_cannot_turn_a_platform_switch(client, business):
         headers=business.headers(),
     )
     assert response.status_code in (401, 403)
+
+
+# --------------------------------------------------------------------------- #
+# Pausing one shop's marketplace
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def listed_shops(db, business, other_business):
+    """Two shops, both listed on the marketplace with one product each."""
+    from sqlalchemy import select
+
+    from app.models.commerce import OnlineStore
+    from app.services.onboarding import slugify, unique_slug
+
+    made = []
+    for shop, name in ((business, "Berbere"), (other_business, "Shiro")):
+        store = db.execute(
+            select(OnlineStore).where(OnlineStore.tenant_id == shop.tenant.id)
+        ).scalar_one_or_none()
+        if store is None:
+            store = OnlineStore(
+                tenant_id=shop.tenant.id,
+                slug=unique_slug(
+                    db, OnlineStore, OnlineStore.slug, slugify(shop.tenant.name)
+                ),
+                display_name=shop.tenant.name,
+            )
+            db.add(store)
+        store.list_on_marketplace = True
+        product = shop.add_product(name, selling_price="450")
+        product.on_marketplace = True
+        made.append((shop, product))
+    db.flush()
+    return made
+
+
+def _pause(client, headers, tenant_id, enabled=False):
+    response = client.put(
+        "/api/v1/platform/settings",
+        json={
+            "key": "marketplace_listed",
+            "enabled": enabled,
+            "tenant_id": str(tenant_id),
+            "reason": "Not answering requests",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.json()
+    return response
+
+
+def test_pausing_one_shop_takes_its_products_off_the_marketplace(
+    client, db, listed_shops, admin_headers
+):
+    (paused, _), (other, _) = listed_shops
+    before = client.get("/api/v1/market/products").json()
+    assert before["total"] == 2
+
+    _pause(client, admin_headers, paused.tenant.id)
+
+    after = client.get("/api/v1/market/products").json()
+    assert after["total"] == 1, "the paused shop's product is gone"
+    assert after["items"][0]["shop"]["name"] == other.tenant.name
+
+
+def test_pausing_one_shop_leaves_every_other_shop_alone(
+    client, db, listed_shops, admin_headers
+):
+    (paused, _), (other, _) = listed_shops
+    _pause(client, admin_headers, paused.tenant.id)
+
+    shops = client.get("/api/v1/market/shops").json()["shops"]
+    names = {shop["name"] for shop in shops}
+    assert other.tenant.name in names
+    assert paused.tenant.name not in names
+
+
+def test_a_paused_shop_cannot_receive_a_request(client, db, listed_shops, admin_headers):
+    """A basket filled before the pause must not reach it either."""
+    (paused, product), _ = listed_shops
+    _pause(client, admin_headers, paused.tenant.id)
+
+    asked = client.post(
+        "/api/v1/market/requests",
+        json={
+            "items": [{"variant_id": str(product.default_variant.id), "quantity": "1"}],
+            "contact_name": "Buyer",
+            "contact_phone": "0911000000",
+        },
+    )
+    assert asked.status_code == 422, asked.json()
+    assert "no longer available" in asked.json()["message"]
+
+
+def test_pausing_does_not_touch_the_shops_own_decision_to_be_listed(
+    client, db, listed_shops, admin_headers
+):
+    """The shop's opt-in is its own, and is waiting when the pause is lifted."""
+    from sqlalchemy import select
+
+    from app.models.commerce import OnlineStore
+
+    (paused, _), _ = listed_shops
+    _pause(client, admin_headers, paused.tenant.id)
+
+    store = db.execute(
+        select(OnlineStore).where(OnlineStore.tenant_id == paused.tenant.id)
+    ).scalar_one()
+    assert store.list_on_marketplace is True, "the operator did not rewrite it"
+
+    _pause(client, admin_headers, paused.tenant.id, enabled=True)
+    assert client.get("/api/v1/market/products").json()["total"] == 2
+
+
+def test_a_shops_switches_are_readable_on_its_own(client, db, business, admin_headers):
+    page = client.get(
+        f"/api/v1/platform/tenants/{business.tenant.id}/settings", headers=admin_headers
+    )
+    assert page.status_code == 200, page.json()
+    rows = {row["key"]: row for row in page.json()["settings"]}
+    # Only the switches that mean something for one shop.
+    assert set(rows) == {"marketplace_listed"}
+    assert rows["marketplace_listed"]["enabled"] is True
+    assert rows["marketplace_listed"]["set_for_shop"] is False
+
+    _pause(client, admin_headers, business.tenant.id)
+    after = client.get(
+        f"/api/v1/platform/tenants/{business.tenant.id}/settings", headers=admin_headers
+    ).json()["settings"][0]
+    assert after["enabled"] is False
+    assert after["set_for_shop"] is True
+
+
+def test_pausing_the_platform_still_lets_one_shop_be_turned_back_on(
+    client, db, listed_shops, admin_headers
+):
+    """"Paused for everyone, except this one" has to work in the query too."""
+    (kept, _), _ = listed_shops
+    client.put(
+        "/api/v1/platform/settings",
+        json={"key": "marketplace_listed", "enabled": False},
+        headers=admin_headers,
+    ).raise_for_status()
+    assert client.get("/api/v1/market/products").json()["total"] == 0
+
+    _pause(client, admin_headers, kept.tenant.id, enabled=True)
+    listed = client.get("/api/v1/market/products").json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["shop"]["name"] == kept.tenant.name

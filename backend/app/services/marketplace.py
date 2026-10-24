@@ -42,6 +42,7 @@ from app.models.catalogue import Category, Product, ProductVariant
 from app.models.commerce import OnlineStore
 from app.models.inventory import StockBalance
 from app.models.platform import Tenant, TenantStatus
+from app.services import platform_settings
 from app.services.storage import public_file_url
 
 #: Shops in these states cannot post anything, so they cannot answer a
@@ -126,7 +127,20 @@ class MarketplaceProduct:
         }
 
 
-def _listed_shops() -> Select:
+def taking_part(db: Session, tenant_column):
+    """Shops the platform owner has not paused, as a SQL condition.
+
+    Two separate decisions decide whether a shop appears here, and keeping
+    them apart matters.  ``OnlineStore.list_on_marketplace`` is the *shop's*
+    choice to be listed.  ``marketplace_listed`` is the *platform owner's*
+    switch over that shop — a way to stop sending buyers to a shop that is
+    not answering, without quietly rewriting the shop's own decision, which
+    would be there waiting the moment the pause was lifted.
+    """
+    return platform_settings.participation_filter(db, "marketplace_listed", tenant_column)
+
+
+def _listed_shops(db: Session) -> Select:
     """Shops on the marketplace that are in a state to answer a request."""
     return (
         select(OnlineStore, Tenant)
@@ -134,11 +148,12 @@ def _listed_shops() -> Select:
         .where(
             OnlineStore.list_on_marketplace.is_(True),
             Tenant.status.notin_(UNAVAILABLE_STATUSES),
+            taking_part(db, OnlineStore.tenant_id),
         )
     )
 
 
-def _listed_products() -> Select:
+def _listed_products(db: Session) -> Select:
     """The cross-tenant catalogue.  The one place this boundary is crossed.
 
     Joined to ``online_stores`` rather than filtered by tenant id, because the
@@ -155,19 +170,20 @@ def _listed_products() -> Select:
             Product.is_active.is_(True),
             OnlineStore.list_on_marketplace.is_(True),
             Tenant.status.notin_(UNAVAILABLE_STATUSES),
+            taking_part(db, Product.tenant_id),
         )
     )
 
 
 def shops(db: Session) -> list[MarketplaceShop]:
     """The shop directory, for browsing by vendor."""
-    rows = db.execute(_listed_shops().order_by(OnlineStore.display_name)).all()
+    rows = db.execute(_listed_shops(db).order_by(OnlineStore.display_name)).all()
     return [_shop(store) for store, _tenant in rows]
 
 
 def get_shop(db: Session, slug: str) -> MarketplaceShop:
     """One shop's marketplace listing."""
-    row = db.execute(_listed_shops().where(OnlineStore.slug == slug)).first()
+    row = db.execute(_listed_shops(db).where(OnlineStore.slug == slug)).first()
     if row is None:
         raise NotFoundError("Shop not found")
     return _shop(row[0])
@@ -185,6 +201,7 @@ def categories(db: Session) -> list[str]:
             Product.is_active.is_(True),
             OnlineStore.list_on_marketplace.is_(True),
             Tenant.status.notin_(UNAVAILABLE_STATUSES),
+            taking_part(db, Product.tenant_id),
         )
         .distinct()
         .order_by(Category.name)
@@ -203,7 +220,7 @@ def marketplace_products(
 ) -> tuple[list[MarketplaceProduct], int]:
     """Browse or search the whole marketplace.  Returns a page and the total."""
     limit = max(1, min(limit, MAX_PAGE))
-    stmt = _listed_products().options(
+    stmt = _listed_products(db).options(
         joinedload(Product.variants), joinedload(Product.category)
     )
 
@@ -247,7 +264,7 @@ def get_marketplace_product(
 ) -> MarketplaceProduct:
     """One listed product, by its own shareable id."""
     row = db.execute(
-        _listed_products()
+        _listed_products(db)
         .where(Product.id == product_id)
         .options(joinedload(Product.variants), joinedload(Product.category))
     ).unique().first()

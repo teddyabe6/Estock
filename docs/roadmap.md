@@ -31,7 +31,8 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | One basket spanning shops becomes one request each shop answers alone | `test_marketplace.py` — fan-out, per-shop isolation, tracking, withdrawal |
 | The platform can tell who has paid, who owes and what is overdue | `test_billing.py` (65 tests: derived balances, reversal and void, idempotent payment, the billing run, the platform's own totals) |
 | Paying restores service; a lapsed period withdraws it without deleting anything | `test_billing.py` — renewal, a suspension that paying cannot lift, lapse with every figure still readable |
-| The platform owner controls who may register and whether the marketplace takes requests | `test_platform_settings.py` (14 tests: defaults, per-shop override, an unknown key refused, closing registration without touching existing shops) |
+| The platform owner controls who may register and whether the marketplace takes requests | `test_platform_settings.py` (20 tests: defaults, per-shop override, an unknown key refused, closing registration without touching existing shops) |
+| One shop can be paused on the marketplace without touching its own listing choice | `test_platform_settings.py` — its products leave the catalogue, a stale basket cannot reach it, other shops are unaffected, and its own opt-in is still there when the pause lifts |
 
 The web app now covers every MVP workflow end to end: onboarding, import,
 products, sales and receipts, receiving with supplier credit, adjustments and
@@ -105,10 +106,6 @@ customer communications, marketplace and discovery, accounting integrations.
 
 ## Known gaps worth naming
 
-- **The console has no per-shop marketplace control yet.** `marketplace_open`
-  can be set for one shop through the API, but the settings screen only turns
-  the platform-wide switch; pausing a single shop's marketplace means a call
-  to `PUT /platform/settings` with a `tenant_id`.
 - **Support access hands back a token rather than opening the shop.** The
   console grants it and confirms it is recorded, but the operator has to use
   the token themselves. Opening the shop in a new tab as that session is the

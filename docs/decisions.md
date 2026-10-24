@@ -125,6 +125,9 @@ open, because it only asked for subscription *state*, not subscription money:
 | What is a flag with no row at all? | Its documented default, never "off". | An empty table must not disable registration or the marketplace. |
 | Which wins, the shop's flag or the platform's? | The shop's. | So that "closed, except for this one" can be said. |
 | Does closing registration affect shops that exist? | **No.** It only turns away new sign-ups. | They have already registered; taking their service away would be a different decision, and a much larger one. |
+| Can one key mean different things at platform and shop level? | **No.** `marketplace_open` pauses requests platform-wide; `marketplace_listed` decides whether a shop takes part. | One key doing two jobs is how the per-shop value ended up settable and never read. A switch is only checkable if it means one thing. |
+| Does pausing a shop change its own marketplace opt-in? | **No.** The operator's switch and the shop's choice are separate rows. | Rewriting the shop's decision would lose it, and it would have to be guessed at when the pause was lifted. The shop's setting is waiting, unchanged. |
+| What does a buyer see when a shop is paused mid-basket? | The same "no longer available" message as for anything else that has gone. | The basket lives in their browser and may be days old; a shop being paused is no different from a product being unlisted. |
 
 ## Decisions made while building that the PRD did not raise
 

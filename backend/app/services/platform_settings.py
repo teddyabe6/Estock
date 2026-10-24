@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import false, select, true
 from sqlalchemy.orm import Session
 
 from app.core.errors import ValidationError
@@ -54,7 +54,20 @@ FLAGS: tuple[Flag, ...] = (
         default=True,
         description=(
             "Whether the central marketplace accepts new requests from buyers. "
-            "Turn it off to pause the marketplace without unlisting anything."
+            "Turn it off to pause the marketplace without unlisting anything: "
+            "people can still browse, they just cannot ask for prices."
+        ),
+        per_tenant=False,
+    ),
+    Flag(
+        key="marketplace_listed",
+        default=True,
+        description=(
+            "Whether shops take part in the central marketplace. Off for one "
+            "shop stops sending buyers to that one; off platform-wide unlists "
+            "every shop that has no setting of its own. Either way a shop's "
+            "products stop appearing and it stops receiving requests, and its "
+            "own decision to be listed is left untouched."
         ),
     ),
 )
@@ -98,6 +111,72 @@ def is_enabled(db: Session, key: str, *, tenant_id: uuid.UUID | None = None) -> 
         if row.tenant_id is None:
             return row.enabled
     return flag.default
+
+
+def participation_filter(db: Session, key: str, tenant_column):
+    """A SQL condition matching rows whose shop has this switch on.
+
+    The point is to resolve the switch for every shop in one query and hand
+    back something a catalogue query can use directly, rather than asking per
+    row.  It resolves the same way :func:`is_enabled` does for one shop — the
+    shop's own row wins, else the platform row, else the default — in both
+    directions:
+
+    * platform on  → every shop but the ones explicitly turned off;
+    * platform off → only the shops explicitly turned back on, which is what
+      makes "paused for everyone, except this one" work.
+
+    Returns ``true()`` or ``false()`` when the answer is the same for all of
+    them, so the common case costs nothing in the query.
+    """
+    flag = known(key)
+    rows = db.execute(select(FeatureFlag).where(FeatureFlag.key == key)).scalars().all()
+    platform_on = next(
+        (row.enabled for row in rows if row.tenant_id is None), flag.default
+    )
+    per_shop = {row.tenant_id: row.enabled for row in rows if row.tenant_id is not None}
+
+    if platform_on:
+        off = [tenant_id for tenant_id, on in per_shop.items() if not on]
+        return true() if not off else tenant_column.notin_(off)
+    on = [tenant_id for tenant_id, enabled in per_shop.items() if enabled]
+    return false() if not on else tenant_column.in_(on)
+
+
+def enabled_platform_wide(db: Session, key: str) -> bool:
+    """The platform-wide setting on its own, ignoring any per-shop rows."""
+    flag = known(key)
+    row = db.execute(
+        select(FeatureFlag).where(
+            FeatureFlag.key == key, FeatureFlag.tenant_id.is_(None)
+        )
+    ).scalar_one_or_none()
+    return flag.default if row is None else row.enabled
+
+
+def describe_for_tenant(db: Session, tenant_id: uuid.UUID) -> list[dict]:
+    """One shop's switches: where each stands for it, and why.
+
+    Only the switches that can be set per shop. A platform-wide one is not
+    this shop's business and is not offered against it.
+    """
+    rows = {
+        row.key: row
+        for row in db.execute(
+            select(FeatureFlag).where(FeatureFlag.tenant_id == tenant_id)
+        ).scalars()
+    }
+    return [
+        {
+            "key": flag.key,
+            "description": flag.description,
+            "enabled": is_enabled(db, flag.key, tenant_id=tenant_id),
+            "set_for_shop": flag.key in rows,
+            "platform_default": enabled_platform_wide(db, flag.key),
+        }
+        for flag in FLAGS
+        if flag.per_tenant
+    ]
 
 
 def describe(db: Session) -> list[dict]:

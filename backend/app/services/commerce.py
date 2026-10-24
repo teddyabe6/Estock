@@ -44,7 +44,7 @@ from app.models.commerce import (
 from app.models.contacts import Customer
 from app.models.inventory import StockBalance
 from app.models.platform import Tenant, TenantStatus
-from app.services.marketplace import UNAVAILABLE_STATUSES
+from app.services.marketplace import UNAVAILABLE_STATUSES, taking_part
 from app.services.numbering import next_number
 from app.services.pricing import quantize_money
 from app.services.storage import public_file_url
@@ -1124,6 +1124,10 @@ def _group_by_shop(
             Product.on_marketplace.is_(True),
             OnlineStore.list_on_marketplace.is_(True),
             Tenant.status.notin_(UNAVAILABLE_STATUSES),
+            # The same switch the catalogue honours, so a shop the platform
+            # owner paused cannot be reached through a basket that was filled
+            # before the pause.
+            taking_part(db, Product.tenant_id),
         )
     ).all()
 
