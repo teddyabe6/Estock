@@ -135,6 +135,12 @@ h2 {
   );
 }
 
+/* The controls sit at the right of the bar on one line, and stay there when a
+   narrow screen makes them wrap onto two. */
+.topbar > .row {
+  justify-content: flex-end;
+}
+
 .topbar .brand {
   font-weight: 650;
   color: var(--text);
@@ -162,6 +168,11 @@ h2 {
 }
 
 .nav a {
+  /* The bar scrolls; the pills do not squash. Without this they shrink to fit
+     the screen — on a phone every label spilled out of its own pill and ran
+     into the next one — because a flex item shrinks before its container
+     overflows, and these are deliberately allowed to shrink by min-width: 0. */
+  flex: none;
   padding: 7px 13px;
   border-radius: 999px;
   color: var(--text-muted);
@@ -1554,5 +1565,31 @@ button.link {
 @media (max-width: 540px) {
   .slip-row .row {
     width: 100%;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Finding the operator console
+
+   The console is a separate account, so the signposts are deliberately quiet:
+   a shop owner should not read them as something of theirs to click.
+   -------------------------------------------------------------------------- */
+
+.operator-note {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+/* Only ever rendered for somebody already signed in to the console. */
+.console-link {
+  border-color: var(--brand);
+  color: var(--brand-strong);
+}
+
+@media (max-width: 560px) {
+  .console-link {
+    order: 3;
   }
 }

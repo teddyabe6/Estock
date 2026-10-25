@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { getAdminToken } from "@/lib/admin";
 import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
@@ -32,10 +33,27 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [unread, setUnread] = useState(0);
+  const [isOperator, setIsOperator] = useState(false);
 
   useEffect(() => {
     if (!loading && !session) router.replace("/sign-in");
   }, [loading, session, router]);
+
+  /**
+   * Show the way back to the console only to somebody who is signed in to it.
+   *
+   * A shop owner has no business seeing a link to the operator's console, and
+   * would only click it and meet a sign-in that is not theirs. An operator who
+   * went into a shop through support access, though, needs a way out —
+   * otherwise the only route back is remembering the URL.
+   *
+   * Read in an effect because localStorage does not exist while rendering on
+   * the server, and checked on each navigation in case they signed out of the
+   * console in another tab.
+   */
+  useEffect(() => {
+    setIsOperator(Boolean(getAdminToken()));
+  }, [pathname]);
 
   // The unread badge: a light poll, so a reminder or an enquiry shows up
   // without a page reload (PRD 11.4 — in-app is the first channel).
@@ -91,6 +109,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span aria-hidden>🔔</span>
             {unread > 0 && <span className="bell-count">{unread > 99 ? "99+" : unread}</span>}
           </Link>
+          {isOperator && (
+            <Link href="/admin" className="btn secondary console-link">
+              Console
+            </Link>
+          )}
           <div className="who">
             {session.user.full_name}
             <br />

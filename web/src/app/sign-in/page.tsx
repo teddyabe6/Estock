@@ -65,10 +65,18 @@ export default function SignInPage() {
           </button>
         </form>
 
-        <p className="sub" style={{ marginTop: 16, marginBottom: 0 }}>
+        <p className="sub" style={{ marginTop: 16 }}>
           New here? <Link href="/register">Create a business account</Link>
           <br />
           <Link href="/forgot-password">Forgot your password?</Link>
+        </p>
+
+        {/* The operator comes here out of habit and then has to remember a
+            different URL. The wording makes clear it is not a shop owner's
+            door, so nobody tries their shop password against it. */}
+        <p className="sub operator-note">
+          Running this platform? The operator console is a separate account —{" "}
+          <Link href="/admin">sign in there</Link>.
         </p>
       </div>
     </div>
