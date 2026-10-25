@@ -18,6 +18,22 @@ export default function MorePage() {
 function More() {
   const { session, can, signOut } = useSession();
   const items = [
+    // The phone's bottom tab bar carries five tabs, so these two live here as
+    // well — hidden on a wider screen, where the bar already has them.
+    {
+      href: "/products",
+      label: "Products",
+      sub: "Catalogue, prices, barcodes and stock levels",
+      show: can("product:view"),
+      phoneOnly: true,
+    },
+    {
+      href: "/reports",
+      label: "Reports",
+      sub: "Sales, profit, stock movement and credit",
+      show: can("report:sales"),
+      phoneOnly: true,
+    },
     {
       href: "/credit",
       label: "Credit",
@@ -53,7 +69,7 @@ function More() {
       <div className="card">
         <ul className="menu-list">
           {items.map((item) => (
-            <li key={item.href}>
+            <li key={item.href} className={item.phoneOnly ? "phone-only" : undefined}>
               <Link href={item.href}>
                 {item.label}
                 <span className="sub">{item.sub}</span>

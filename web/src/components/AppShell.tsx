@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { NavIcon } from "@/components/NavIcons";
 import { getAdminToken } from "@/lib/admin";
 import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
@@ -14,15 +15,21 @@ import { useSession } from "@/lib/session";
  * Kept short on purpose, and in the order the PRD suggests for the web:
  * Home, Sales, Products, Stock, Online Shop, Reports and More. Each entry is
  * hidden unless the user may use it; everything else lives under More.
+ *
+ * `phone` marks the five the PRD suggests for a phone (7): Home, Sales, Stock,
+ * Shop and More. The other two are not taken away — on a phone they step back
+ * into More, which is what More is for. The icon is drawn only there, where
+ * the bar sits at the bottom of the screen and a bare label is too thin a
+ * thing to aim a thumb at.
  */
 const NAV = [
-  { href: "/", label: "Home", permission: null },
-  { href: "/sales", label: "Sales", permission: "sale:view" },
-  { href: "/products", label: "Products", permission: "product:view" },
-  { href: "/stock", label: "Stock", permission: "stock:view" },
-  { href: "/shop", label: "Shop", permission: "shop:view" },
-  { href: "/reports", label: "Reports", permission: "report:sales" },
-  { href: "/more", label: "More", permission: null },
+  { href: "/", label: "Home", permission: null, icon: "home", phone: true },
+  { href: "/sales", label: "Sales", permission: "sale:view", icon: "sales", phone: true },
+  { href: "/products", label: "Products", permission: "product:view", icon: "products", phone: false },
+  { href: "/stock", label: "Stock", permission: "stock:view", icon: "stock", phone: true },
+  { href: "/shop", label: "Shop", permission: "shop:view", icon: "shop", phone: true },
+  { href: "/reports", label: "Reports", permission: "report:sales", icon: "reports", phone: false },
+  { href: "/more", label: "More", permission: null, icon: "more", phone: true },
 ] as const;
 
 /** Routes reached from More, so the More tab stays highlighted while on them. */
@@ -95,7 +102,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="shell">
+    <div className="shell has-tabbar">
       <header className="topbar">
         <Link href="/" className="brand">
           {session.tenant_name}
@@ -127,10 +134,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <nav className="nav" aria-label="Primary">
+      <nav className="nav tabbar" aria-label="Primary">
         {items.map((item) => (
-          <Link key={item.href} href={item.href} aria-current={isCurrent(item.href) ? "page" : undefined}>
-            {item.label}
+          <Link
+            key={item.href}
+            href={item.href}
+            data-phone={item.phone ? "yes" : "no"}
+            aria-current={isCurrent(item.href) ? "page" : undefined}
+          >
+            <NavIcon name={item.icon} />
+            <span>{item.label}</span>
           </Link>
         ))}
       </nav>
