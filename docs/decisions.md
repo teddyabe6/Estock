@@ -114,6 +114,17 @@ open, because it only asked for subscription *state*, not subscription money:
 | Is a shop on no plan billed? | **No**, it is skipped and the reason is reported. | There is no price to charge. Inventing one is worse than raising nothing. |
 | Is a trial charged for? | No. The first invoice starts the day after the trial ends. | A trial is service already given. A shop is never charged for days it was given free. |
 
+## Paying for an order
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Is there a payment gateway? | **No.** The buyer transfers and sends the slip; the seller checks their account and confirms. | That is how this trade already works. A gateway means settlement, refunds and reconciliation, and Ethiopian card rails are not where the money moves. |
+| Does a slip post to the books? | **No.** It is a claim. The money goes on the sale through the existing payment flow. | One path by which value enters a ledger. Otherwise anyone with a share link could write to a shop's books by uploading a picture. |
+| When can a buyer send one? | Only once the seller has priced and sent the proforma. | Before that there is no amount, so there is nothing to pay. |
+| Who decides whether the screen offers it? | The server, through `can_send_payment`. | The screen had worked it out from "are amounts visible", which is true for an unpriced request at a shop that shows prices — so it offered a form the server refused. |
+| Is the slip public? | **No.** Private asset, served through the shop's own session. | It is somebody's banking document. |
+| What may be uploaded? | A photo or a PDF, up to ten per proforma. | A slip is a picture of a slip. The ceiling is so one link is not a way to fill a shop's storage. |
+
 ## The platform console
 
 | Question | Decision | Why |

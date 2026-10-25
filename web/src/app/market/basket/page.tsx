@@ -187,11 +187,16 @@ export default function MarketBasketPage() {
 
         {error ? <Alert>{error}</Alert> : null}
 
-        <button type="submit" className="btn primary" disabled={busy}>
-          {busy
-            ? "Sending…"
-            : `Ask ${basket.shopCount} shop${basket.shopCount === 1 ? "" : "s"} for prices`}
-        </button>
+        <div className="row">
+          <button type="submit" className="btn primary" disabled={busy}>
+            {busy
+              ? "Sending…"
+              : `Ask ${basket.shopCount} shop${basket.shopCount === 1 ? "" : "s"} for prices`}
+          </button>
+          <Link href="/market" className="btn secondary">
+            Add more products
+          </Link>
+        </div>
         <p className="disclaimer">
           You will get one link that tracks every shop&apos;s reply. You can
           accept one shop&apos;s quotation and leave another&apos;s.

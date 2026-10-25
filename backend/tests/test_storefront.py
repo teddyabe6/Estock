@@ -580,3 +580,104 @@ def test_private_uploads_are_never_served_publicly(client, business):
     business.db.add(asset)
     business.db.flush()
     assert client.get(f"/api/v1/public/files/{asset.id}").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Narrowing the catalogue
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def priced_shelf(client, business):
+    """A shop with prices across a range, for the filters to work on."""
+    store = publish(business)
+    for name, price in (
+        ("Shiro powder", "320"),
+        ("Berbere", "450"),
+        ("Cement", "1200"),
+        ("Sugar sack", "4750"),
+    ):
+        business.add_product(name, selling_price=price, opening_stock="10", is_published=True)
+    business.db.flush()
+    return store
+
+
+def _listed(client, store, **params):
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    response = client.get(f"/api/v1/public/shops/{store.slug}/products?{query}")
+    assert response.status_code == 200, response.json()
+    return response.json()
+
+
+def test_the_shop_reports_the_range_it_sells_in(client, priced_shelf):
+    """So the filter can offer real bounds rather than an arbitrary pair."""
+    shop = client.get(f"/api/v1/public/shops/{priced_shelf.slug}").json()
+    assert shop["price_range"] == ["320.00", "4750.00"]
+
+
+def test_a_shop_that_hides_prices_has_no_range_to_filter_on(
+    client, business, priced_shelf
+):
+    """Offering a price filter where prices are 'ask us' is a dead control."""
+    priced_shelf.show_prices = False
+    business.db.flush()
+
+    shop = client.get(f"/api/v1/public/shops/{priced_shelf.slug}").json()
+    assert shop["price_range"] == [None, None]
+
+
+def test_a_price_range_narrows_the_catalogue(client, priced_shelf):
+    page = _listed(client, priced_shelf, min_price=400, max_price=1300)
+    assert {item["name"] for item in page["items"]} == {"Berbere", "Cement"}
+    assert page["total"] == 2
+
+
+def test_a_bound_excludes_what_has_no_price_to_compare(client, business, priced_shelf):
+    """"Under 500 birr" cannot be true of something priced on request."""
+    askable = business.add_product("Special order", selling_price=None, is_published=True)
+    business.db.flush()
+
+    unfiltered = _listed(client, priced_shelf)
+    assert "Special order" in {item["name"] for item in unfiltered["items"]}
+
+    bounded = _listed(client, priced_shelf, max_price=5000)
+    assert "Special order" not in {item["name"] for item in bounded["items"]}
+    assert askable.id is not None
+
+
+def test_cheapest_first_and_dearest_first(client, priced_shelf):
+    low = [item["price"] for item in _listed(client, priced_shelf, sort="price_low")["items"]]
+    assert low == ["320.00", "450.00", "1200.00", "4750.00"]
+
+    high = [item["price"] for item in _listed(client, priced_shelf, sort="price_high")["items"]]
+    assert high == ["4750.00", "1200.00", "450.00", "320.00"]
+
+
+def test_a_product_with_no_price_sorts_last_not_first(client, business, priced_shelf):
+    """A plain None comparison would treat 'ask us' as free."""
+    business.add_product("Special order", selling_price=None, is_published=True)
+    business.db.flush()
+
+    names = [item["name"] for item in _listed(client, priced_shelf, sort="price_low")["items"]]
+    assert names[-1] == "Special order"
+
+
+def test_an_unknown_sort_is_refused_with_the_real_ones(client, priced_shelf):
+    response = client.get(
+        f"/api/v1/public/shops/{priced_shelf.slug}/products?sort=cheapest"
+    )
+    assert response.status_code == 422, response.json()
+    assert "price_low" in str(response.json()["details"]["allowed"])
+
+
+def test_a_category_and_a_price_range_narrow_together(client, business, priced_shelf):
+    business.add_product(
+        "Teff flour", selling_price="2800", category_name="Grains", is_published=True
+    )
+    business.add_product(
+        "Barley", selling_price="600", category_name="Grains", is_published=True
+    )
+    business.db.flush()
+
+    page = _listed(client, priced_shelf, category="Grains", max_price=1000)
+    assert {item["name"] for item in page["items"]} == {"Barley"}

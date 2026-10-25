@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { request } from "@/lib/api";
+import { apiBaseUrl, request } from "@/lib/api";
 
 export type Shop = {
   slug: string;
@@ -24,6 +24,22 @@ export type Shop = {
   show_prices: boolean;
   checkout_note: string | null;
   categories: string[];
+  /** The cheapest and dearest shown price, or nulls when there is nothing to
+   *  filter on — a shop that hides prices, or none carries one. */
+  price_range: [string | null, string | null];
+};
+
+/** How a shopper may order the catalogue. Mirrors the API's SORT_ORDERS. */
+export type ProductSort = "name" | "price_low" | "price_high";
+
+export type ProductFilters = {
+  q?: string;
+  category?: string;
+  min_price?: string;
+  max_price?: string;
+  sort?: ProductSort;
+  limit?: number;
+  offset?: number;
 };
 
 export type PublicVariant = {
@@ -63,6 +79,8 @@ export type ProformaView = {
   status: string;
   next_step: string;
   can_respond: boolean;
+  /** Whether there is anything to pay yet. The server decides; see public.py. */
+  can_send_payment: boolean;
   amounts_visible: boolean;
   issued_on: string;
   valid_until: string | null;
@@ -107,12 +125,55 @@ function qs(params: Record<string, string | number | undefined>): string {
   return pairs.length ? `?${pairs.join("&")}` : "";
 }
 
+export type PaymentSlip = {
+  id: string;
+  quotation_id: string;
+  status: "submitted" | "accepted" | "rejected";
+  amount_claimed: string | null;
+  method: string | null;
+  reference: string | null;
+  paid_on: string | null;
+  note: string | null;
+  sender_name: string | null;
+  sender_phone: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  file_asset_id?: string;
+};
+
+/** How Ethiopian buyers actually pay, in the order they are reached for. */
+export const SLIP_METHODS = [
+  "telebirr",
+  "cbe_birr",
+  "bank_transfer",
+  "mobile_money",
+  "cash",
+  "other",
+] as const;
+
+export function slipMethodLabel(method: string): string {
+  switch (method) {
+    case "telebirr":
+      return "telebirr";
+    case "cbe_birr":
+      return "CBE Birr";
+    case "bank_transfer":
+      return "Bank transfer";
+    case "mobile_money":
+      return "Mobile money";
+    default:
+      return method.charAt(0).toUpperCase() + method.slice(1).replace(/_/g, " ");
+  }
+}
+
 export const shopApi = {
   shop: (slug: string) => request<Shop>(`/public/shops/${slug}`, { anonymous: true }),
-  products: (slug: string, params: { q?: string; category?: string; limit?: number; offset?: number } = {}) =>
-    request<{ items: PublicProduct[]; total: number }>(`/public/shops/${slug}/products${qs(params)}`, {
-      anonymous: true,
-    }),
+  products: (slug: string, params: ProductFilters = {}) =>
+    request<{ items: PublicProduct[]; total: number; currency: string }>(
+      `/public/shops/${slug}/products${qs(params)}`,
+      { anonymous: true },
+    ),
   product: (slug: string, id: string) =>
     request<PublicProduct & { currency: string }>(`/public/shops/${slug}/products/${id}`, {
       anonymous: true,
@@ -131,6 +192,27 @@ export const shopApi = {
     }),
   quotation: (token: string) =>
     request<ProformaView>(`/public/quotations/${token}`, { anonymous: true }),
+  /**
+   * Tell the seller you have paid, and show them the slip.
+   *
+   * Multipart rather than JSON because it carries the file. There is no
+   * payment gateway: the buyer transfers by telebirr or at a bank and sends
+   * the screenshot, which is how this trade already works.
+   */
+  sendPaymentSlip: async (token: string, form: FormData) => {
+    const base = apiBaseUrl();
+    const response = await fetch(`${base}/public/quotations/${token}/payment-slip`, {
+      method: "POST",
+      body: form,
+    });
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : null;
+    if (!response.ok) {
+      throw new Error(payload?.message ?? "Could not send your slip");
+    }
+    return payload as PaymentSlip & { message: string };
+  },
+
   respond: (token: string, accept: boolean) =>
     request<{ message: string; status: string }>(`/public/quotations/${token}/respond?accept=${accept}`, {
       method: "POST",

@@ -444,6 +444,34 @@ and the buyer declines those individually. Either way it is written to each
 shop's own audit log, with the buyer named as the actor since they have no
 account.
 
+## Paying, without a payment gateway
+
+There is no card processing here, and that is the design rather than a gap.
+An Ethiopian buyer transfers by telebirr, CBE Birr or at a bank and then sends
+the seller the screenshot; the seller checks their own account and confirms.
+`PaymentSlip` is that screenshot, attached to the proforma it pays for.
+
+A slip is a **claim**, not money. Sending one records nothing in the shop's
+books: posting the money stays the seller's existing payment flow against the
+sale, so there is exactly one path by which value enters a ledger, and a
+stranger holding a share link cannot write to one by uploading a picture.
+Accepting a slip records that the seller found the money and nothing more.
+
+The upload is reachable without an account, like accepting a proforma, because
+the buyer has neither. What that buys them is narrow and bounded: a file and
+some text hung off one proforma, up to ten per proforma, in the shop's own
+storage. Only pictures and PDFs are accepted, and only once the seller has
+sent a price — before that there is nothing to pay, and the server says so
+through `can_send_payment` rather than leaving the screen to work it out. That
+flag exists because the screen did work it out, wrongly: a shop that shows
+prices to visitors makes amounts visible on an unpriced request too, so "there
+is an amount on screen" is not the same question as "is there anything to
+pay".
+
+The file itself is a private `FileAsset`, served only through the shop's
+authenticated session. It is a stranger's banking document, and the only
+people with a reason to see it are the ones who can act on it.
+
 ## Trial expiry
 
 When a trial lapses the business becomes read-only: existing data stays visible

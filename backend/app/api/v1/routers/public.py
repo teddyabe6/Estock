@@ -7,23 +7,40 @@ slug, an unguessable share token, or the unguessable id of a public file.
 from __future__ import annotations
 
 import uuid
+from datetime import date
+from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import RedirectResponse
 
 from app.core.deps import DbSession, client_ip, limit_public_requests
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, ValidationError
 from app.models.commerce import QuotationStatus
 from app.models.platform import Tenant
 from app.models.system import FileAsset
 from app.schemas.operations import EnquiryIn, EnquiryOut, ProformaRequestIn
 from app.services.commerce import (
+    SORT_ORDERS,
     BasketItem,
+    PaymentSlipInput,
+    attach_payment_slip,
     get_public_product,
     get_public_store,
     get_quotation_by_token,
     list_public_products,
+    payment_slip_as_dict,
     public_categories,
+    public_price_range,
     quotation_status_for,
     request_quotation,
     respond_to_quotation,
@@ -39,6 +56,7 @@ router = APIRouter(prefix="/public", tags=["public storefront"])
 @router.get("/shops/{slug}")
 def shop(slug: str, db: DbSession) -> dict:
     store, tenant = get_public_store(db, slug)
+    price_range = public_price_range(db, store, tenant)
     return {
         "slug": store.slug,
         "display_name": store.display_name,
@@ -52,6 +70,10 @@ def shop(slug: str, db: DbSession) -> dict:
         "show_prices": store.show_prices,
         "checkout_note": store.checkout_note,
         "categories": public_categories(db, store),
+        # Real bounds for the price filter, so the shop screen can offer the
+        # range this shop actually sells in rather than an arbitrary one. Both
+        # null means there is nothing to filter on and no filter is shown.
+        "price_range": [str(low) if low is not None else None for low in price_range],
     }
 
 
@@ -61,13 +83,29 @@ def shop_products(
     db: DbSession,
     q: str | None = None,
     category: str | None = None,
+    min_price: Decimal | None = Query(None, ge=0),
+    max_price: Decimal | None = Query(None, ge=0),
+    sort: str | None = Query(None, description="name, price_low, price_high"),
     limit: int = Query(24, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict:
     """Published products with live availability from the shared stock source."""
     store, tenant = get_public_store(db, slug)
+    if sort is not None and sort not in SORT_ORDERS:
+        raise ValidationError(
+            f"'{sort}' is not a way to sort these", details={"allowed": list(SORT_ORDERS)}
+        )
     products, total = list_public_products(
-        db, store, tenant, query=q, category=category, limit=limit, offset=offset
+        db,
+        store,
+        tenant,
+        query=q,
+        category=category,
+        min_price=min_price,
+        max_price=max_price,
+        sort=sort,
+        limit=limit,
+        offset=offset,
     )
     return {
         "total": total,
@@ -188,6 +226,11 @@ def view_quotation(token: str, db: DbSession) -> dict:
         "status": str(status_now),
         "next_step": _NEXT_STEP.get(status_now, ""),
         "can_respond": status_now in (QuotationStatus.SENT, QuotationStatus.DRAFT),
+        # Whether there is anything to pay yet. The same rule the upload
+        # endpoint enforces, stated once here so the screen cannot offer a
+        # form the server will refuse: before the seller has priced it there
+        # is no amount, whatever the shop's price display says.
+        "can_send_payment": status_now != QuotationStatus.REQUESTED,
         "amounts_visible": amounts_visible,
         "issued_on": quotation.issued_on.isoformat(),
         "valid_until": quotation.valid_until.isoformat() if quotation.valid_until else None,
@@ -275,3 +318,57 @@ def public_file(asset_id: uuid.UUID, db: DbSession) -> Response:
             "Content-Disposition": f'inline; filename="{asset.filename}"',
         },
     )
+
+
+@router.post(
+    "/quotations/{token}/payment-slip",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limit_public_requests)],
+)
+async def send_payment_slip(
+    token: str,
+    request: Request,
+    db: DbSession,
+    file: UploadFile = File(..., description="A photo of the slip, or a PDF"),
+    amount: Decimal | None = Form(None),
+    method: str | None = Form(None),
+    reference: str | None = Form(None),
+    paid_on: date | None = Form(None),
+    note: str | None = Form(None),
+    sender_name: str | None = Form(None),
+    sender_phone: str | None = Form(None),
+) -> dict:
+    """Tell the seller you have paid, and show them the slip.
+
+    There is no payment gateway here by design: the buyer transfers by
+    telebirr, CBE Birr or a bank deposit and sends the screenshot, which is
+    how this trade already works.  The slip is a claim attached to the
+    proforma, not a posting — the seller checks their own account and
+    confirms, and the money reaches their books through the ordinary payment
+    flow on the sale.
+    """
+    content = await file.read()
+    slip = attach_payment_slip(
+        db,
+        token,
+        PaymentSlipInput(
+            filename=file.filename or "slip",
+            content_type=file.content_type or "application/octet-stream",
+            content=content,
+            amount_claimed=amount,
+            method=method,
+            reference=reference,
+            paid_on=paid_on,
+            note=note,
+            sender_name=sender_name,
+            sender_phone=sender_phone,
+            source_ip=client_ip(request),
+        ),
+    )
+    return {
+        **payment_slip_as_dict(slip),
+        "message": (
+            "Sent. The seller will check their account and confirm. "
+            "Keep your own copy of the slip until they do."
+        ),
+    }

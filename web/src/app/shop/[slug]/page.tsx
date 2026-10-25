@@ -9,7 +9,13 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, use, useEffect, useState } from "react";
 
-import { EnquiryForm, ProductCard, SellerContact, StorefrontShell } from "@/components/Storefront";
+import {
+  EnquiryForm,
+  ProductCard,
+  SellerContact,
+  ShopFilters,
+  StorefrontShell,
+} from "@/components/Storefront";
 import { Alert, Empty } from "@/components/ui";
 import { shortDate } from "@/lib/format";
 import {
@@ -18,6 +24,7 @@ import {
   shopApi,
   useBasket,
   useMyRequests,
+  type ProductSort,
   type PublicProduct,
   type Shop,
 } from "@/lib/storefront";
@@ -34,12 +41,19 @@ export default function ShopPage({ params }: { params: Promise<{ slug: string }>
 function Catalogue({ slug }: { slug: string }) {
   const router = useRouter();
   const search = useSearchParams();
+  // The filters live in the URL, so a narrowed catalogue can be shared,
+  // bookmarked and gone back to — the browser's back button is the one a
+  // shopper reaches for after opening a product.
   const category = search.get("category") ?? "";
+  const minPrice = search.get("min") ?? "";
+  const maxPrice = search.get("max") ?? "";
+  const sort = (search.get("sort") as ProductSort | null) ?? "name";
   const [query, setQuery] = useState(search.get("q") ?? "");
   const [shop, setShop] = useState<Shop | null>(null);
   const [products, setProducts] = useState<PublicProduct[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const basket = useBasket(slug);
   const requests = useMyRequests(slug);
   const currency = shop?.currency ?? "ETB";
@@ -55,7 +69,14 @@ function Catalogue({ slug }: { slug: string }) {
     let stale = false;
     const timer = setTimeout(() => {
       shopApi
-        .products(slug, { q: query.trim() || undefined, category: category || undefined, limit: 100 })
+        .products(slug, {
+          q: query.trim() || undefined,
+          category: category || undefined,
+          min_price: minPrice || undefined,
+          max_price: maxPrice || undefined,
+          sort: sort !== "name" ? sort : undefined,
+          limit: 100,
+        })
         .then((page) => {
           if (!stale) setProducts(page.items);
         })
@@ -67,10 +88,17 @@ function Catalogue({ slug }: { slug: string }) {
       stale = true;
       clearTimeout(timer);
     };
-  }, [slug, query, category]);
+  }, [slug, query, category, minPrice, maxPrice, sort]);
 
-  function pickCategory(name: string) {
-    router.replace(`/shop/${slug}${name ? `?category=${encodeURIComponent(name)}` : ""}`);
+  /** Change one filter, keeping the others, in the URL. */
+  function setFilters(changes: Record<string, string>) {
+    const next = new URLSearchParams(search.toString());
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    const qs = next.toString();
+    router.replace(`/shop/${slug}${qs ? `?${qs}` : ""}`, { scroll: false });
   }
 
   function addToBasket(product: PublicProduct) {
@@ -119,52 +147,58 @@ function Catalogue({ slug }: { slug: string }) {
 
       {asking && <EnquiryForm slug={slug} onDone={() => setAsking(false)} />}
 
-      {shop && shop.categories.length > 0 && (
-        <div className="chips" role="tablist" aria-label="Categories">
-          <button type="button" className={`chip${category ? "" : " is-active"}`} onClick={() => pickCategory("")}>
-            All
-          </button>
-          {shop.categories.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className={`chip${category.toLowerCase() === name.toLowerCase() ? " is-active" : ""}`}
-              onClick={() => pickCategory(name)}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="shop-layout">
+        <ShopFilters
+          categories={shop?.categories ?? []}
+          category={category}
+          onCategory={(name) => setFilters({ category: name })}
+          range={shop?.price_range ?? [null, null]}
+          minPrice={minPrice}
+          maxPrice={maxPrice}
+          onPrice={(min, max) => setFilters({ min, max })}
+          sort={sort}
+          onSort={(value) => setFilters({ sort: value === "name" ? "" : value })}
+          currency={currency}
+          resultCount={products?.length ?? null}
+          open={filtersOpen}
+          onToggle={() => setFiltersOpen((v) => !v)}
+        />
 
-      {products === null ? (
-        <p className="muted">Loading products…</p>
-      ) : products.length === 0 ? (
-        <Empty title={query || category ? "Nothing matches" : "Nothing to show yet"}>
-          <p>
-            {query || category
-              ? "Try another word or category."
-              : "This shop has not published any products yet."}
-          </p>
-        </Empty>
-      ) : (
-        <div className="product-grid">
-          {products.map((product) => {
-            const variant = defaultVariant(product);
-            return (
-              <ProductCard
-                key={product.id}
-                slug={slug}
-                product={product}
-                currency={currency}
-                inBasket={variant ? basket.quantityOf(variant.id) : 0}
-                onAdd={() => addToBasket(product)}
-                onChange={(quantity) => variant && basket.setQuantity(variant.id, quantity)}
-              />
-            );
-          })}
+        <div className="shop-results">
+          {products === null ? (
+            <p className="muted">Loading products…</p>
+          ) : products.length === 0 ? (
+            <Empty
+              title={
+                query || category || minPrice || maxPrice ? "Nothing matches" : "Nothing to show yet"
+              }
+            >
+              <p>
+                {query || category || minPrice || maxPrice
+                  ? "Try a wider price range, another category, or a different word."
+                  : "This shop has not published any products yet."}
+              </p>
+            </Empty>
+          ) : (
+            <div className="product-grid">
+              {products.map((product) => {
+                const variant = defaultVariant(product);
+                return (
+                  <ProductCard
+                    key={product.id}
+                    slug={slug}
+                    product={product}
+                    currency={currency}
+                    inBasket={variant ? basket.quantityOf(variant.id) : 0}
+                    onAdd={() => addToBasket(product)}
+                    onChange={(quantity) => variant && basket.setQuantity(variant.id, quantity)}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {requests.items.length > 0 && (
         <section className="card" style={{ marginTop: 20 }}>

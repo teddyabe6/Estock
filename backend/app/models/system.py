@@ -29,6 +29,8 @@ class NotificationKind(StrEnum):
     PROFORMA_REQUEST = "proforma_request"
     #: A customer accepted or declined a proforma.
     PROFORMA_RESPONSE = "proforma_response"
+    #: A buyer sent proof that they have paid, for the seller to check.
+    PAYMENT_SLIP = "payment_slip"
     TRIAL_EXPIRY = "trial_expiry"
     #: A paid subscription period ran out.  Distinct from TRIAL_EXPIRY so
     #: the two notices cannot suppress each other in the daily de-duplication.

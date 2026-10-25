@@ -13,7 +13,15 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { Alert, Badge, Drawer, Empty, Field, PageHead, Tabs, Toggle } from "@/components/ui";
-import { api, type Enquiry, type Product, type Quotation, type Store } from "@/lib/api";
+import {
+  api,
+  download,
+  type Enquiry,
+  type PaymentSlipRow,
+  type Product,
+  type Quotation,
+  type Store,
+} from "@/lib/api";
 import { dateTime, money, shortDate } from "@/lib/format";
 import { describeError, useSession } from "@/lib/session";
 
@@ -1006,6 +1014,8 @@ function ProformaDrawer({
         </>
       )}
 
+      {!editing && <PaymentSlips quotationId={quotation.id} currency={currency} manage={manage} />}
+
       {!editing && (
         <div className="row" style={{ marginTop: 6 }}>
           {canSend && (
@@ -1208,5 +1218,116 @@ function NewProforma({ onDone }: { onDone: (created: Quotation | null) => void }
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Proof of payment a buyer has sent against this proforma.
+ *
+ * It is a claim, not money. Accepting records that you found it in your own
+ * account; the payment still goes on the sale in the usual way, which keeps
+ * one path by which value enters the books.
+ */
+function PaymentSlips({
+  quotationId,
+  currency,
+  manage,
+}: {
+  quotationId: string;
+  currency: string;
+  manage: boolean;
+}) {
+  const [slips, setSlips] = useState<PaymentSlipRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setSlips((await api.paymentSlips(quotationId)).items);
+      setError(null);
+    } catch (cause) {
+      setError(describeError(cause, "Could not load the payment slips"));
+    }
+  }, [quotationId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function review(slip: PaymentSlipRow, accept: boolean) {
+    const note = window.prompt(
+      accept
+        ? "Anything to note? (You found the money in your account.)"
+        : "Why are you rejecting this? The buyer is not told automatically.",
+    );
+    if (note === null) return;
+    setBusy(true);
+    try {
+      await api.reviewPaymentSlip(slip.id, accept, note || undefined);
+      await load();
+    } catch (cause) {
+      setError(describeError(cause, "Could not record that"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (slips === null || slips.length === 0) return null;
+
+  return (
+    <div className="card">
+      <div className="card-title">Proof of payment</div>
+      <Alert>{error}</Alert>
+      <p className="muted" style={{ marginTop: 0, fontSize: "0.85rem" }}>
+        What the buyer says they have sent. Check it against your own account before
+        accepting — this does not post anything to your books.
+      </p>
+      {slips.map((slip) => (
+        <div key={slip.id} className="slip-row">
+          <div>
+            <strong>
+              {slip.amount_claimed ? money(slip.amount_claimed, currency) : "Amount not given"}
+            </strong>{" "}
+            <Badge status={slip.status} />
+            <div className="muted" style={{ fontSize: "0.85rem" }}>
+              {[
+                slip.method,
+                slip.reference,
+                slip.paid_on ? shortDate(slip.paid_on) : null,
+                slip.sender_name,
+                slip.sender_phone,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+            {slip.note && <div style={{ fontSize: "0.88rem" }}>“{slip.note}”</div>}
+            {slip.review_note && (
+              <div className="muted" style={{ fontSize: "0.82rem" }}>
+                Your note: {slip.review_note}
+              </div>
+            )}
+          </div>
+          <div className="row">
+            <button
+              type="button"
+              className="link"
+              onClick={() => void download(api.paymentSlipFileUrl(slip.id), `slip-${slip.id}`)}
+            >
+              Open the slip
+            </button>
+            {manage && slip.status === "submitted" && (
+              <>
+                <button type="button" className="link" disabled={busy} onClick={() => void review(slip, true)}>
+                  Found it
+                </button>
+                <button type="button" className="link" disabled={busy} onClick={() => void review(slip, false)}>
+                  Not found
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

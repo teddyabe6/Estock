@@ -32,6 +32,8 @@ The MVP acceptance gate in PRD section 24 is covered by automated tests in
 | The platform can tell who has paid, who owes and what is overdue | `test_billing.py` (65 tests: derived balances, reversal and void, idempotent payment, the billing run, the platform's own totals) |
 | Paying restores service; a lapsed period withdraws it without deleting anything | `test_billing.py` — renewal, a suspension that paying cannot lift, lapse with every figure still readable |
 | The platform owner controls who may register and whether the marketplace takes requests | `test_platform_settings.py` (20 tests: defaults, per-shop override, an unknown key refused, closing registration without touching existing shops) |
+| A buyer pays by transfer and sends proof, and the seller confirms it | `test_payment_slips.py` (22 tests: a claim that posts nothing, only after the seller has priced it, a private file, and the seller's judgement recorded) |
+| A shopper narrows a catalogue by category and price | `test_storefront.py` — price bounds, sorting, and a refused sort order |
 | One shop can be paused on the marketplace without touching its own listing choice | `test_platform_settings.py` — its products leave the catalogue, a stale basket cannot reach it, other shops are unaffected, and its own opt-in is still there when the pause lifts |
 
 The web app now covers every MVP workflow end to end: onboarding, import,

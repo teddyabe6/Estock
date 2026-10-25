@@ -257,6 +257,10 @@ class Quotation(UUIDPrimaryKey, Timestamped, TenantScoped, Auditable, Base):
     lines: Mapped[list[QuotationLine]] = relationship(
         back_populates="quotation", cascade="all, delete-orphan", lazy="selectin"
     )
+    #: Proof of payment the buyer sent. A claim, not a posting — see PaymentSlip.
+    payment_slips: Mapped[list[PaymentSlip]] = relationship(
+        back_populates="quotation", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class QuotationLine(UUIDPrimaryKey, Base):
@@ -282,3 +286,75 @@ class QuotationLine(UUIDPrimaryKey, Base):
     sort_order: Mapped[int] = mapped_column(default=0, nullable=False)
 
     quotation: Mapped[Quotation] = relationship(back_populates="lines")
+
+
+class PaymentSlipStatus(StrEnum):
+    """What the seller has made of a slip a buyer sent.
+
+    Derived from nothing — this one is a judgement the seller makes, so it is
+    stored.  A slip is a *claim* that money was sent, not the money itself,
+    which is why accepting it is a deliberate act and why it never touches the
+    books on its own.
+    """
+
+    #: Sent by the buyer, not yet looked at.
+    SUBMITTED = "submitted"
+    #: The seller found the money.
+    ACCEPTED = "accepted"
+    #: The seller could not find it, or it was for something else.
+    REJECTED = "rejected"
+
+
+class PaymentSlip(UUIDPrimaryKey, Timestamped, TenantScoped, Base):
+    """Proof of payment a buyer sends the seller (PRD 13).
+
+    There is no payment gateway here on purpose.  An Ethiopian buyer transfers
+    by telebirr, CBE Birr or a bank deposit and then sends the screenshot or
+    the slip; this is that screenshot, attached to the proforma it pays for so
+    the seller sees the claim and the document it belongs to together.
+
+    It records nothing in the shop's own books.  Posting the money is the
+    seller's existing payment flow against the sale, and keeping the two apart
+    means a buyer cannot write to a shop's ledger by uploading a picture.
+    """
+
+    __tablename__ = "payment_slips"
+    __table_args__ = (
+        Index("ix_payment_slips_quotation", "quotation_id"),
+        Index("ix_payment_slips_tenant_status", "tenant_id", "status"),
+    )
+
+    quotation_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False
+    )
+    #: The uploaded image or PDF.  Bytes live behind the storage interface.
+    file_asset_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("file_assets.id", ondelete="CASCADE"), nullable=False
+    )
+
+    status: Mapped[PaymentSlipStatus] = mapped_column(
+        enum_column(PaymentSlipStatus),
+        default=PaymentSlipStatus.SUBMITTED,
+        nullable=False,
+    )
+    #: What the buyer says they sent.  Their word until the seller checks it,
+    #: which is why it is separate from anything in the payment ledger.
+    amount_claimed: Mapped[Decimal | None] = mapped_column(Money)
+    method: Mapped[str | None] = mapped_column(ShortText)
+    #: The telebirr transaction number or bank reference, as the buyer typed it.
+    reference: Mapped[str | None] = mapped_column(ShortText)
+    paid_on: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(Text)
+
+    #: Who sent it.  A buyer has no account, so this is what they typed.
+    sender_name: Mapped[str | None] = mapped_column(ShortText)
+    sender_phone: Mapped[str | None] = mapped_column(String(32))
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    reviewed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    review_note: Mapped[str | None] = mapped_column(Text)
+
+    quotation: Mapped[Quotation] = relationship(back_populates="payment_slips")

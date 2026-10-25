@@ -25,6 +25,8 @@ from app.models.commerce import (  # noqa: F401
     MarketplaceRequest,
     MarketplaceRequestStatus,
     OnlineStore,
+    PaymentSlip,
+    PaymentSlipStatus,
     Quotation,
     QuotationLine,
     QuotationStatus,

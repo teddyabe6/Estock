@@ -37,6 +37,8 @@ from app.models.commerce import (
     MarketplaceRequest,
     MarketplaceRequestStatus,
     OnlineStore,
+    PaymentSlip,
+    PaymentSlipStatus,
     Quotation,
     QuotationLine,
     QuotationStatus,
@@ -44,10 +46,16 @@ from app.models.commerce import (
 from app.models.contacts import Customer
 from app.models.inventory import StockBalance
 from app.models.platform import Tenant, TenantStatus
+from app.models.system import FileAsset
 from app.services.marketplace import UNAVAILABLE_STATUSES, taking_part
 from app.services.numbering import next_number
 from app.services.pricing import quantize_money
-from app.services.storage import public_file_url
+from app.services.storage import (
+    get_storage,
+    public_file_url,
+    safe_filename,
+    validate_upload,
+)
 
 ZERO = Decimal("0.00")
 DEFAULT_VALIDITY_DAYS = 14
@@ -133,6 +141,24 @@ def public_categories(db: Session, store: OnlineStore) -> list[str]:
     return [row[0] for row in rows]
 
 
+#: How a shopper may order a shop's catalogue.
+SORT_ORDERS = ("name", "price_low", "price_high")
+
+
+def _sort_key(order: str):
+    """The key a sort uses, and where priceless products end up.
+
+    A product with no price shown — the shop hides prices, or this one is
+    "ask us" — sorts last either way rather than being treated as free, which
+    is what a plain ``None`` comparison would do.
+    """
+    if order == "price_low":
+        return lambda item: (item.price is None, item.price or ZERO, item.name.lower())
+    if order == "price_high":
+        return lambda item: (item.price is None, -(item.price or ZERO), item.name.lower())
+    return lambda item: item.name.lower()
+
+
 def list_public_products(
     db: Session,
     store: OnlineStore,
@@ -140,10 +166,20 @@ def list_public_products(
     *,
     query: str | None = None,
     category: str | None = None,
+    min_price: Decimal | None = None,
+    max_price: Decimal | None = None,
+    sort: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[PublicProduct], int]:
-    """Published products, with availability from the one shared stock source."""
+    """Published products, with availability from the one shared stock source.
+
+    Price filtering and sorting happen here in Python rather than in SQL,
+    beside the stock rule that already works this way, so one place decides
+    what a shopper can see.  A price is a product's *shown* price, so a shop
+    that hides prices has nothing to filter on and the caller does not offer
+    it.
+    """
     stmt = _published_products(store.tenant_id)
     if query:
         pattern = f"%{query.strip().lower()}%"
@@ -163,10 +199,35 @@ def list_public_products(
         item = _public_product(product, store, stock)
         if tenant.hide_out_of_stock_online and not item.in_stock and product.track_stock:
             continue
+        # A bound excludes anything with no price to compare: a product whose
+        # price is "ask us" cannot be said to be under 500 birr.
+        if min_price is not None and (item.price is None or item.price < min_price):
+            continue
+        if max_price is not None and (item.price is None or item.price > max_price):
+            continue
         results.append(item)
 
+    results.sort(key=_sort_key(sort or "name"))
     total = len(results)
     return results[offset : offset + limit], total
+
+
+def public_price_range(
+    db: Session, store: OnlineStore, tenant: Tenant
+) -> tuple[Decimal | None, Decimal | None]:
+    """The cheapest and dearest shown price, so a filter can offer real bounds.
+
+    ``(None, None)`` when the shop hides prices or nothing carries one, which
+    is the signal not to show a price filter at all rather than show an empty
+    one.
+    """
+    if not store.show_prices:
+        return None, None
+    products, _ = list_public_products(db, store, tenant, limit=10_000)
+    prices = [item.price for item in products if item.price is not None]
+    if not prices:
+        return None, None
+    return min(prices), max(prices)
 
 
 def get_public_product(
@@ -1280,3 +1341,201 @@ def withdraw_marketplace_request(db: Session, token: str) -> MarketplaceRequest:
     request.withdrawn_at = utcnow()
     db.flush()
     return request
+
+
+# --------------------------------------------------------------------------- #
+# Proof of payment
+# --------------------------------------------------------------------------- #
+#
+# There is no payment gateway, and that is the design rather than a gap.  An
+# Ethiopian buyer transfers by telebirr, CBE Birr or a bank deposit and then
+# sends the seller the screenshot; the seller checks their own account and
+# confirms.  A slip is that screenshot, attached to the proforma it pays for.
+#
+# A slip is a *claim*.  It records nothing in the shop's books: posting the
+# money stays the seller's existing payment flow against the sale, which is
+# what keeps a stranger with a share link from writing to a shop's ledger by
+# uploading a picture.
+
+#: What a buyer may send as proof: a photo of a slip, or a PDF from a bank app.
+ALLOWED_SLIP_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+
+#: One proforma does not need more proof than this; the rest is a mistake or
+#: an attempt to fill the shop's storage.
+MAX_SLIPS_PER_QUOTATION = 10
+
+
+@dataclass(slots=True)
+class PaymentSlipInput:
+    filename: str
+    content_type: str
+    content: bytes
+    amount_claimed: Decimal | None = None
+    method: str | None = None
+    reference: str | None = None
+    paid_on: date | None = None
+    note: str | None = None
+    sender_name: str | None = None
+    sender_phone: str | None = None
+    source_ip: str | None = None
+
+
+def attach_payment_slip(db: Session, token: str, slip: PaymentSlipInput) -> PaymentSlip:
+    """Record a buyer's proof of payment against the proforma it pays for.
+
+    Reachable with the share link and no account, like accepting a proforma,
+    because the buyer has neither.  What that buys them is narrow: a file and
+    some text hung off one proforma, in the shop's own storage, changing
+    nothing about what is owed or owned.
+    """
+    quotation = get_quotation_by_token(db, token)
+    if quotation.status == QuotationStatus.REQUESTED:
+        raise ConflictError(
+            "The seller has not sent a price for this yet, so there is nothing "
+            "to pay. They will send the proforma first."
+        )
+    if len(quotation.payment_slips) >= MAX_SLIPS_PER_QUOTATION:
+        raise ConflictError(
+            "There are already several slips against this proforma. "
+            "Contact the seller directly instead."
+        )
+
+    checksum = validate_upload(
+        filename=slip.filename,
+        content_type=slip.content_type,
+        content=slip.content,
+        allowed_types=ALLOWED_SLIP_TYPES,
+    )
+    storage = get_storage()
+    key = storage.save(quotation.tenant_id, slip.filename, slip.content)
+    asset = FileAsset(
+        tenant_id=quotation.tenant_id,
+        filename=safe_filename(slip.filename),
+        content_type=slip.content_type,
+        size_bytes=len(slip.content),
+        storage_key=key,
+        checksum_sha256=checksum,
+        # The seller reaches it through their own authenticated screens; it is
+        # a stranger's banking document and has no business on a public URL.
+        is_public=False,
+    )
+    db.add(asset)
+    db.flush()
+
+    record = PaymentSlip(
+        tenant_id=quotation.tenant_id,
+        quotation_id=quotation.id,
+        file_asset_id=asset.id,
+        amount_claimed=(
+            quantize_money(Decimal(slip.amount_claimed))
+            if slip.amount_claimed is not None
+            else None
+        ),
+        method=(slip.method or "").strip() or None,
+        reference=(slip.reference or "").strip() or None,
+        paid_on=slip.paid_on,
+        note=(slip.note or "").strip() or None,
+        sender_name=(slip.sender_name or "").strip() or None,
+        sender_phone=(slip.sender_phone or "").strip() or None,
+        source_ip=slip.source_ip,
+    )
+    # Through the relationship: the collection is eagerly loaded, so attaching
+    # by foreign key alone would leave the count above reading one too few.
+    quotation.payment_slips.append(record)
+    db.flush()
+
+    record_audit(
+        db,
+        action=AuditAction.PAYMENT_SLIP_SUBMITTED,
+        tenant_id=quotation.tenant_id,
+        actor_label=f"Buyer ({record.sender_name or quotation.customer_name})",
+        entity_type="payment_slip",
+        entity_id=record.id,
+        summary=(
+            f"Proof of payment sent against proforma {quotation.number}"
+            + (f" for {record.amount_claimed}" if record.amount_claimed else "")
+        ),
+        payload={"reference": record.reference, "method": record.method},
+    )
+    _notify_slip(db, quotation, record)
+    db.flush()
+    return record
+
+
+def _notify_slip(db: Session, quotation: Quotation, slip: PaymentSlip) -> None:
+    """Tell the shop, so a slip does not sit unseen while a buyer waits."""
+    from app.core.permissions import Permission
+    from app.models.system import Notification, NotificationKind
+    from app.services.notifications import recipients_for
+
+    for membership in recipients_for(db, quotation.tenant_id, Permission.QUOTATION_VIEW):
+        db.add(
+            Notification(
+                tenant_id=quotation.tenant_id,
+                user_id=membership.user_id,
+                kind=NotificationKind.PAYMENT_SLIP,
+                title=f"Proof of payment for {quotation.number}",
+                body=(
+                    f"{slip.sender_name or 'A buyer'} says they have paid"
+                    + (f" {slip.amount_claimed}" if slip.amount_claimed else "")
+                    + ". Check your account, then confirm or reject it."
+                ),
+                link=f"/shop?proforma={quotation.id}",
+            )
+        )
+
+
+def review_payment_slip(
+    db: Session,
+    ctx: AuthContext,
+    slip_id: uuid.UUID,
+    *,
+    accept: bool,
+    note: str | None = None,
+) -> PaymentSlip:
+    """The seller's judgement on a slip, after checking their own account.
+
+    Accepting records that the seller found the money; it does not post it.
+    The money reaches the books through the ordinary payment flow against the
+    sale, so there is exactly one way value enters a shop's ledger.
+    """
+    ctx.require(Permission.QUOTATION_MANAGE)
+    slip = get_tenant_object(db, PaymentSlip, slip_id, ctx.tenant_id, label="Payment slip")
+    slip.status = PaymentSlipStatus.ACCEPTED if accept else PaymentSlipStatus.REJECTED
+    slip.reviewed_at = utcnow()
+    slip.reviewed_by_id = ctx.user_id
+    slip.review_note = (note or "").strip() or None
+
+    record_audit(
+        db,
+        action=AuditAction.PAYMENT_SLIP_REVIEWED,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id,
+        entity_type="payment_slip",
+        entity_id=slip.id,
+        summary=f"Proof of payment {slip.status}",
+        payload={"note": slip.review_note},
+    )
+    db.flush()
+    return slip
+
+
+def payment_slip_as_dict(slip: PaymentSlip, *, include_file: bool = False) -> dict:
+    payload = {
+        "id": str(slip.id),
+        "quotation_id": str(slip.quotation_id),
+        "status": str(slip.status),
+        "amount_claimed": str(slip.amount_claimed) if slip.amount_claimed is not None else None,
+        "method": slip.method,
+        "reference": slip.reference,
+        "paid_on": slip.paid_on.isoformat() if slip.paid_on else None,
+        "note": slip.note,
+        "sender_name": slip.sender_name,
+        "sender_phone": slip.sender_phone,
+        "submitted_at": slip.created_at.isoformat() if slip.created_at else None,
+        "reviewed_at": slip.reviewed_at.isoformat() if slip.reviewed_at else None,
+        "review_note": slip.review_note,
+    }
+    if include_file:
+        payload["file_asset_id"] = str(slip.file_asset_id)
+    return payload

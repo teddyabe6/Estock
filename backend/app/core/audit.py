@@ -44,6 +44,8 @@ class AuditAction:
     QUOTATION_UPDATED = "quotation.updated"
     QUOTATION_CANCELLED = "quotation.cancelled"
     QUOTATION_CONVERTED = "quotation.converted"
+    PAYMENT_SLIP_SUBMITTED = "payment_slip.submitted"
+    PAYMENT_SLIP_REVIEWED = "payment_slip.reviewed"
     SUBSCRIPTION_CHANGED = "subscription.changed"
     SUBSCRIPTION_INVOICE_ISSUED = "subscription.invoice_issued"
     SUBSCRIPTION_INVOICE_VOIDED = "subscription.invoice_voided"

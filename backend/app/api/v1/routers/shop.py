@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Response, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.api.v1.serializers import quotation_out, sale_out
@@ -17,9 +18,11 @@ from app.models.commerce import (
     CustomerEnquiry,
     EnquiryStatus,
     OnlineStore,
+    PaymentSlip,
     Quotation,
     QuotationStatus,
 )
+from app.models.system import FileAsset
 from app.schemas.common import Page
 from app.schemas.operations import (
     CancelQuotationIn,
@@ -38,10 +41,13 @@ from app.services.commerce import (
     cancel_quotation,
     convert_to_sale,
     create_quotation,
+    payment_slip_as_dict,
+    review_payment_slip,
     send_quotation,
     update_quotation,
 )
 from app.services.sales import PaymentInput
+from app.services.storage import get_storage
 
 router = APIRouter(prefix="/shop", tags=["online shop"])
 
@@ -311,3 +317,64 @@ def convert(
         ),
         warnings=result.warnings,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Proof of payment a buyer has sent
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/quotations/{quotation_id}/payment-slips")
+def list_payment_slips(quotation_id: uuid.UUID, ctx: Ctx, db: DbSession) -> dict:
+    """What a buyer has sent to say they have paid this proforma."""
+    ctx.require(Permission.QUOTATION_VIEW)
+    quotation = get_tenant_object(
+        db, Quotation, quotation_id, ctx.tenant_id, label="Proforma"
+    )
+    return {
+        "items": [
+            payment_slip_as_dict(slip, include_file=True)
+            for slip in sorted(quotation.payment_slips, key=lambda s: s.created_at or utcnow())
+        ]
+    }
+
+
+@router.get("/payment-slips/{slip_id}/file")
+def payment_slip_file(slip_id: uuid.UUID, ctx: Ctx, db: DbSession) -> Response:
+    """The slip itself.
+
+    Served through the shop's own session rather than a public link: it is a
+    stranger's banking document, and the only people with a reason to see it
+    are the ones who can act on it.
+    """
+    ctx.require(Permission.QUOTATION_VIEW)
+    slip = get_tenant_object(db, PaymentSlip, slip_id, ctx.tenant_id, label="Payment slip")
+    asset = get_tenant_object(
+        db, FileAsset, slip.file_asset_id, ctx.tenant_id, label="File"
+    )
+    storage = get_storage()
+    return Response(
+        content=storage.load(asset.storage_key),
+        media_type=asset.content_type,
+        headers={"Content-Disposition": f'inline; filename="{asset.filename}"'},
+    )
+
+
+class ReviewSlipIn(BaseModel):
+    accept: bool
+    note: str | None = None
+
+
+@router.post("/payment-slips/{slip_id}/review")
+def review_slip(
+    slip_id: uuid.UUID, payload: ReviewSlipIn, ctx: WritableCtx, db: DbSession
+) -> dict:
+    """Record that you found the money, or that you did not.
+
+    This does not post anything to your books. Take the payment against the
+    sale in the usual way, so there stays one path by which money enters.
+    """
+    slip = review_payment_slip(
+        db, ctx, slip_id, accept=payload.accept, note=payload.note
+    )
+    return payment_slip_as_dict(slip, include_file=True)

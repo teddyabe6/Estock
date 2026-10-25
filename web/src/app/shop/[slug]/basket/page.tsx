@@ -176,7 +176,7 @@ export default function BasketPage({ params }: { params: Promise<{ slug: string 
                 {busy ? "Sending…" : "Request proforma"}
               </button>
               <Link href={`/shop/${slug}`} className="btn secondary">
-                Keep shopping
+                Add more products
               </Link>
             </div>
           </form>

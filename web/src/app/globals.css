@@ -18,6 +18,11 @@
   --danger-tint: #fbeae9;
   --radius: 10px;
   --radius-sm: 6px;
+  /* The header and the body share this, so they line up edge to edge at every
+     width instead of the body sitting in a narrower column of its own. It is
+     generous rather than unlimited: a form stretched across a very wide
+     monitor is harder to read, not easier. */
+  --content-width: 1500px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --gutter: 16px;
 }
@@ -108,6 +113,28 @@ h2 {
   z-index: 10;
 }
 
+/* The bars stay full-bleed — the background and the rule run to the edges —
+   while what is inside them is held to the same column as the page body. */
+.topbar > *,
+.nav > * {
+  min-width: 0;
+}
+
+.topbar,
+.nav {
+  /* Line the bar's contents up with the page body's contents. The body is a
+     --content-width box with a gutter inside it, so the bar needs the same
+     gutter on top of the centring margin, or the brand sits a gutter to the
+     left of the first card under it on a very wide screen.
+
+     100%, not 100vw: the percentage resolves against the shell's width, which
+     excludes a scrollbar, and 100vw does not. */
+  padding-inline: max(
+    var(--gutter),
+    calc((100% - var(--content-width)) / 2 + var(--gutter))
+  );
+}
+
 .topbar .brand {
   font-weight: 650;
   color: var(--text);
@@ -156,7 +183,7 @@ h2 {
 main {
   flex: 1;
   width: 100%;
-  max-width: 1100px;
+  max-width: var(--content-width);
   margin: 0 auto;
   padding: 20px var(--gutter) 56px;
 }
@@ -1367,4 +1394,165 @@ button.link {
    compact lists do. */
 .shell.admin table td {
   vertical-align: top;
+}
+
+/* --------------------------------------------------------------------------
+   The shop's filter rail
+
+   A rail beside the grid where there is room, and a disclosure above it where
+   there is not. The controls are the same either way: a shopper on a phone is
+   the one most likely to need to narrow a long list, so giving them fewer
+   would be backwards.
+   -------------------------------------------------------------------------- */
+
+.shop-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.shop-results {
+  min-width: 0;
+}
+
+.shop-filters {
+  position: sticky;
+  top: 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.filter-group h2 {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+
+.filter-group select,
+.filter-group input {
+  width: 100%;
+}
+
+.filter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filter-list button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.filter-list button:hover {
+  background: var(--surface-muted);
+}
+
+.filter-list button.is-active {
+  background: var(--brand-tint);
+  color: var(--brand-strong);
+  font-weight: 600;
+}
+
+.price-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.price-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.price-inputs span {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.shop-filters .result-count {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+/* The toggle only exists where the rail cannot be shown beside the grid. */
+.filters-toggle {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .shop-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .filters-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    align-self: start;
+  }
+
+  .shop-filters {
+    display: none;
+    position: static;
+  }
+
+  .shop-filters.is-open {
+    display: flex;
+  }
+}
+
+/* Proof of payment: the buyer's form, and the seller's list of what arrived. */
+
+.slip-form .grid {
+  margin-bottom: 4px;
+}
+
+.slip-form input[type="file"] {
+  padding: 8px;
+  background: var(--surface-muted);
+}
+
+.slip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.slip-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+@media (max-width: 540px) {
+  .slip-row .row {
+    width: 100%;
+  }
 }

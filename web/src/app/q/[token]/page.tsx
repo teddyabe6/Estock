@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, use, useEffect, useState } from "react";
 
+import { PaymentSlipForm } from "@/components/Storefront";
 import { Alert } from "@/components/ui";
 import { money, shortDate } from "@/lib/format";
 import { proformaLabel, proformaTone, shopApi, type ProformaView } from "@/lib/storefront";
@@ -31,6 +32,7 @@ function Proforma({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   const [responded, setResponded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [slipSent, setSlipSent] = useState<string | null>(null);
 
   useEffect(() => {
     shopApi
@@ -223,6 +225,27 @@ function Proforma({ token }: { token: string }) {
           {proforma.disclaimer}
         </p>
       </div>
+
+      {/* Paying is a separate step from accepting: a buyer may accept and pay
+          later, or pay first and accept on the same visit. Both are offered
+          once the seller has sent a price. */}
+      {proforma.can_send_payment && !slipSent && (
+        <PaymentSlipForm
+          token={token}
+          total={proforma.total_amount}
+          currency={proforma.currency}
+          shopName={proforma.shop?.display_name ?? proforma.seller.name}
+          onSent={setSlipSent}
+        />
+      )}
+      {slipSent && (
+        <div className="card no-print">
+          <Alert kind="ok">{slipSent}</Alert>
+          <button type="button" className="secondary" onClick={() => setSlipSent(null)}>
+            Send another slip
+          </button>
+        </div>
+      )}
 
       {proforma.shop && (
         <div className="card no-print">

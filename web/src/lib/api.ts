@@ -19,6 +19,10 @@ const CONFIGURED_BASE_URL =
  * So a *local* configured host is rewritten to whatever host served the page.
  * Anything else is used exactly as configured, which is what a deployment sets.
  */
+export function apiBaseUrl(): string {
+  return resolveBaseUrl();
+}
+
 function resolveBaseUrl(): string {
   if (typeof window === "undefined") return CONFIGURED_BASE_URL;
   try {
@@ -637,6 +641,23 @@ export type ImportResult = {
   error_rows: number;
 };
 
+export type PaymentSlipRow = {
+  id: string;
+  quotation_id: string;
+  status: "submitted" | "accepted" | "rejected";
+  amount_claimed: string | null;
+  method: string | null;
+  reference: string | null;
+  paid_on: string | null;
+  note: string | null;
+  sender_name: string | null;
+  sender_phone: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  file_asset_id?: string;
+};
+
 export type Store = {
   id: string;
   slug: string;
@@ -913,6 +934,17 @@ export const api = {
     request<Variant>(`/variants/${id}`, { method: "PATCH", body }),
   publishProduct: (id: string, published: boolean) =>
     request<Product>(`/products/${id}/publish?published=${published}`, { method: "POST" }),
+  // Proof of payment a buyer sent. A claim to check against your own account,
+  // not a posting — take the money on the sale as usual.
+  paymentSlips: (quotationId: string) =>
+    request<{ items: PaymentSlipRow[] }>(`/shop/quotations/${quotationId}/payment-slips`),
+  reviewPaymentSlip: (slipId: string, accept: boolean, note?: string) =>
+    request<PaymentSlipRow>(`/shop/payment-slips/${slipId}/review`, {
+      method: "POST",
+      body: { accept, note },
+    }),
+  paymentSlipFileUrl: (slipId: string) => `/shop/payment-slips/${slipId}/file`,
+
   listProductOnMarketplace: (id: string, listed: boolean) =>
     request<Product>(`/products/${id}/marketplace?listed=${listed}`, { method: "POST" }),
   uploadProductImage: (id: string, file: File) => {
