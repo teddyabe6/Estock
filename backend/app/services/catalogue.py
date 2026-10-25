@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -26,6 +26,7 @@ from app.core.tenancy import (
     tenant_query,
 )
 from app.models.catalogue import Category, Product, ProductVariant
+from app.models.commerce import OnlineStore
 from app.models.inventory import MovementReason, StockBalance
 from app.services.inventory import StockPosting, post_movement
 from app.services.pricing import quantize_money
@@ -156,6 +157,7 @@ def create_product(db: Session, ctx: AuthContext, data: ProductInput) -> Product
         online_description=data.online_description,
     )
     db.add(product)
+    follow_publication(db, product)
     db.flush()
 
     variant_inputs = data.variants or [
@@ -329,6 +331,7 @@ def update_product(
             value = sku
         if hasattr(product, field_name):
             setattr(product, field_name, value)
+    follow_publication(db, product)
     db.flush()
     return product
 
@@ -426,6 +429,45 @@ def find_by_barcode(db: Session, ctx: AuthContext, barcode: str) -> ProductVaria
     return variant
 
 
+def _shop_is_on_marketplace(db: Session, tenant_id: uuid.UUID) -> bool:
+    """Whether this shop has joined the marketplace.
+
+    Not ``store_for_tenant``: that one finds only a *published* storefront,
+    and a shop may be on the marketplace without running a page of its own.
+    """
+    return bool(
+        db.execute(
+            select(OnlineStore.list_on_marketplace).where(
+                OnlineStore.tenant_id == tenant_id
+            )
+        ).scalar()
+    )
+
+
+def follow_publication(db: Session, product: Product) -> None:
+    """A published product is listed where its shop has joined the marketplace.
+
+    "Put this up for sale online" is the one decision a seller thinks they are
+    making.  Keeping the two flags wholly apart is what left shops in the
+    marketplace with nothing of theirs in it, so publishing carries the
+    listing with it.
+
+    It never *unlists*.  Taking a product off your own page is not a decision
+    to leave the marketplace — a shop that sells only through the marketplace
+    publishes no page at all — so coming off is its own deliberate act.
+
+    Called from every path that can publish: creating a product, editing one,
+    and the availability toggle.  One rule in one place; three copies of it
+    would be three chances to disagree.
+    """
+    if (
+        product.is_published
+        and not product.on_marketplace
+        and _shop_is_on_marketplace(db, product.tenant_id)
+    ):
+        product.on_marketplace = True
+
+
 def set_published(
     db: Session, ctx: AuthContext, product_id: uuid.UUID, published: bool
 ) -> Product:
@@ -433,8 +475,35 @@ def set_published(
     ctx.require(Permission.SHOP_MANAGE)
     product = get_tenant_object(db, Product, product_id, ctx.tenant_id, label="Product")
     product.is_published = published
+    follow_publication(db, product)
     db.flush()
     return product
+
+
+def list_published_on_marketplace(db: Session, ctx: AuthContext) -> int:
+    """Put everything this shop already publishes onto the marketplace.
+
+    For the shop that joins after it has a catalogue: without this, ticking
+    the shop's own switch lists the shop and none of its products, which is
+    the trap two separate flags set.  Returns how many it moved.
+
+    What the shop has *not* published stays off.  Joining a marketplace is not
+    a decision to publish what you were deliberately keeping back.
+    """
+    ctx.require(Permission.SHOP_MANAGE)
+    result = db.execute(
+        update(Product)
+        .where(
+            Product.tenant_id == ctx.tenant_id,
+            Product.is_published.is_(True),
+            Product.on_marketplace.is_(False),
+        )
+        .values(on_marketplace=True)
+        # Products already loaded in this session are updated too; without it
+        # a caller holding one reads a value the database no longer has.
+        .execution_options(synchronize_session="fetch")
+    )
+    return result.rowcount or 0
 
 
 def set_on_marketplace(

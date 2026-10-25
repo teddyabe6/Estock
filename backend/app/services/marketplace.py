@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, exists, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import NotFoundError
@@ -141,7 +141,13 @@ def taking_part(db: Session, tenant_column):
 
 
 def _listed_shops(db: Session) -> Select:
-    """Shops on the marketplace that are in a state to answer a request."""
+    """Shops on the marketplace that are in a state to answer a request.
+
+    A shop with nothing listed is left out.  Every new shop joins by default,
+    so without this the directory fills with names that lead to an empty
+    page — and "17 shops" that are mostly empty says less than "3" that are
+    not.  The shop reappears the moment it lists something.
+    """
     return (
         select(OnlineStore, Tenant)
         .join(Tenant, Tenant.id == OnlineStore.tenant_id)
@@ -149,6 +155,11 @@ def _listed_shops(db: Session) -> Select:
             OnlineStore.list_on_marketplace.is_(True),
             Tenant.status.notin_(UNAVAILABLE_STATUSES),
             taking_part(db, OnlineStore.tenant_id),
+            exists().where(
+                Product.tenant_id == OnlineStore.tenant_id,
+                Product.on_marketplace.is_(True),
+                Product.is_active.is_(True),
+            ),
         )
     )
 

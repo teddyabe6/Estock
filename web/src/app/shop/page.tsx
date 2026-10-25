@@ -152,7 +152,14 @@ function Storefront() {
     value: boolean,
   ) {
     try {
-      setStore(await api.updateStore({ [key]: value }));
+      const updated = await api.updateStore({ [key]: value });
+      setStore(updated);
+      // Joining the marketplace lists what the shop already publishes, so the
+      // rows under this switch are stale the moment it is flipped.
+      if (key === "list_on_marketplace" && value) {
+        const page = await api.products({ limit: 200 });
+        setProducts(page.items);
+      }
     } catch (cause) {
       setError(describeError(cause, "Could not save"));
     }
@@ -217,7 +224,7 @@ function Storefront() {
           {manage && (
             <Toggle
               label="List on the central marketplace"
-              hint="your products appear alongside other shops', where a buyer can put several shops in one basket and ask you all for prices; a separate choice from publishing your own page above"
+              hint="your products appear alongside other shops', where a buyer can put several shops in one basket and ask you all for prices; switching it on lists everything you have already published, and anything you publish afterwards"
               checked={store.list_on_marketplace}
               onChange={(v) => void setFlag("list_on_marketplace", v)}
             />
@@ -338,7 +345,16 @@ function Storefront() {
                     </td>
                     {manage && (
                       <td className="num">
-                        <button type="button" className="link" onClick={() => void togglePublish(product)}>
+                        <button
+                          type="button"
+                          className="link"
+                          title={
+                            store?.list_on_marketplace && !product.is_published
+                              ? "Puts it on your shop page and on the marketplace"
+                              : undefined
+                          }
+                          onClick={() => void togglePublish(product)}
+                        >
                           {product.is_published ? "Hide" : "Publish"}
                         </button>
                         {store?.list_on_marketplace && (

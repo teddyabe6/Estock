@@ -11,7 +11,16 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, String, Text, UniqueConstraint, false
+from sqlalchemy import (
+    Boolean,
+    Date,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import GUID, Base, Money, Percent, Quantity, UTCDateTime
@@ -73,11 +82,18 @@ class OnlineStore(UUIDPrimaryKey, Timestamped, TenantScoped, Base):
     #: can be on the marketplace without publishing its own page, or publish
     #: its own page without joining the marketplace; this row is its public
     #: identity either way.
+    #:
+    #: On for a new shop.  The marketplace is worth more to everyone the more
+    #: shops are in it, and a seller who does not want to be listed has one
+    #: switch to find; a seller who does want it had to find the same switch
+    #: *and* know it existed.  Shops that chose to stay out keep that choice:
+    #: a default decides new rows only.
+    #:
     #: ``server_default`` as well as ``default``: this column was added to a
     #: populated table, and the marketplace migration explains why the database
     #: default has to stay.
     list_on_marketplace: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=false(), nullable=False, index=True
+        Boolean, default=True, server_default=true(), nullable=False, index=True
     )
     #: Whether visitors see prices without contacting the seller.
     show_prices: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

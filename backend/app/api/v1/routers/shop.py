@@ -35,6 +35,7 @@ from app.schemas.operations import (
     StoreOut,
     StoreSettingsIn,
 )
+from app.services.catalogue import list_published_on_marketplace
 from app.services.commerce import (
     QuotationInput,
     QuotationLineInput,
@@ -87,8 +88,17 @@ def get_store(ctx: Ctx, db: DbSession) -> StoreOut:
 def update_store(payload: StoreSettingsIn, ctx: WritableCtx, db: DbSession) -> StoreOut:
     ctx.require(Permission.SHOP_MANAGE)
     store = _store(db, ctx)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    # Joining the marketplace with a catalogue already published, and finding
+    # nothing of yours listed, is the trap two separate flags set. Switching
+    # the shop on brings what it already publishes with it; leaving does not
+    # take anything off, because the shop's own switch already hides it all
+    # and the products' own choice is waiting if it comes back.
+    joining = bool(changes.get("list_on_marketplace")) and not store.list_on_marketplace
+    for key, value in changes.items():
         setattr(store, key, value)
+    if joining:
+        list_published_on_marketplace(db, ctx)
     db.flush()
     return _store_out(store)
 

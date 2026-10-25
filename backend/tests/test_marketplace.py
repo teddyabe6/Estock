@@ -31,6 +31,11 @@ from app.models.commerce import (
 )
 from app.models.platform import TenantStatus
 from app.services import marketplace
+from app.services.catalogue import (
+    list_published_on_marketplace,
+    set_published,
+    update_product,
+)
 from app.services.commerce import (
     MarketplaceBasketItem,
     get_marketplace_request,
@@ -99,7 +104,15 @@ def test_a_product_is_listed_only_when_its_shop_opted_in(db, business, other_bus
     _join_marketplace(business, slug="in", name="In")
     _list(business, business.add_product("Listed", selling_price="10"))
 
-    # The second shop has a product marked for the marketplace but never joined.
+    # The second shop marked a product for the marketplace but opted out of
+    # the marketplace itself.  Said out loud rather than left to the default,
+    # which now puts a new shop in.
+    other_store = (
+        db.query(OnlineStore)
+        .filter(OnlineStore.tenant_id == other_business.tenant.id)
+        .one()
+    )
+    other_store.list_on_marketplace = False
     other = other_business.add_product("Not listed", selling_price="10")
     other.on_marketplace = True
     db.flush()
@@ -595,3 +608,140 @@ def test_too_many_shops_in_one_basket_is_refused(db):
         _submit(db, items)
     assert str(MAX_REQUEST_SHOPS) in str(refused.value)
     assert db.query(MarketplaceRequest).count() == 0
+
+
+# --------------------------------------------------------------------------- #
+# Joining the marketplace, and what comes with you
+# --------------------------------------------------------------------------- #
+#
+# Two flags decide whether a product is on the marketplace — the shop's and
+# the product's — and holding them wholly apart set a trap: a seller ticks
+# the shop's switch, looks at the marketplace, and finds nothing of theirs.
+# These are the rules that close it without collapsing the two decisions into
+# one, because a shop may still want its own page only, or the marketplace
+# only, or both.
+
+
+def _store_of(business) -> OnlineStore:
+    return (
+        business.db.query(OnlineStore)
+        .filter(OnlineStore.tenant_id == business.tenant.id)
+        .one()
+    )
+
+
+def test_a_new_shop_joins_the_marketplace(business):
+    """The default a seller should not have to go looking for."""
+    store = _store_of(business)
+    assert store.list_on_marketplace is True
+    # Its own page is a separate decision and stays offline until they make it.
+    assert store.is_published is False
+
+
+def test_a_shop_that_stayed_out_is_left_out(business):
+    """A default decides new rows.  It must never rewrite an old answer."""
+    store = _store_of(business)
+    store.list_on_marketplace = False
+    business.db.flush()
+    business.db.expire(store)
+    assert _store_of(business).list_on_marketplace is False
+
+
+def test_a_product_created_published_is_listed_too(business):
+    """The rule has to hold on every path into publication, not just the
+    toggle: a product form can publish on the way in."""
+    product = business.add_product("Teff 25kg", is_published=True)
+
+    assert product.on_marketplace is True
+
+
+def test_editing_a_product_into_publication_lists_it(business):
+    product = business.add_product("Teff 25kg")
+
+    update_product(business.db, business.ctx, product.id, {"is_published": True})
+
+    assert product.on_marketplace is True
+
+
+def test_publishing_a_product_lists_it_where_the_shop_has_joined(business):
+    product = business.add_product("Teff 25kg")
+    assert product.on_marketplace is False, "nothing is listed until it is published"
+
+    set_published(business.db, business.ctx, product.id, True)
+
+    assert product.is_published is True
+    assert product.on_marketplace is True
+
+
+def test_publishing_lists_nothing_where_the_shop_stayed_out(business):
+    store = _store_of(business)
+    store.list_on_marketplace = False
+    business.db.flush()
+    product = business.add_product("Teff 25kg")
+
+    set_published(business.db, business.ctx, product.id, True)
+
+    assert product.on_marketplace is False, "the shop's own choice decides this"
+
+
+def test_hiding_a_product_does_not_take_it_off_the_marketplace(business):
+    """A shop selling only through the marketplace publishes no page at all."""
+    product = business.add_product("Teff 25kg")
+    set_published(business.db, business.ctx, product.id, True)
+
+    set_published(business.db, business.ctx, product.id, False)
+
+    assert product.is_published is False
+    assert product.on_marketplace is True, "unlisting is its own deliberate act"
+
+
+def test_joining_brings_the_published_catalogue_with_it(business):
+    store = _store_of(business)
+    store.list_on_marketplace = False
+    business.db.flush()
+
+    on_sale = business.add_product("Teff 25kg")
+    set_published(business.db, business.ctx, on_sale.id, True)
+    held_back = business.add_product("Damaged sacks")
+
+    store.list_on_marketplace = True
+    moved = list_published_on_marketplace(business.db, business.ctx)
+
+    assert moved == 1
+    assert on_sale.on_marketplace is True
+    assert held_back.on_marketplace is False, (
+        "joining a marketplace is not a decision to publish what was kept back"
+    )
+
+
+def test_the_switch_itself_brings_them(client, business):
+    """The service rule is only worth having if the switch actually runs it."""
+    store = _store_of(business)
+    store.list_on_marketplace = False
+    business.db.flush()
+    product = business.add_product("Teff 25kg")
+    set_published(business.db, business.ctx, product.id, True)
+    assert product.on_marketplace is False
+
+    response = client.patch(
+        "/api/v1/shop/settings",
+        json={"list_on_marketplace": True},
+        headers=business.headers(),
+    )
+
+    assert response.status_code == 200, response.json()
+    business.db.expire(product)
+    assert product.on_marketplace is True
+
+
+def test_a_shop_with_nothing_listed_stays_out_of_the_directory(business):
+    """Every shop joins by default, so the directory has to earn its names."""
+    store = _store_of(business)
+    store.slug = "empty-shop"
+    business.db.flush()
+    assert [shop.slug for shop in marketplace.shops(business.db)] == []
+
+    product = business.add_product("Teff 25kg")
+    set_published(business.db, business.ctx, product.id, True)
+
+    assert [shop.slug for shop in marketplace.shops(business.db)] == ["empty-shop"]
