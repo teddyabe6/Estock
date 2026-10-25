@@ -163,7 +163,7 @@ export default function MarketRequestPage() {
       ) : null}
 
       {canWithdraw ? (
-        <button type="button" className="btn ghost" onClick={withdraw} disabled={busy}>
+        <button type="button" className="btn secondary" onClick={withdraw} disabled={busy}>
           {busy ? "Withdrawing…" : "Withdraw this request"}
         </button>
       ) : null}

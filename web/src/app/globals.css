@@ -860,13 +860,26 @@ button.link {
 
 .storefront .topbar .who {
   text-align: left;
-  white-space: nowrap;
+  /* The tagline is most of what tells a stranger what the shop sells, so on a
+     narrow screen it wraps onto a second line rather than being cut off
+     mid-word. Two lines is the limit: past that it is pushing the catalogue
+     off the screen. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .basket-button {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* The brand beside it carries min-width: 0 and gives way; the basket does
+     not, or a long shop name squeezes the label out of its own pill. */
+  flex: none;
+  /* Tapped with a thumb on most of the screens this is read on. */
+  min-height: 44px;
   padding: 8px 14px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -1130,9 +1143,33 @@ button.link {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px var(--gutter);
+  /* Lined up with the page body, the way the bar at the top is, and clear of
+     a phone's home indicator. */
+  padding: 10px
+    max(var(--gutter), calc((100% - var(--content-width)) / 2 + var(--gutter)))
+    calc(10px + env(safe-area-inset-bottom, 0px));
   background: var(--surface);
   border-top: 1px solid var(--border);
+  box-shadow: 0 -1px 3px rgba(16, 24, 40, 0.05);
+}
+
+.basket-bar > div {
+  min-width: 0;
+}
+
+.basket-bar .btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+/* The marketplace groups its lines in a list; the shop's basket is a card of
+   divs. Same line either way. */
+ul.basket-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .basket-lines .line {
@@ -1220,6 +1257,19 @@ button.link {
   color: #fff;
 }
 
+/* The marketplace's one search box, which is the whole width of the page. */
+.shop-search {
+  margin: 0 0 10px;
+}
+
+/* A quiet line under a form or a basket, saying what has and has not just
+   happened. Used by the marketplace and by the payment slip alike. */
+.disclaimer {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .shop-badge {
   display: inline-block;
   font-size: 0.78rem;
@@ -1237,7 +1287,7 @@ button.link {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 12px 6px;
+  flex-wrap: wrap;
 }
 
 .result-count {
@@ -1301,7 +1351,7 @@ button.link {
   aspect-ratio: 1 / 1;
   border-radius: var(--radius);
   overflow: hidden;
-  background: var(--surface-2);
+  background: var(--surface-muted);
   display: grid;
   place-items: center;
 }
@@ -1353,7 +1403,7 @@ button.link {
   gap: 10px;
   flex-wrap: wrap;
   padding: 10px 12px;
-  background: var(--surface-2);
+  background: var(--surface-muted);
   border-bottom: 1px solid var(--border);
 }
 

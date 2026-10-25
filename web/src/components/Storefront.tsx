@@ -20,6 +20,63 @@ import {
   type Shop,
 } from "@/lib/storefront";
 
+/**
+ * The frame around every public page — one shop's storefront and the central
+ * marketplace alike.
+ *
+ * To a buyer the two are the same thing: a name that takes them back to the
+ * start, a basket they can check from anywhere, and a page that has to work
+ * in one hand. Holding both to one shell is what stops the marketplace
+ * drifting into a header of its own again, which is how it ended up with one
+ * the stylesheet had never heard of.
+ */
+export function PublicShell({
+  brandHref,
+  brandName,
+  tagline,
+  basketHref,
+  basketCount,
+  bar,
+  footer,
+  children,
+}: {
+  brandHref: string;
+  brandName: ReactNode;
+  tagline?: ReactNode;
+  basketHref: string;
+  basketCount: number;
+  bar?: ReactNode;
+  footer?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="shell storefront">
+      <header className="topbar">
+        <div className="store-brand">
+          <Link href={brandHref} className="brand">
+            {brandName}
+          </Link>
+          {tagline && <div className="who">{tagline}</div>}
+        </div>
+        <Link
+          href={basketHref}
+          className="basket-button"
+          aria-label={`Basket, ${formatCount(basketCount)} items`}
+        >
+          Basket
+          {basketCount > 0 && <span className="basket-count">{formatCount(basketCount)}</span>}
+        </Link>
+      </header>
+
+      <main>{children}</main>
+
+      {bar}
+
+      <footer className="store-footer no-print">{footer}</footer>
+    </div>
+  );
+}
+
 export function StorefrontShell({
   slug,
   shop,
@@ -37,48 +94,44 @@ export function StorefrontShell({
 }) {
   const currency = shop?.currency ?? "ETB";
   return (
-    <div className="shell storefront">
-      <header className="topbar">
-        <div className="store-brand">
-          <Link href={`/shop/${slug}`} className="brand">
-            {shop?.display_name ?? "Loading…"}
-          </Link>
-          {shop?.tagline && <div className="who">{shop.tagline}</div>}
-        </div>
-        <Link href={`/shop/${slug}/basket`} className="basket-button" aria-label={`Basket, ${basketCount} items`}>
-          Basket
-          {basketCount > 0 && <span className="basket-count">{formatCount(basketCount)}</span>}
-        </Link>
-      </header>
-
-      <main>{children}</main>
-
-      {showBar && basketCount > 0 && (
-        <div className="basket-bar no-print">
-          <div>
-            <strong>{formatCount(basketCount)} in your basket</strong>
-            {basketTotal !== null && (
-              <div className="muted" style={{ fontSize: "0.85rem" }}>
-                About {money(basketTotal, currency)} before delivery
-              </div>
-            )}
+    <PublicShell
+      brandHref={`/shop/${slug}`}
+      brandName={shop?.display_name ?? "Loading…"}
+      tagline={shop?.tagline}
+      basketHref={`/shop/${slug}/basket`}
+      basketCount={basketCount}
+      bar={
+        showBar &&
+        basketCount > 0 && (
+          <div className="basket-bar no-print">
+            <div>
+              <strong>{formatCount(basketCount)} in your basket</strong>
+              {basketTotal !== null && (
+                <div className="muted" style={{ fontSize: "0.85rem" }}>
+                  About {money(basketTotal, currency)} before delivery
+                </div>
+              )}
+            </div>
+            <Link href={`/shop/${slug}/basket`} className="btn">
+              View basket
+            </Link>
           </div>
-          <Link href={`/shop/${slug}/basket`} className="btn">
-            View basket
-          </Link>
-        </div>
-      )}
-
-      <footer className="store-footer no-print">
-        {shop && (
-          <div>
-            {[shop.address, shop.contact_phone, shop.contact_email].filter(Boolean).join(" · ")}
-            {shop.telegram_username ? ` · Telegram @${shop.telegram_username}` : ""}
-          </div>
-        )}
-        <div style={{ marginTop: 4 }}>Online shop by Estock</div>
-      </footer>
-    </div>
+        )
+      }
+      footer={
+        <>
+          {shop && (
+            <div>
+              {[shop.address, shop.contact_phone, shop.contact_email].filter(Boolean).join(" · ")}
+              {shop.telegram_username ? ` · Telegram @${shop.telegram_username}` : ""}
+            </div>
+          )}
+          <div style={{ marginTop: 4 }}>Online shop by Estock</div>
+        </>
+      }
+    >
+      {children}
+    </PublicShell>
   );
 }
 

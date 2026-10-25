@@ -87,7 +87,7 @@ export default function MarketProductPage() {
       </nav>
 
       <div className="product-detail">
-        <ProductImage src={product.image_url} name={product.name} className="hero" />
+        <ProductImage src={product.image_url} name={product.name} className="thumb hero" />
 
         <div className="product-info">
           <h1>{product.name}</h1>
@@ -135,21 +135,20 @@ export default function MarketProductPage() {
             </div>
           ) : null}
 
-          <div className="product-actions">
+          <div className="row">
             {inBasket > 0 ? (
               <>
                 <Stepper
                   value={inBasket}
                   onChange={(next) => variant && basket.setQuantity(variant.id, next)}
                 />
-                <Link href="/market/basket" className="btn primary">
+                <Link href="/market/basket" className="btn">
                   Go to basket
                 </Link>
               </>
             ) : (
               <button
                 type="button"
-                className="btn primary"
                 disabled={!variant}
                 onClick={() => {
                   if (!variant) return;

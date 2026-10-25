@@ -149,7 +149,7 @@ function Market() {
             Showing only <strong>{activeShop.name}</strong>
             {activeShop.address ? ` · ${activeShop.address}` : ""}
           </span>
-          <button type="button" className="btn ghost" onClick={() => setFilter("shop", "")}>
+          <button type="button" className="btn secondary" onClick={() => setFilter("shop", "")}>
             Show every shop
           </button>
         </div>

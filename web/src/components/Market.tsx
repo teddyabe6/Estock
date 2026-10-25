@@ -12,7 +12,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { ProductImage, Stepper } from "@/components/Storefront";
+import { ProductImage, PublicShell, Stepper } from "@/components/Storefront";
 import { money } from "@/lib/format";
 import {
   defaultMarketVariant,
@@ -34,41 +34,34 @@ export function MarketShell({
   children: ReactNode;
 }) {
   return (
-    <div className="storefront">
-      <header className="shop-head">
-        <div>
-          <Link href="/market" className="shop-name">
-            Marketplace
-          </Link>
-          <p className="shop-tagline">
-            Products from every shop on the platform, in one place.
-          </p>
-        </div>
-        <Link href="/market/basket" className="basket-link">
-          Basket{basketCount > 0 ? ` (${basketCount})` : ""}
-        </Link>
-      </header>
-
-      {children}
-
-      {showBar && basketCount > 0 ? (
-        <div className="basket-bar" role="status">
-          <div>
-            <strong>
-              {basketCount} item{basketCount === 1 ? "" : "s"}
-            </strong>
-            <span className="muted">
-              {" from "}
-              {shopCount} shop{shopCount === 1 ? "" : "s"}
-              {basketTotal !== null ? ` · ${money(basketTotal)}` : ""}
-            </span>
+    <PublicShell
+      brandHref="/market"
+      brandName="Marketplace"
+      tagline="Products from every shop on the platform, in one place."
+      basketHref="/market/basket"
+      basketCount={basketCount}
+      bar={
+        showBar && basketCount > 0 ? (
+          <div className="basket-bar no-print" role="status">
+            <div>
+              <strong>
+                {basketCount} item{basketCount === 1 ? "" : "s"}
+              </strong>
+              <div className="muted" style={{ fontSize: "0.85rem" }}>
+                From {shopCount} shop{shopCount === 1 ? "" : "s"}
+                {basketTotal !== null ? ` · about ${money(basketTotal)}` : ""}
+              </div>
+            </div>
+            <Link href="/market/basket" className="btn">
+              Ask for prices
+            </Link>
           </div>
-          <Link href="/market/basket" className="btn primary">
-            Ask for prices
-          </Link>
-        </div>
-      ) : null}
-    </div>
+        ) : null
+      }
+      footer={<div>Marketplace by Estock</div>}
+    >
+      {children}
+    </PublicShell>
   );
 }
 
@@ -96,35 +89,37 @@ export function MarketProductCard({
 
   return (
     <article className="product-card">
-      <Link href={`/market/p/${product.id}`} className="product-link">
+      <Link href={`/market/p/${product.id}`} className="thumb-link">
         <ProductImage src={product.image_url} name={product.name} />
-        <div className="product-body">
-          <h3>{product.name}</h3>
-          {product.brand ? <p className="muted small">{product.brand}</p> : null}
-          <p className="price">
-            {askForPrice ? (
-              <span className="muted">Ask for a price</span>
-            ) : (
-              <>
-                {money(variant!.price!)}
-                <span className="muted small"> / {product.unit_of_measure}</span>
-              </>
-            )}
-          </p>
-        </div>
       </Link>
-      <div className="product-foot">
-        <ShopBadge shop={product.shop} />
-        {!product.in_stock ? <span className="pill muted">Out of stock</span> : null}
-      </div>
-      <div className="product-actions">
-        {quantity > 0 ? (
-          <Stepper value={quantity} onChange={onSetQuantity} />
-        ) : (
-          <button type="button" className="btn" onClick={onAdd} disabled={!variant}>
-            Add
-          </button>
-        )}
+      <div className="body">
+        {product.brand ? <div className="label muted">{product.brand}</div> : null}
+        <Link href={`/market/p/${product.id}`} className="name">
+          {product.name}
+        </Link>
+        <div className="price">
+          {askForPrice ? (
+            <span className="muted">Ask for a price</span>
+          ) : (
+            <>
+              {money(variant!.price!)}
+              <span className="muted unit"> / {product.unit_of_measure}</span>
+            </>
+          )}
+        </div>
+        <div className="product-foot">
+          <ShopBadge shop={product.shop} />
+          {!product.in_stock ? <span className="badge warn">Out of stock</span> : null}
+        </div>
+        <div className="actions">
+          {quantity > 0 ? (
+            <Stepper value={quantity} onChange={onSetQuantity} />
+          ) : (
+            <button type="button" onClick={onAdd} disabled={!variant}>
+              Add
+            </button>
+          )}
+        </div>
       </div>
     </article>
   );

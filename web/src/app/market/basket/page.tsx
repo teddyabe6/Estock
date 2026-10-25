@@ -111,29 +111,36 @@ export default function MarketBasketPage() {
           </header>
           <ul className="basket-lines">
             {group.lines.map((line) => (
-              <li key={line.variantId}>
-                <ProductImage src={line.imageUrl} name={line.name} />
+              <li key={line.variantId} className="line">
+                <ProductImage src={line.imageUrl} name={line.name} className="thumb small" />
                 <div className="line-body">
-                  <Link href={`/market/p/${line.productId}`}>{line.name}</Link>
+                  <Link href={`/market/p/${line.productId}`} className="name">
+                    {line.name}
+                  </Link>
                   {line.variantName ? (
                     <span className="muted small"> · {line.variantName}</span>
                   ) : null}
                   <p className="muted small">
                     {line.price ? `${money(line.price)} / ${line.unit}` : "Price on request"}
                   </p>
+                  {/* Under the line rather than beside it: on a phone there is
+                      no room for a picture, a name, a stepper and a button
+                      across one row, and the name is what gets squeezed. */}
+                  <div className="row" style={{ marginTop: 6 }}>
+                    <Stepper
+                      value={line.quantity}
+                      onChange={(next) => basket.setQuantity(line.variantId, next)}
+                    />
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => basket.remove(line.variantId)}
+                      aria-label={`Remove ${line.name}`}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
-                <Stepper
-                  value={line.quantity}
-                  onChange={(next) => basket.setQuantity(line.variantId, next)}
-                />
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={() => basket.remove(line.variantId)}
-                  aria-label={`Remove ${line.name}`}
-                >
-                  Remove
-                </button>
               </li>
             ))}
           </ul>
@@ -188,7 +195,7 @@ export default function MarketBasketPage() {
         {error ? <Alert>{error}</Alert> : null}
 
         <div className="row">
-          <button type="submit" className="btn primary" disabled={busy}>
+          <button type="submit" disabled={busy}>
             {busy
               ? "Sending…"
               : `Ask ${basket.shopCount} shop${basket.shopCount === 1 ? "" : "s"} for prices`}
