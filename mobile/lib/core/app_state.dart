@@ -39,6 +39,21 @@ class AppState extends ChangeNotifier {
   bool loading = true;
   String? error;
 
+  int _unreadNotifications = 0;
+
+  /// How many notices are waiting, for the badge on the More tab.
+  ///
+  /// Refreshed with everything else rather than polled: the phone is often on
+  /// a metered connection, and a count a refresh behind is better than one
+  /// that costs a request a minute.
+  int get unreadNotifications => _unreadNotifications;
+
+  set unreadNotifications(int value) {
+    if (value == _unreadNotifications) return;
+    _unreadNotifications = value;
+    notifyListeners();
+  }
+
   bool get isSignedIn => session != null;
 
   /// True when the catalogue on screen came from the device, not the server.
@@ -91,6 +106,8 @@ class AppState extends ChangeNotifier {
     await prefs.remove(_sessionKey);
     api.token = null;
     session = null;
+    // Nothing of the last person is left for the next one on this device.
+    _unreadNotifications = 0;
     products = const [];
     customers = const [];
     await catalogue.clear();
@@ -127,6 +144,9 @@ class AppState extends ChangeNotifier {
             .toList();
         await catalogue.saveCustomers(customers);
       }
+      final dynamic notices =
+          await api.get('/notifications', query: {'unread_only': 'true', 'limit': '1'});
+      _unreadNotifications = ((notices as Map<String, dynamic>)['unread'] as num?)?.toInt() ?? 0;
       error = null;
     } on ApiException catch (exception) {
       if (exception.isAuthError) {

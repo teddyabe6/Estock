@@ -32,6 +32,20 @@ class MoreScreen extends StatelessWidget {
               ],
             ),
           ),
+        const SectionTitle('Your shop'),
+        ListTile(
+          leading: const Icon(Icons.notifications_none),
+          title: const Text('Notifications'),
+          subtitle: Text(
+            state.unreadNotifications > 0
+                ? '${state.unreadNotifications} waiting'
+                : 'Requests, questions and low-stock warnings',
+          ),
+          trailing: state.unreadNotifications > 0
+              ? Badge.count(count: state.unreadNotifications)
+              : const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).pushNamed('/notifications'),
+        ),
         // Hidden rather than greyed out, which is what the web does with a
         // screen a role may not open.
         if (session?.can('credit:view') ?? false) ...[

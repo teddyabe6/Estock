@@ -4,6 +4,7 @@ import 'core/api_client.dart';
 import 'core/app_state.dart';
 import 'core/theme.dart';
 import 'screens/credit_screen.dart';
+import 'screens/notifications_screen.dart';
 import 'screens/pending_screen.dart';
 import 'screens/shell_screen.dart';
 import 'screens/sign_in_screen.dart';
@@ -39,6 +40,7 @@ class EstockApp extends StatelessWidget {
         darkTheme: EstockTheme.dark(),
         routes: {
           '/credit': (_) => const CreditScreen(),
+          '/notifications': (_) => const NotificationsScreen(),
           '/pending': (_) => const PendingScreen(),
         },
         home: const _Root(),

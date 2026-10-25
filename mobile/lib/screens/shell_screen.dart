@@ -17,6 +17,7 @@ class _Tab {
     required this.screen,
     this.permission,
     this.ownsTitle = false,
+    this.showsNotices = false,
   });
 
   /// What the bar calls it.
@@ -39,6 +40,10 @@ class _Tab {
   /// Set where the screen draws its own heading and the shell should not add
   /// one above it.
   final bool ownsTitle;
+
+  /// Set on the tab that leads to the notifications, which carries the count
+  /// of what is waiting. A notice nobody can see is a sale lost.
+  final bool showsNotices;
 }
 
 /// The five the web shows on a phone, in the same order and with the same
@@ -82,6 +87,7 @@ const _tabs = <_Tab>[
     title: 'More',
     icon: Icons.more_horiz,
     screen: MoreScreen(),
+    showsNotices: true,
   ),
 ];
 
@@ -182,7 +188,15 @@ class _ShellScreenState extends State<ShellScreen> {
           onDestinationSelected: (next) => setState(() => _index = next),
           destinations: [
             for (final tab in tabs)
-              NavigationDestination(icon: Icon(tab.icon), label: tab.label),
+              NavigationDestination(
+                icon: tab.showsNotices && state.unreadNotifications > 0
+                    ? Badge.count(
+                        count: state.unreadNotifications,
+                        child: Icon(tab.icon),
+                      )
+                    : Icon(tab.icon),
+                label: tab.label,
+              ),
           ],
         ),
       ),
