@@ -14,7 +14,6 @@ class _Tab {
     required this.label,
     required this.title,
     required this.icon,
-    required this.selectedIcon,
     required this.screen,
     this.permission,
     this.ownsTitle = false,
@@ -27,8 +26,10 @@ class _Tab {
   /// same: the Sales tab opens the till, and "New sale" is what that is.
   final String title;
 
+  /// One icon, whichever tab is open: the bar says where you are with colour,
+  /// the way the web's does, not by filling the icon in.
   final IconData icon;
-  final IconData selectedIcon;
+
   final Widget screen;
 
   /// What the signed-in user must be allowed to do for the tab to be there.
@@ -50,7 +51,6 @@ const _tabs = <_Tab>[
     label: 'Home',
     title: 'Home',
     icon: Icons.home_outlined,
-    selectedIcon: Icons.home,
     screen: HomeScreen(),
     ownsTitle: true,
   ),
@@ -58,7 +58,6 @@ const _tabs = <_Tab>[
     label: 'Sales',
     title: 'New sale',
     icon: Icons.receipt_long_outlined,
-    selectedIcon: Icons.receipt_long,
     screen: SaleScreen(),
     // The web's Sales tab opens a list of sales, so it asks for sale:view.
     // This one opens the till, which is a sale being made.
@@ -68,7 +67,6 @@ const _tabs = <_Tab>[
     label: 'Stock',
     title: 'Stock',
     icon: Icons.inventory_2_outlined,
-    selectedIcon: Icons.inventory_2,
     screen: StockScreen(),
     permission: 'stock:view',
   ),
@@ -76,7 +74,6 @@ const _tabs = <_Tab>[
     label: 'Shop',
     title: 'Shop',
     icon: Icons.storefront_outlined,
-    selectedIcon: Icons.storefront,
     screen: ShopScreen(),
     permission: 'shop:view',
   ),
@@ -84,7 +81,6 @@ const _tabs = <_Tab>[
     label: 'More',
     title: 'More',
     icon: Icons.more_horiz,
-    selectedIcon: Icons.more_horiz,
     screen: MoreScreen(),
   ),
 ];
@@ -172,17 +168,23 @@ class _ShellScreenState extends State<ShellScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (next) => setState(() => _index = next),
-        destinations: [
-          for (final tab in tabs)
-            NavigationDestination(
-              icon: Icon(tab.icon),
-              selectedIcon: Icon(tab.selectedIcon),
-              label: tab.label,
-            ),
-        ],
+      bottomNavigationBar: DecoratedBox(
+        // The rule along the top that the web's bar has, which a flat bar
+        // needs to sit apart from whatever scrolls past underneath it.
+        decoration: BoxDecoration(
+          border: Border(
+            top:
+                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+        ),
+        child: NavigationBar(
+          selectedIndex: index,
+          onDestinationSelected: (next) => setState(() => _index = next),
+          destinations: [
+            for (final tab in tabs)
+              NavigationDestination(icon: Icon(tab.icon), label: tab.label),
+          ],
+        ),
       ),
     );
   }
