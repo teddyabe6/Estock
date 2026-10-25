@@ -191,6 +191,24 @@ h2 {
   color: var(--brand-strong);
 }
 
+/* Seven tabs on a phone: the labels get smaller rather than scrolling out of
+   sight. Reports and More are the last two, and More is the way to credit,
+   contacts and settings — a bar that hides them hides those. Below about
+   380px even this does not fit on one line, so the bar wraps onto a second
+   row, which still shows everything. */
+@media (max-width: 560px) {
+  .nav {
+    gap: 2px;
+    row-gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .nav a {
+    padding: 5px 7px;
+    font-size: 0.72rem;
+  }
+}
+
 main {
   flex: 1;
   width: 100%;
