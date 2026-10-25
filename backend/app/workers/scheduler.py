@@ -22,7 +22,11 @@ from datetime import date
 
 from app.core.db import SessionLocal
 from app.services.billing import expire_lapsed_subscriptions, run_billing_cycle
-from app.services.notifications import run_due_reminders, run_low_stock_alerts
+from app.services.notifications import (
+    run_due_reminders,
+    run_low_stock_alerts,
+    run_unanswered_request_nudges,
+)
 from app.services.subscription import expire_lapsed_trials, warn_expiring_trials
 
 logging.basicConfig(
@@ -40,6 +44,7 @@ class DailyRunResult:
     reminders_skipped: int = 0
     reminders_failed: int = 0
     low_stock_alerts: int = 0
+    requests_nudged: int = 0
     trials_expired: int = 0
     trials_warned: int = 0
     subscriptions_lapsed: int = 0
@@ -59,6 +64,7 @@ def run_daily_jobs(*, on: date | None = None) -> DailyRunResult:
             result.reminders_failed = reminders.failed
 
             result.low_stock_alerts = run_low_stock_alerts(db).alerts_created
+            result.requests_nudged = run_unanswered_request_nudges(db).nudges_created
             result.trials_expired = len(expire_lapsed_trials(db, today=on))
             result.trials_warned = warn_expiring_trials(db, today=on)
 

@@ -220,6 +220,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     switch (kind) {
       case 'proforma_request':
         return Icons.request_quote_outlined;
+      case 'proforma_waiting':
+        return Icons.pending_actions_outlined;
       case 'proforma_response':
         return Icons.mark_chat_read_outlined;
       case 'new_enquiry':

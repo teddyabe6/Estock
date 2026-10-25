@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -255,6 +255,73 @@ def run_low_stock_alerts(db: Session) -> LowStockRunResult:
                 link="/stock?view=low",
             )
             result.alerts_created += 1
+    db.flush()
+    return result
+
+
+@dataclass(slots=True)
+class NudgeRunResult:
+    tenants_checked: int = 0
+    requests_waiting: int = 0
+    nudges_created: int = 0
+
+
+def run_unanswered_request_nudges(
+    db: Session, *, now: datetime | None = None
+) -> NudgeRunResult:
+    """Remind a shop about proforma requests it has left sitting.
+
+    The request raised its own notice the moment it arrived; this is the
+    second prompt, for the shop that was busy that day.  It matters most for a
+    marketplace request, where the buyer asked several shops at once and the
+    one that answers first is the one that sells — so the digest says how many
+    of them are races.
+
+    One digest per person per day, as the low-stock one is: a shop with four
+    requests waiting is told once, not four times.  Nothing here reaches the
+    buyer; chasing the shop is the shop's own business.
+    """
+    from app.services.commerce import waiting_requests
+
+    result = NudgeRunResult()
+    for tenant in db.execute(select(Tenant)).scalars().all():
+        result.tenants_checked += 1
+        waiting = waiting_requests(db, tenant.id, now=now)
+        if not waiting:
+            continue
+        result.requests_waiting += len(waiting)
+
+        racing = [q for q in waiting if q.marketplace_request_id is not None]
+        headline = f"{len(waiting)} proforma request(s) waiting for your price"
+        body = ", ".join(f"{q.number} for {q.customer_name}" for q in waiting[:5])
+        if len(waiting) > 5:
+            body += f" and {len(waiting) - 5} more"
+        if racing:
+            body += (
+                f". {len(racing)} came through the marketplace, where other shops "
+                "were asked for the same basket."
+            )
+
+        for membership in recipients_for(db, tenant.id, Permission.QUOTATION_VIEW):
+            if already_notified_today(
+                db,
+                tenant=tenant,
+                user_id=membership.user_id,
+                kind=NotificationKind.PROFORMA_WAITING,
+            ):
+                continue
+            notify(
+                db,
+                tenant_id=tenant.id,
+                user_id=membership.user_id,
+                kind=NotificationKind.PROFORMA_WAITING,
+                title=headline,
+                body=body,
+                # The proformas tab opens on the new requests, which is
+                # exactly what this is about.
+                link="/shop?tab=proformas",
+            )
+            result.nudges_created += 1
     db.flush()
     return result
 

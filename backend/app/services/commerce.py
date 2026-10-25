@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
@@ -892,6 +892,37 @@ def get_quotation_by_token(db: Session, token: str) -> Quotation:
     if quotation is None or quotation.status == QuotationStatus.CANCELLED:
         raise NotFoundError("This proforma link is no longer valid")
     return quotation
+
+
+#: A request a shop has not answered by the next day is worth a reminder.
+NUDGE_AFTER = timedelta(hours=24)
+#: One nobody has answered in a week is not going to be answered because it
+#: was mentioned again.  Reminders past that are noise, and a shop that learns
+#: to ignore them stops reading the ones that matter.
+NUDGE_UNTIL = timedelta(days=7)
+
+
+def waiting_requests(
+    db: Session, tenant_id: uuid.UUID, *, now: datetime | None = None
+) -> list[Quotation]:
+    """Requests this shop has had for a while and still not priced.
+
+    Only ``REQUESTED``: once a shop has sent its prices the ball is the
+    buyer's, and chasing the shop for an answer it has already given would be
+    worse than silence.  Bounded at both ends, oldest first.
+    """
+    now = now or utcnow()
+    return list(
+        db.execute(
+            tenant_query(Quotation, tenant_id)
+            .where(
+                Quotation.status == QuotationStatus.REQUESTED,
+                Quotation.created_at <= now - NUDGE_AFTER,
+                Quotation.created_at > now - NUDGE_UNTIL,
+            )
+            .order_by(Quotation.created_at)
+        ).scalars()
+    )
 
 
 def quotation_status_for(quotation: Quotation, *, today: date | None = None) -> QuotationStatus:

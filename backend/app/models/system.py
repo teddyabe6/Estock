@@ -29,6 +29,10 @@ class NotificationKind(StrEnum):
     PROFORMA_REQUEST = "proforma_request"
     #: A customer accepted or declined a proforma.
     PROFORMA_RESPONSE = "proforma_response"
+    #: A daily reminder that requests are still sitting unanswered.  Distinct
+    #: from PROFORMA_REQUEST so the day's de-duplication cannot let a nudge
+    #: swallow the notice about a request that has just come in.
+    PROFORMA_WAITING = "proforma_waiting"
     #: A buyer sent proof that they have paid, for the seller to check.
     PAYMENT_SLIP = "payment_slip"
     TRIAL_EXPIRY = "trial_expiry"
