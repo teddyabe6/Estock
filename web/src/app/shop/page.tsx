@@ -661,6 +661,12 @@ function Proformas({ openId, onChanged }: { openId: string | null; onChanged: ()
                           <span className="badge">online</span>
                         </>
                       )}
+                      {q.source === "marketplace" && (
+                        <>
+                          {" "}
+                          <span className="badge warn">marketplace</span>
+                        </>
+                      )}
                     </td>
                     <td>
                       {q.customer_company || q.customer_name}
@@ -861,7 +867,19 @@ function ProformaDrawer({
             <span className="badge">from your online shop</span>
           </>
         )}
+        {quotation.source === "marketplace" && (
+          <>
+            {" "}
+            <span className="badge warn">from the marketplace</span>
+          </>
+        )}
       </p>
+      {quotation.source === "marketplace" && (
+        <p className="muted" style={{ fontSize: "0.9rem" }}>
+          The buyer asked several shops for this basket at once. Each replies
+          separately, and they can take one shop&apos;s price and leave another&apos;s.
+        </p>
+      )}
       {quotation.delivery_location && <p className="muted">Deliver to: {quotation.delivery_location}</p>}
       {quotation.customer_message && (
         <p>

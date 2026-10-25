@@ -46,7 +46,7 @@ from app.models.commerce import (
 from app.models.contacts import Customer
 from app.models.inventory import StockBalance
 from app.models.platform import Tenant, TenantStatus
-from app.models.system import FileAsset
+from app.models.system import FileAsset, NotificationKind
 from app.services.marketplace import UNAVAILABLE_STATUSES, taking_part
 from app.services.numbering import next_number
 from app.services.pricing import quantize_money
@@ -339,7 +339,7 @@ def submit_enquiry(
         db,
         tenant_id=enquiry.tenant_id,
         permission=Permission.ENQUIRY_VIEW,
-        kind="new_enquiry",
+        kind=NotificationKind.NEW_ENQUIRY,
         title=f"New enquiry from {enquiry.contact_name}",
         body=enquiry.message,
         link=f"/shop?tab=enquiries&open={enquiry.id}",
@@ -354,7 +354,7 @@ def _notify_staff(
     *,
     tenant_id: uuid.UUID,
     permission: Permission,
-    kind: str,
+    kind: NotificationKind,
     title: str,
     body: str | None,
     link: str,
@@ -363,7 +363,7 @@ def _notify_staff(
 ) -> int:
     """One in-app notification per active member who may act on it."""
     from app.models.access import MembershipStatus, TenantMembership
-    from app.models.system import Notification, NotificationKind
+    from app.models.system import Notification
 
     memberships = db.execute(
         select(TenantMembership).where(
@@ -379,7 +379,7 @@ def _notify_staff(
             Notification(
                 tenant_id=tenant_id,
                 user_id=membership.user_id,
-                kind=NotificationKind(kind),
+                kind=kind,
                 title=title,
                 body=body,
                 link=link,
@@ -484,12 +484,18 @@ def request_quotation(
     company: str | None = None,
     delivery_location: str | None = None,
     message: str | None = None,
+    from_marketplace: bool = False,
 ) -> Quotation:
     """A visitor's basket becomes a numbered proforma request (PRD 13, 14).
 
     Lines are priced from the catalogue so the seller reviews rather than
     retypes, the customer is matched to an existing record by phone, and staff
     who handle proformas are notified.  No stock is reserved.
+
+    ``from_marketplace`` only changes what the notice says.  A shop answering
+    a marketplace request is in a race it cannot see, and a notice that reads
+    the same as a direct request tells it to take its time.  It still says
+    nothing about who else was asked, or what they quoted.
     """
     if not items:
         raise ValidationError("Your basket is empty")
@@ -572,10 +578,19 @@ def request_quotation(
         db,
         tenant_id=store.tenant_id,
         permission=Permission.QUOTATION_VIEW,
-        kind="proforma_request",
-        title=f"Proforma request {quotation.number} from {quotation.customer_name}",
+        kind=NotificationKind.PROFORMA_REQUEST,
+        title=(
+            f"Marketplace request {quotation.number} from {quotation.customer_name}"
+            if from_marketplace
+            else f"Proforma request {quotation.number} from {quotation.customer_name}"
+        ),
         body=(
             f"{len(quotation.lines)} item(s) · {quotation.total_amount} {quotation.currency}"
+            + (
+                " · other shops were asked for the same basket, so price it soon"
+                if from_marketplace
+                else ""
+            )
             + (f" · {quotation.customer_message}" if quotation.customer_message else "")
         ),
         link=f"/shop?tab=proformas&open={quotation.id}",
@@ -912,7 +927,7 @@ def respond_to_quotation(db: Session, token: str, *, accept: bool) -> Quotation:
         db,
         tenant_id=quotation.tenant_id,
         permission=Permission.QUOTATION_VIEW,
-        kind="proforma_response",
+        kind=NotificationKind.PROFORMA_RESPONSE,
         title=(
             f"{quotation.customer_name} accepted proforma {quotation.number}"
             if accept
@@ -1126,6 +1141,7 @@ def submit_marketplace_request(
             company=company,
             delivery_location=delivery_location,
             message=message,
+            from_marketplace=True,
         )
         # Appended through the relationship: the request's collection is
         # eagerly loaded, so attaching by foreign key alone would leave it
@@ -1465,7 +1481,7 @@ def attach_payment_slip(db: Session, token: str, slip: PaymentSlipInput) -> Paym
 def _notify_slip(db: Session, quotation: Quotation, slip: PaymentSlip) -> None:
     """Tell the shop, so a slip does not sit unseen while a buyer waits."""
     from app.core.permissions import Permission
-    from app.models.system import Notification, NotificationKind
+    from app.models.system import Notification
     from app.services.notifications import recipients_for
 
     for membership in recipients_for(db, quotation.tenant_id, Permission.QUOTATION_VIEW):
@@ -1480,7 +1496,9 @@ def _notify_slip(db: Session, quotation: Quotation, slip: PaymentSlip) -> None:
                     + (f" {slip.amount_claimed}" if slip.amount_claimed else "")
                     + ". Check your account, then confirm or reject it."
                 ),
-                link=f"/shop?proforma={quotation.id}",
+                # The shape the Shop screen reads: ?tab picks the tab and
+                # ?open names the row. The other three notices use it too.
+                link=f"/shop?tab=proformas&open={quotation.id}",
             )
         )
 

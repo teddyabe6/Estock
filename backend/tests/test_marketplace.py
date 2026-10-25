@@ -745,3 +745,82 @@ def test_a_shop_with_nothing_listed_stays_out_of_the_directory(business):
     set_published(business.db, business.ctx, product.id, True)
 
     assert [shop.slug for shop in marketplace.shops(business.db)] == ["empty-shop"]
+
+
+# --------------------------------------------------------------------------- #
+# Telling the shops
+# --------------------------------------------------------------------------- #
+
+
+def _notices(business, kind: str = "proforma_request"):
+    from app.models.system import Notification
+
+    return (
+        business.db.query(Notification)
+        .filter(
+            Notification.tenant_id == business.tenant.id,
+            Notification.kind == kind,
+        )
+        .all()
+    )
+
+
+def test_each_shop_in_a_request_is_told_about_its_own_part(
+    db, two_shops, business, other_business
+):
+    """The fan-out is only worth having if the shops find out about it."""
+    first, second = two_shops
+
+    submit_marketplace_request(
+        db,
+        items=[
+            MarketplaceBasketItem(first.variants[0].id, Decimal("2")),
+            MarketplaceBasketItem(second.variants[0].id, Decimal("1")),
+        ],
+        contact_name="Abebe Kebede",
+        contact_phone="0911223344",
+    )
+
+    for shop in (business, other_business):
+        notices = _notices(shop)
+        assert len(notices) == 1, "one notice per shop, about its own part"
+        assert notices[0].link.startswith("/shop?tab=proformas&open=")
+
+
+def test_a_marketplace_notice_says_the_shop_is_in_a_race(db, two_shops, business):
+    """A notice that reads like a direct request tells a shop to take its
+    time, which is exactly wrong when others are pricing the same basket."""
+    first, _second = two_shops
+
+    submit_marketplace_request(
+        db,
+        items=[MarketplaceBasketItem(first.variants[0].id, Decimal("2"))],
+        contact_name="Abebe Kebede",
+        contact_phone="0911223344",
+    )
+
+    notice = _notices(business)[0]
+    assert "Marketplace request" in notice.title
+    assert "other shops were asked" in (notice.body or "")
+    # And still nothing about who they are or what they said.
+    assert "Bahir Dar" not in f"{notice.title} {notice.body}"
+
+
+def test_a_shop_asked_directly_is_not_told_it_is_competing(client, business):
+    """The same notice, through the shop's own page, says no such thing."""
+    _join_marketplace(business, slug="direct", name="Direct Shop")
+    product = _list(business, business.add_product("Teff 25kg", selling_price="2800"))
+
+    response = client.post(
+        "/api/v1/public/shops/direct/proforma-requests",
+        json={
+            "items": [{"variant_id": str(product.variants[0].id), "quantity": "1"}],
+            "contact_name": "Abebe Kebede",
+            "contact_phone": "0911223344",
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    notice = _notices(business)[0]
+    assert notice.title.startswith("Proforma request")
+    assert "other shops" not in (notice.body or "")

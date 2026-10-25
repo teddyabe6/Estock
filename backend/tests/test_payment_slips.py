@@ -187,6 +187,9 @@ def test_the_shop_is_told_so_a_slip_does_not_sit_unseen(db, business, sent_profo
     assert notices, "somebody at the shop is told"
     assert sent_proforma.number in notices[0].title
     assert "Abebe" in notices[0].body
+    # The shape the Shop screen reads: ?tab picks the tab, ?open names the
+    # row. A link that opens the wrong screen is a notice nobody acts on.
+    assert notices[0].link == f"/shop?tab=proformas&open={sent_proforma.id}"
 
 
 def test_sending_proof_is_audited_against_the_shop(db, business, sent_proforma):

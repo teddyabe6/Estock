@@ -710,8 +710,12 @@ export type Quotation = {
   id: string;
   number: string;
   status: string;
-  /** "storefront" when a customer requested it from their basket. */
-  source: "storefront" | "staff";
+  /**
+   * Where the request came from: "storefront" is this shop's own page,
+   * "marketplace" means the buyer asked several shops at once, "staff" means
+   * somebody here raised it.
+   */
+  source: "storefront" | "marketplace" | "staff";
   can_edit: boolean;
   customer_message: string | null;
   created_at?: string | null;
