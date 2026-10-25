@@ -8,11 +8,94 @@ import 'sale_screen.dart';
 import 'shop_screen.dart';
 import 'stock_screen.dart';
 
+/// One tab of the bottom bar.
+class _Tab {
+  const _Tab({
+    required this.label,
+    required this.title,
+    required this.icon,
+    required this.selectedIcon,
+    required this.screen,
+    this.permission,
+    this.ownsTitle = false,
+  });
+
+  /// What the bar calls it.
+  final String label;
+
+  /// What the heading above the screen calls it, which is not always the
+  /// same: the Sales tab opens the till, and "New sale" is what that is.
+  final String title;
+
+  final IconData icon;
+  final IconData selectedIcon;
+  final Widget screen;
+
+  /// What the signed-in user must be allowed to do for the tab to be there.
+  /// Null means everyone gets it.
+  final String? permission;
+
+  /// Set where the screen draws its own heading and the shell should not add
+  /// one above it.
+  final bool ownsTitle;
+}
+
+/// The five the web shows on a phone, in the same order and with the same
+/// icons: Home, Sales, Stock, Shop, More (PRD 7).
+///
+/// Home and More carry no permission, so there is always a bar and always a
+/// way to the rest of the app, however little a role is allowed to do.
+const _tabs = <_Tab>[
+  _Tab(
+    label: 'Home',
+    title: 'Home',
+    icon: Icons.home_outlined,
+    selectedIcon: Icons.home,
+    screen: HomeScreen(),
+    ownsTitle: true,
+  ),
+  _Tab(
+    label: 'Sales',
+    title: 'New sale',
+    icon: Icons.receipt_long_outlined,
+    selectedIcon: Icons.receipt_long,
+    screen: SaleScreen(),
+    // The web's Sales tab opens a list of sales, so it asks for sale:view.
+    // This one opens the till, which is a sale being made.
+    permission: 'sale:create',
+  ),
+  _Tab(
+    label: 'Stock',
+    title: 'Stock',
+    icon: Icons.inventory_2_outlined,
+    selectedIcon: Icons.inventory_2,
+    screen: StockScreen(),
+    permission: 'stock:view',
+  ),
+  _Tab(
+    label: 'Shop',
+    title: 'Shop',
+    icon: Icons.storefront_outlined,
+    selectedIcon: Icons.storefront,
+    screen: ShopScreen(),
+    permission: 'shop:view',
+  ),
+  _Tab(
+    label: 'More',
+    title: 'More',
+    icon: Icons.more_horiz,
+    selectedIcon: Icons.more_horiz,
+    screen: MoreScreen(),
+  ),
+];
+
 /// The signed-in frame.
 ///
-/// Primary navigation is deliberately short — Home, Sales, Stock, Shop, More
-/// (PRD 7) — and the offline banner sits above it so the state of unsynced
-/// work is visible from every screen.
+/// Primary navigation is deliberately short and hides what the signed-in user
+/// may not use — the same rule the web follows, because a tab that opens a
+/// screen the server will refuse is worse than no tab at all. The offline
+/// banner sits above them, so the state of unsynced work is visible from
+/// every screen.
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key});
 
@@ -21,20 +104,30 @@ class ShellScreen extends StatefulWidget {
 }
 
 class _ShellScreenState extends State<ShellScreen> {
+  /// An index into the tabs on screen, not into [_tabs]: which of those are
+  /// shown depends on the role.
   int _index = 0;
-
-  static const _titles = ['Home', 'New sale', 'Stock', 'Shop', 'More'];
 
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
-    final readOnly = state.session?.readOnly ?? false;
+    final session = state.session;
+    final readOnly = session?.readOnly ?? false;
+
+    final tabs = _tabs
+        .where((tab) =>
+            tab.permission == null || (session?.can(tab.permission!) ?? false))
+        .toList();
+    // A session refresh can take a tab away while the app is open, so the
+    // index is clamped rather than trusted.
+    final index = _index.clamp(0, tabs.length - 1);
+    final current = tabs[index];
 
     return Scaffold(
-      appBar: _index == 0
+      appBar: current.ownsTitle
           ? null
           : AppBar(
-              title: Text(_titles[_index]),
+              title: Text(current.title),
               actions: [
                 if (state.sync.isSyncing)
                   const Padding(
@@ -60,7 +153,7 @@ class _ShellScreenState extends State<ShellScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   child: Text(
-                    state.session?.subscriptionMessage ??
+                    session?.subscriptionMessage ??
                         'This account is read-only. Your data is safe — '
                             'subscribe to record new transactions.',
                     style: TextStyle(
@@ -72,47 +165,23 @@ class _ShellScreenState extends State<ShellScreen> {
               ),
             Expanded(
               child: IndexedStack(
-                index: _index,
-                children: const [
-                  HomeScreen(),
-                  SaleScreen(),
-                  StockScreen(),
-                  ShopScreen(),
-                  MoreScreen(),
-                ],
+                index: index,
+                children: [for (final tab in tabs) tab.screen],
               ),
             ),
           ],
         ),
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (index) => setState(() => _index = index),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.point_of_sale_outlined),
-            selectedIcon: Icon(Icons.point_of_sale),
-            label: 'Sales',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined),
-            selectedIcon: Icon(Icons.inventory_2),
-            label: 'Stock',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.storefront_outlined),
-            selectedIcon: Icon(Icons.storefront),
-            label: 'Shop',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.more_horiz),
-            label: 'More',
-          ),
+        selectedIndex: index,
+        onDestinationSelected: (next) => setState(() => _index = next),
+        destinations: [
+          for (final tab in tabs)
+            NavigationDestination(
+              icon: Icon(tab.icon),
+              selectedIcon: Icon(tab.selectedIcon),
+              label: tab.label,
+            ),
         ],
       ),
     );

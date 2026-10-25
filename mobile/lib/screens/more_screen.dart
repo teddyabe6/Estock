@@ -32,15 +32,18 @@ class MoreScreen extends StatelessWidget {
               ],
             ),
           ),
-        const SectionTitle('Credit'),
-        ListTile(
-          leading: const Icon(Icons.receipt_long_outlined),
-          title: const Text('Receivables'),
-          subtitle: const Text('What customers owe you'),
-          trailing: const Icon(Icons.chevron_right),
-          enabled: session?.can('credit:view') ?? false,
-          onTap: () => Navigator.of(context).pushNamed('/credit'),
-        ),
+        // Hidden rather than greyed out, which is what the web does with a
+        // screen a role may not open.
+        if (session?.can('credit:view') ?? false) ...[
+          const SectionTitle('Credit'),
+          ListTile(
+            leading: const Icon(Icons.account_balance_wallet_outlined),
+            title: const Text('Receivables'),
+            subtitle: const Text('What customers owe you'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).pushNamed('/credit'),
+          ),
+        ],
         const SectionTitle('This device'),
         ListTile(
           leading: Icon(
