@@ -108,6 +108,22 @@ export default function MarketProductPage() {
             {product.shop.address ? <span className="muted"> · {product.shop.address}</span> : null}
           </p>
 
+          {/* Facts a buyer asks about before anything else, and the category
+              doubles as a way back into the catalogue it came from. */}
+          {product.category || product.in_stock ? (
+            <p className="product-facts">
+              {product.category ? (
+                <Link
+                  href={`/market?category=${encodeURIComponent(product.category)}`}
+                  className="badge"
+                >
+                  {product.category}
+                </Link>
+              ) : null}
+              {product.in_stock ? <span className="badge ok">In stock</span> : null}
+            </p>
+          ) : null}
+
           <p className="price large">
             {variant?.price ? (
               <>

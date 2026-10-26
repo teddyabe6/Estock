@@ -1354,11 +1354,18 @@ ul.basket-lines {
 .product-detail {
   display: grid;
   gap: 16px;
+  /* A product sheet, not a band across the whole screen.  Left to fill the
+     content width, the picture grew to 600px square and the few lines beside
+     it were lost in the rest. */
+  max-width: 1040px;
 }
 
 @media (min-width: 720px) {
   .product-detail {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    /* The same shape a single shop's product page uses: the picture takes
+       what it needs and no more, and what there is to read sits beside it. */
+    grid-template-columns: minmax(0, 400px) minmax(0, 1fr);
+    gap: 24px;
     align-items: start;
   }
 }
@@ -1384,6 +1391,19 @@ ul.basket-lines {
 
 .sold-by {
   margin: 6px 0 10px;
+}
+
+.product-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.product-facts a.badge:hover {
+  background: var(--brand-tint);
+  color: var(--brand-strong);
+  text-decoration: none;
 }
 
 .price.large {
