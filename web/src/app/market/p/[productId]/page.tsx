@@ -11,7 +11,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { MarketNotice, MarketShell } from "@/components/Market";
+import { MarketNotice, MarketProductCard, MarketShell } from "@/components/Market";
 import { ProductImage, Stepper } from "@/components/Storefront";
 import { Alert, Empty } from "@/components/ui";
 import { money } from "@/lib/format";
@@ -32,6 +32,7 @@ export default function MarketProductPage() {
   const [variant, setVariant] = useState<MarketVariant | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [related, setRelated] = useState<MarketProduct[]>([]);
   const basket = useMarketBasket();
 
   useEffect(() => {
@@ -40,6 +41,12 @@ export default function MarketProductPage() {
         const found = await marketApi.product(productId);
         setProduct(found);
         setVariant(defaultMarketVariant(found));
+        // Separately, and allowed to fail: the product itself is the page,
+        // and what other shops charge is the reason to stay on it.
+        marketApi
+          .related(productId)
+          .then((page) => setRelated(page.items))
+          .catch(() => setRelated([]));
       } catch (cause) {
         setError(describeError(cause));
       } finally {
@@ -186,6 +193,46 @@ export default function MarketProductPage() {
           ) : null}
         </div>
       </div>
+
+      {related.length > 0 ? (
+        <section className="related">
+          <h2>The same sort of thing at other shops</h2>
+          <p className="muted small">
+            The same item elsewhere first, cheapest of those at the top, then other
+            things those shops sell in this category. Add any of them and ask every
+            shop at once — each replies with its own price.
+          </p>
+          <div className="product-grid">
+            {related.map((item) => {
+              const option = defaultMarketVariant(item);
+              return (
+                <MarketProductCard
+                  key={item.id}
+                  product={item}
+                  quantity={option ? basket.quantityOf(option.id) : 0}
+                  onAdd={() => {
+                    if (!option) return;
+                    basket.add({
+                      variantId: option.id,
+                      productId: item.id,
+                      name: item.name,
+                      variantName: option.name,
+                      unit: item.unit_of_measure,
+                      price: option.price,
+                      imageUrl: item.image_url,
+                      shopSlug: item.shop.slug,
+                      shopName: item.shop.name,
+                    });
+                  }}
+                  onSetQuantity={(next) => {
+                    if (option) basket.setQuantity(option.id, next);
+                  }}
+                />
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <MarketNotice />
     </MarketShell>

@@ -30,12 +30,13 @@ authenticated API, not here.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from sqlalchemy import Select, exists, func, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import Select, and_, case, exists, func, or_, select
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.core.errors import NotFoundError
 from app.models.catalogue import Category, Product, ProductVariant
@@ -50,6 +51,16 @@ from app.services.storage import public_file_url
 UNAVAILABLE_STATUSES = (TenantStatus.SUSPENDED, TenantStatus.RESTRICTED)
 
 MAX_PAGE = 60
+
+#: The orders a buyer may ask for, named as the shop view names them.
+SORT_ORDERS = ("name", "price_low", "price_high")
+
+#: How many of another shop's products to put under one, and how much of a
+#: name has to match.  Four tokens is enough for "Cement bag 50kg" and keeps
+#: the OR from growing into a scan of the whole catalogue.
+MAX_RELATED = 8
+MAX_NAME_TOKENS = 4
+MIN_TOKEN = 3
 
 
 @dataclass(slots=True)
@@ -220,12 +231,54 @@ def categories(db: Session) -> list[str]:
     return [row[0] for row in rows]
 
 
+def _with_shown_price(stmt: Select):
+    """Attach the price a buyer is shown, as SQL.
+
+    The same rule :func:`_project` applies when it builds a card — the default
+    variant's price, and nothing at all where the shop hides prices — said
+    once more in SQL so that a filter and a sort can use it without first
+    loading every listed product on the platform into memory.
+    """
+    variant = aliased(ProductVariant)
+    stmt = stmt.outerjoin(
+        variant,
+        and_(
+            variant.product_id == Product.id,
+            variant.is_default.is_(True),
+            variant.is_active.is_(True),
+        ),
+    )
+    shown = case((OnlineStore.show_prices.is_(True), variant.selling_price), else_=None)
+    return stmt, shown
+
+
+def price_range(db: Session) -> tuple[Decimal | None, Decimal | None]:
+    """The cheapest and dearest price on the marketplace.
+
+    Over the whole listed catalogue rather than the filtered page, so the
+    bounds a buyer is offered do not move about as they narrow things down.
+    ``(None, None)`` where nothing carries a price, which is the signal not to
+    offer a price filter at all rather than offer an empty one.
+    """
+    stmt, shown = _with_shown_price(_listed_products(db))
+    inner = stmt.with_only_columns(shown.label("price")).order_by(None).subquery()
+    low, high = db.execute(
+        select(func.min(inner.c.price), func.max(inner.c.price))
+    ).one()
+    if low is None or high is None:
+        return None, None
+    return Decimal(low), Decimal(high)
+
+
 def marketplace_products(
     db: Session,
     *,
     query: str | None = None,
     category: str | None = None,
     shop_slug: str | None = None,
+    min_price: Decimal | None = None,
+    max_price: Decimal | None = None,
+    sort: str | None = None,
     limit: int = 30,
     offset: int = 0,
 ) -> tuple[list[MarketplaceProduct], int]:
@@ -234,6 +287,7 @@ def marketplace_products(
     stmt = _listed_products(db).options(
         joinedload(Product.variants), joinedload(Product.category)
     )
+    stmt, shown = _with_shown_price(stmt)
 
     if query:
         term = f"%{query.strip()}%"
@@ -250,15 +304,29 @@ def marketplace_products(
         )
     if shop_slug:
         stmt = stmt.where(OnlineStore.slug == shop_slug)
+    # A bound excludes anything with no price to compare: a product whose
+    # price is "ask us" cannot be said to be under 500 birr.
+    if min_price is not None:
+        stmt = stmt.where(shown >= min_price)
+    if max_price is not None:
+        stmt = stmt.where(shown <= max_price)
 
     total = db.execute(
         select(func.count()).select_from(stmt.order_by(None).subquery())
     ).scalar_one()
 
+    # By name first, not by shop: the point of a marketplace is that the same
+    # thing from two shops lands side by side.  A product with no price shown
+    # sorts last either way rather than being treated as free.
+    if sort == "price_low":
+        order = (shown.is_(None), shown.asc(), Product.name)
+    elif sort == "price_high":
+        order = (shown.is_(None), shown.desc(), Product.name)
+    else:
+        order = (Product.name, OnlineStore.display_name)
+
     rows = (
-        db.execute(
-            stmt.order_by(OnlineStore.display_name, Product.name).limit(limit).offset(offset)
-        )
+        db.execute(stmt.order_by(*order).limit(limit).offset(offset))
         .unique()
         .all()
     )
@@ -283,6 +351,77 @@ def get_marketplace_product(
         raise NotFoundError("Product not found")
     product, store = row
     return _project(product, store, _in_stock(db, [product]))
+
+
+#: A size rather than a thing: 50kg, 12mm, 1kg, 500ml.  Matching on one puts
+#: sugar under cement, and the size is on the card anyway.
+_SIZE = re.compile(r"^\d+[a-z]{0,3}$")
+
+
+def _name_tokens(name: str) -> list[str]:
+    """The words of a product name worth matching another shop's against."""
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"[^0-9A-Za-z\u1200-\u137f]+", name.lower()):
+        if len(raw) < MIN_TOKEN or raw in seen or _SIZE.match(raw):
+            continue
+        seen.add(raw)
+        tokens.append(raw)
+        if len(tokens) == MAX_NAME_TOKENS:
+            break
+    return tokens
+
+
+def related_elsewhere(
+    db: Session, product_id: uuid.UUID, *, limit: int = MAX_RELATED
+) -> list[MarketplaceProduct]:
+    """The same sort of thing, at other shops.
+
+    This is what makes a marketplace worth opening a product page in: the item
+    you are looking at, from somebody else, with their price beside it.
+    Matched on the words of the name first and the category second, because
+    "Cement bag 50kg" somewhere else is a far better answer than something
+    else from Building.  Cheapest first *within* each of those, so the
+    comparison a buyer came to make is at the top and never buried under an
+    unrelated bargain.
+
+    Never this shop's own products.  A buyer comparing prices is not helped by
+    more of what they are already looking at, and the shop they are on already
+    has a page of its own.
+    """
+    origin = get_marketplace_product(db, product_id)
+    base, shown = _with_shown_price(_listed_products(db))
+    base = base.where(Product.tenant_id != origin.shop.id).options(
+        joinedload(Product.variants), joinedload(Product.category)
+    )
+
+    found: list[tuple[Product, OnlineStore]] = []
+    seen: set[uuid.UUID] = set()
+
+    def take(stmt: Select) -> None:
+        rows = (
+            db.execute(stmt.order_by(shown.is_(None), shown.asc(), Product.name).limit(limit))
+            .unique()
+            .all()
+        )
+        for product, store in rows:
+            if product.id in seen or len(found) >= limit:
+                continue
+            seen.add(product.id)
+            found.append((product, store))
+
+    tokens = _name_tokens(origin.name)
+    if tokens:
+        take(base.where(or_(*(func.lower(Product.name).like(f"%{token}%") for token in tokens))))
+    if origin.category and len(found) < limit:
+        take(
+            base.join(Category, Category.id == Product.category_id).where(
+                func.lower(Category.name) == origin.category.lower()
+            )
+        )
+
+    availability = _in_stock(db, [product for product, _ in found])
+    return [_project(product, store, availability) for product, store in found]
 
 
 # --------------------------------------------------------------------------- #

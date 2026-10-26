@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 
-import { MarketNotice, MarketProductCard, MarketShell } from "@/components/Market";
+import { MarketFilters, MarketNotice, MarketProductCard, MarketShell } from "@/components/Market";
 import { Alert, Empty } from "@/components/ui";
 import { describeError } from "@/lib/session";
 import {
@@ -19,6 +19,7 @@ import {
   useMyMarketRequests,
   type MarketProduct,
   type MarketShop,
+  type MarketSort,
 } from "@/lib/market";
 
 const PAGE = 24;
@@ -36,6 +37,9 @@ function Market() {
   const router = useRouter();
   const shopFilter = params.get("shop") ?? "";
   const categoryFilter = params.get("category") ?? "";
+  const minPrice = params.get("min") ?? "";
+  const maxPrice = params.get("max") ?? "";
+  const sort = (params.get("sort") ?? "name") as MarketSort;
 
   const [search, setSearch] = useState(params.get("q") ?? "");
   const [query, setQuery] = useState(params.get("q") ?? "");
@@ -43,7 +47,12 @@ function Market() {
   const [total, setTotal] = useState(0);
   const [categories, setCategories] = useState<string[]>([]);
   const [shops, setShops] = useState<MarketShop[]>([]);
+  const [range, setRange] = useState<[string | null, string | null]>([
+    null,
+    null,
+  ]);
   const [loading, setLoading] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const basket = useMarketBasket();
@@ -79,11 +88,15 @@ function Market() {
           q: query || undefined,
           category: categoryFilter || undefined,
           shop: shopFilter || undefined,
+          min_price: minPrice || undefined,
+          max_price: maxPrice || undefined,
+          sort: sort === "name" ? undefined : sort,
           limit: PAGE,
         });
         if (controller.signal.aborted) return;
         setProducts(page.items);
         setTotal(page.total);
+        setRange(page.price_range);
         setError(null);
       } catch (cause) {
         if (!controller.signal.aborted) setError(describeError(cause));
@@ -92,19 +105,20 @@ function Market() {
       }
     })();
     return () => controller.abort();
-  }, [query, categoryFilter, shopFilter]);
+  }, [query, categoryFilter, shopFilter, minPrice, maxPrice, sort]);
 
-  const setFilter = useCallback(
-    (key: string, value: string) => {
+  /** Filters live in the URL, so a narrowed marketplace can be shared. */
+  const setFilters = useCallback(
+    (changes: Record<string, string>) => {
       const next = new URLSearchParams(params.toString());
-      if (value) next.set(key, value);
-      else next.delete(key);
+      for (const [key, value] of Object.entries(changes)) {
+        if (value) next.set(key, value);
+        else next.delete(key);
+      }
       router.replace(`/market${next.toString() ? `?${next}` : ""}`);
     },
     [params, router],
   );
-
-  const activeShop = shops.find((s) => s.slug === shopFilter) ?? null;
 
   return (
     <MarketShell
@@ -121,61 +135,15 @@ function Market() {
         />
       </div>
 
-      {categories.length > 0 ? (
-        <div className="chips" role="group" aria-label="Categories">
-          <button
-            type="button"
-            className={`chip${categoryFilter ? "" : " active"}`}
-            onClick={() => setFilter("category", "")}
-          >
-            All
-          </button>
-          {categories.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className={`chip${categoryFilter === name ? " active" : ""}`}
-              onClick={() => setFilter("category", categoryFilter === name ? "" : name)}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      {activeShop ? (
-        <div className="filter-note">
-          <span>
-            Showing only <strong>{activeShop.name}</strong>
-            {activeShop.address ? ` · ${activeShop.address}` : ""}
-          </span>
-          <button type="button" className="btn secondary" onClick={() => setFilter("shop", "")}>
-            Show every shop
-          </button>
-        </div>
-      ) : shops.length > 1 ? (
-        <details className="shop-directory">
-          <summary>{shops.length} shops on the marketplace</summary>
-          <ul>
-            {shops.map((shop) => (
-              <li key={shop.slug}>
-                <button type="button" className="link" onClick={() => setFilter("shop", shop.slug)}>
-                  {shop.name}
-                </button>
-                {shop.tagline ? <span className="muted small"> — {shop.tagline}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-
       {myRequests.length > 0 ? (
         <details className="my-requests">
           <summary>Your requests ({myRequests.length})</summary>
           <ul>
             {myRequests.map((entry) => (
               <li key={entry.token}>
-                <Link href={`/market/requests/${entry.token}`}>{entry.reference}</Link>
+                <Link href={`/market/requests/${entry.token}`}>
+                  {entry.reference}
+                </Link>
                 <span className="muted small">
                   {" "}
                   · {entry.shopCount} shop{entry.shopCount === 1 ? "" : "s"}
@@ -188,49 +156,77 @@ function Market() {
 
       {error ? <Alert>{error}</Alert> : null}
 
-      {loading ? (
-        <p className="muted">Loading products…</p>
-      ) : products.length === 0 ? (
-        <Empty title="Nothing matches that yet">
-          <p className="muted">Try a different word, or clear the filters.</p>
-        </Empty>
-      ) : (
-        <>
-          <p className="muted small result-count">
-            {total} product{total === 1 ? "" : "s"}
-            {total > products.length ? ` · showing the first ${products.length}` : ""}
-          </p>
-          <div className="product-grid">
-            {products.map((product) => {
-              const variant = defaultMarketVariant(product);
-              return (
-                <MarketProductCard
-                  key={product.id}
-                  product={product}
-                  quantity={variant ? basket.quantityOf(variant.id) : 0}
-                  onAdd={() => {
-                    if (!variant) return;
-                    basket.add({
-                      variantId: variant.id,
-                      productId: product.id,
-                      name: product.name,
-                      variantName: variant.name,
-                      unit: product.unit_of_measure,
-                      price: variant.price,
-                      imageUrl: product.image_url,
-                      shopSlug: product.shop.slug,
-                      shopName: product.shop.name,
-                    });
-                  }}
-                  onSetQuantity={(next) => {
-                    if (variant) basket.setQuantity(variant.id, next);
-                  }}
-                />
-              );
-            })}
-          </div>
-        </>
-      )}
+      <div className="shop-layout">
+        <MarketFilters
+          shops={shops}
+          shop={shopFilter}
+          onShop={(slug) => setFilters({ shop: slug })}
+          categories={categories}
+          category={categoryFilter}
+          onCategory={(name) => setFilters({ category: name })}
+          range={range}
+          minPrice={minPrice}
+          maxPrice={maxPrice}
+          onPrice={(min, max) => setFilters({ min, max })}
+          sort={sort}
+          onSort={(value) =>
+            setFilters({ sort: value === "name" ? "" : value })
+          }
+          resultCount={loading ? null : total}
+          open={filtersOpen}
+          onToggle={() => setFiltersOpen((v) => !v)}
+        />
+
+        <div className="shop-results">
+          {loading ? (
+            <p className="muted">Loading products…</p>
+          ) : products.length === 0 ? (
+            <Empty title="Nothing matches that yet">
+              <p className="muted">
+                Try a different word, or clear the filters.
+              </p>
+            </Empty>
+          ) : (
+            <>
+              <p className="muted small result-count">
+                {total} product{total === 1 ? "" : "s"}
+                {total > products.length
+                  ? ` · showing the first ${products.length}`
+                  : ""}
+              </p>
+              <div className="product-grid">
+                {products.map((product) => {
+                  const variant = defaultMarketVariant(product);
+                  return (
+                    <MarketProductCard
+                      key={product.id}
+                      product={product}
+                      quantity={variant ? basket.quantityOf(variant.id) : 0}
+                      onAdd={() => {
+                        if (!variant) return;
+                        basket.add({
+                          variantId: variant.id,
+                          productId: product.id,
+                          name: product.name,
+                          variantName: variant.name,
+                          unit: product.unit_of_measure,
+                          price: variant.price,
+                          imageUrl: product.image_url,
+                          shopSlug: product.shop.slug,
+                          shopName: product.shop.name,
+                        });
+                      }}
+                      onSetQuantity={(next) => {
+                        if (variant) basket.setQuantity(variant.id, next);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
       <MarketNotice />
     </MarketShell>

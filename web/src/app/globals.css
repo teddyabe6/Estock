@@ -1270,6 +1270,22 @@ ul.basket-lines {
   font-size: 0.85rem;
 }
 
+/* What other shops charge for the same thing, under the product itself. */
+.related {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.related h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+}
+
+.related .product-grid {
+  margin-top: 12px;
+}
+
 .shop-badge {
   display: inline-block;
   font-size: 0.78rem;

@@ -88,19 +88,39 @@ function qs(params: Record<string, string | number | undefined>): string {
   return pairs.length ? `?${pairs.join("&")}` : "";
 }
 
+/** How a buyer may order the catalogue; the same words the shop view uses. */
+export type MarketSort = "name" | "price_low" | "price_high";
+
 export const marketApi = {
   shops: () => request<{ shops: MarketShop[] }>("/market/shops", { anonymous: true }),
   categories: () =>
     request<{ categories: string[] }>("/market/categories", { anonymous: true }),
   products: (
-    params: { q?: string; category?: string; shop?: string; limit?: number; offset?: number } = {},
+    params: {
+      q?: string;
+      category?: string;
+      shop?: string;
+      min_price?: string;
+      max_price?: string;
+      sort?: MarketSort;
+      limit?: number;
+      offset?: number;
+    } = {},
   ) =>
-    request<{ items: MarketProduct[]; total: number; limit: number; offset: number }>(
-      `/market/products${qs(params)}`,
-      { anonymous: true },
-    ),
+    request<{
+      items: MarketProduct[];
+      total: number;
+      limit: number;
+      offset: number;
+      /** The cheapest and dearest on the whole marketplace, for the filter. */
+      price_range: [string | null, string | null];
+    }>(`/market/products${qs(params)}`, { anonymous: true }),
   product: (id: string) =>
     request<MarketProduct>(`/market/products/${id}`, { anonymous: true }),
+  related: (id: string) =>
+    request<{ items: MarketProduct[] }>(`/market/products/${id}/related`, {
+      anonymous: true,
+    }),
   submitRequest: (body: Record<string, unknown>) =>
     request<MarketRequestResult>("/market/requests", {
       method: "POST",

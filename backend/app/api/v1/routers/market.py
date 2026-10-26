@@ -9,6 +9,7 @@ credit balance or a stock quantity.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
@@ -51,18 +52,38 @@ def list_products(
     q: str | None = None,
     category: str | None = None,
     shop: str | None = Query(default=None, description="A shop's slug"),
+    min_price: Decimal | None = Query(default=None, ge=0),
+    max_price: Decimal | None = Query(default=None, ge=0),
+    sort: str | None = Query(default=None, description="name, price_low or price_high"),
     limit: int = Query(30, ge=1, le=60),
     offset: int = Query(0, ge=0),
 ) -> dict:
     """Browse or search the whole marketplace."""
+    if sort is not None and sort not in marketplace.SORT_ORDERS:
+        raise ValidationError(f"Sort must be one of: {', '.join(marketplace.SORT_ORDERS)}")
     products, total = marketplace.marketplace_products(
-        db, query=q, category=category, shop_slug=shop, limit=limit, offset=offset
+        db,
+        query=q,
+        category=category,
+        shop_slug=shop,
+        min_price=min_price,
+        max_price=max_price,
+        sort=sort,
+        limit=limit,
+        offset=offset,
     )
+    low, high = marketplace.price_range(db)
     return {
         "items": [product.as_dict() for product in products],
         "total": total,
         "limit": limit,
         "offset": offset,
+        # The bounds of the whole listed catalogue, so the filter can offer
+        # real numbers and they do not move as the buyer narrows things down.
+        "price_range": [
+            str(low) if low is not None else None,
+            str(high) if high is not None else None,
+        ],
     }
 
 
@@ -70,6 +91,13 @@ def list_products(
 def get_product(product_id: uuid.UUID, db: DbSession) -> dict:
     """One listed product, by a link that can be shared."""
     return marketplace.get_marketplace_product(db, product_id).as_dict()
+
+
+@router.get("/products/{product_id}/related")
+def related_products(product_id: uuid.UUID, db: DbSession) -> dict:
+    """The same sort of thing at other shops, cheapest first."""
+    items = marketplace.related_elsewhere(db, product_id)
+    return {"items": [product.as_dict() for product in items]}
 
 
 @router.post(

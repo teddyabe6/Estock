@@ -869,3 +869,115 @@ def test_a_shop_that_is_not_on_the_marketplace_is_told_so(client, business):
     assert "not on the marketplace" in response.json()["message"]
     business.db.expire(product)
     assert product.on_marketplace is False
+
+
+# --------------------------------------------------------------------------- #
+# Narrowing the marketplace, and comparing across it
+# --------------------------------------------------------------------------- #
+
+
+def _stock(business, name, price, *, category=None):
+    product = business.add_product(
+        name, selling_price=price, purchase_price="100", opening_stock="10",
+        **({"category_name": category} if category else {}),
+    )
+    return _list(business, product)
+
+
+@pytest.fixture
+def two_catalogues(business, other_business):
+    """Two shops that both sell cement, at different prices."""
+    _join_marketplace(business, slug="merkato", name="Merkato Wholesale")
+    _join_marketplace(other_business, slug="bole", name="Bole Building")
+    _stock(business, "Cement bag 50kg", "1200", category="Building")
+    _stock(business, "Sugar 50kg", "4750", category="Grains")
+    _stock(other_business, "Cement bag 50kg", "1150", category="Building")
+    _stock(other_business, "Roofing sheet", "640", category="Building")
+    return business, other_business
+
+
+def test_the_catalogue_puts_the_same_product_from_two_shops_together(db, two_catalogues):
+    """The default order is by name, because comparing is the point."""
+    products, _total = marketplace.marketplace_products(db)
+
+    assert [p.name for p in products] == [
+        "Cement bag 50kg",
+        "Cement bag 50kg",
+        "Roofing sheet",
+        "Sugar 50kg",
+    ]
+
+
+def test_a_price_window_keeps_only_what_is_inside_it(db, two_catalogues):
+    products, total = marketplace.marketplace_products(
+        db, min_price=Decimal("700"), max_price=Decimal("1180")
+    )
+
+    assert total == 1
+    assert [(p.name, str(p.price)) for p in products] == [("Cement bag 50kg", "1150.00")]
+
+
+def test_sorting_puts_the_cheapest_first_or_last(db, two_catalogues):
+    cheap, _ = marketplace.marketplace_products(db, sort="price_low")
+    dear, _ = marketplace.marketplace_products(db, sort="price_high")
+
+    assert [str(p.price) for p in cheap] == ["640.00", "1150.00", "1200.00", "4750.00"]
+    assert [str(p.price) for p in dear] == ["4750.00", "1200.00", "1150.00", "640.00"]
+
+
+def test_the_price_range_covers_the_whole_marketplace(db, two_catalogues):
+    low, high = marketplace.price_range(db)
+
+    assert (str(low), str(high)) == ("640.00", "4750.00")
+
+
+def test_a_shop_that_hides_prices_has_nothing_to_filter_on(db, two_catalogues):
+    """A price a buyer cannot see cannot be compared, so it is not a price."""
+    business, _other = two_catalogues
+    store = business.db.query(OnlineStore).filter_by(tenant_id=business.tenant.id).one()
+    store.show_prices = False
+    db.flush()
+
+    products, _ = marketplace.marketplace_products(db, max_price=Decimal("100000"))
+
+    assert {p.shop.slug for p in products} == {"bole"}, "the hidden ones cannot qualify"
+
+
+def test_a_product_page_shows_the_same_item_at_another_shop(db, two_catalogues):
+    business, other = two_catalogues
+    mine = next(
+        p for p in marketplace.marketplace_products(db)[0]
+        if p.name == "Cement bag 50kg" and p.shop.slug == "merkato"
+    )
+
+    related = marketplace.related_elsewhere(db, mine.id)
+
+    assert related, "a marketplace that cannot compare is a list"
+    assert related[0].name == "Cement bag 50kg"
+    assert related[0].shop.slug == "bole"
+    assert all(p.shop.slug != "merkato" for p in related), "never the shop you are on"
+
+
+def test_a_size_is_not_an_identity(db, two_catalogues):
+    """Sugar 50kg is not a kind of cement, however the names read."""
+    business, _other = two_catalogues
+    sugar = next(
+        p for p in marketplace.marketplace_products(db)[0] if p.name == "Sugar 50kg"
+    )
+
+    related = marketplace.related_elsewhere(db, sugar.id)
+
+    assert all("Cement" not in p.name for p in related), [p.name for p in related]
+
+
+def test_related_falls_back_to_the_category(db, two_catalogues):
+    """Nobody else sells a roofing sheet, so show what else they do sell."""
+    _business, other = two_catalogues
+    sheet = next(
+        p for p in marketplace.marketplace_products(db)[0] if p.name == "Roofing sheet"
+    )
+
+    related = marketplace.related_elsewhere(db, sheet.id)
+
+    assert [p.name for p in related] == ["Cement bag 50kg"]
+    assert related[0].shop.slug == "merkato"
