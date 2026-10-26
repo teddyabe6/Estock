@@ -190,9 +190,21 @@ done
 export CORS_ORIGINS="$CORS_LIST"
 
 info "preparing the database"
-(cd backend && "$VENV/bin/alembic" upgrade head >/dev/null 2>&1) \
-  || fail "migrations failed"
-(cd backend && "$VENV/bin/python" -m app.seed >/dev/null 2>&1) || true
+SETUP_LOG="$LOG_DIR/setup.log"
+# Kept rather than thrown away: "migrations failed" on its own sends people
+# looking through their own setup for a fault that is in ours.
+if ! (cd backend && "$VENV/bin/alembic" upgrade head) >"$SETUP_LOG" 2>&1; then
+  printf '\n  Error: migrations failed\n\n' >&2
+  tail -n 15 "$SETUP_LOG" | sed 's/^/    /' >&2
+  printf '\n  Full output: %s\n\n' "$SETUP_LOG" >&2
+  exit 1
+fi
+# A second run finds the demo business already there and says so; that is not
+# a reason to stop, but a seed that failed for any other reason leaves an empty
+# app, which is worth a word.
+if ! (cd backend && "$VENV/bin/python" -m app.seed) >>"$SETUP_LOG" 2>&1; then
+  info "demo data not loaded — see $SETUP_LOG"
+fi
 
 # --------------------------------------------------------------------------- #
 # Run
