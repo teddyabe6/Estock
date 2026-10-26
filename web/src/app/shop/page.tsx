@@ -174,6 +174,16 @@ function Storefront() {
     }
   }
 
+  async function listPublished() {
+    try {
+      await api.listPublishedOnMarketplace();
+      const page = await api.products({ limit: 200 });
+      setProducts(page.items);
+    } catch (cause) {
+      setError(describeError(cause, "Could not list your products"));
+    }
+  }
+
   async function toggleMarketplace(product: Product) {
     try {
       const updated = await api.listProductOnMarketplace(product.id, !product.on_marketplace);
@@ -185,6 +195,7 @@ function Storefront() {
 
   const manage = canWrite && can("shop:manage");
   const published = products.filter((p) => p.is_published);
+  const unlisted = published.filter((p) => !p.on_marketplace);
   const withoutPhoto = published.filter((p) => !p.image_url).length;
 
   return (
@@ -228,6 +239,19 @@ function Storefront() {
               checked={store.list_on_marketplace}
               onChange={(v) => void setFlag("list_on_marketplace", v)}
             />
+          )}
+          {manage && store.list_on_marketplace && unlisted.length > 0 && (
+            <div className="alert warn" role="status">
+              {/* The switch lists a catalogue as it is turned on, but a shop
+                  that joined before it had one never gets that moment — and a
+                  seller looking at a marketplace with none of their products
+                  in it has nothing on the screen telling them why. */}
+              {unlisted.length} published product{unlisted.length === 1 ? " is" : "s are"} not
+              on the marketplace yet.{" "}
+              <button type="button" className="link" onClick={() => void listPublished()}>
+                List {unlisted.length === 1 ? "it" : "them"}
+              </button>
+            </div>
           )}
           {store.marketplace_url && (
             <p className="muted" style={{ fontSize: "0.9rem", marginBottom: 0 }}>

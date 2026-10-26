@@ -12,6 +12,7 @@ from app.api.v1.serializers import quotation_out, sale_out
 from app.core.config import settings
 from app.core.db import utcnow
 from app.core.deps import Ctx, DbSession, WritableCtx
+from app.core.errors import ConflictError
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
 from app.models.commerce import (
@@ -101,6 +102,24 @@ def update_store(payload: StoreSettingsIn, ctx: WritableCtx, db: DbSession) -> S
         list_published_on_marketplace(db, ctx)
     db.flush()
     return _store_out(store)
+
+
+@router.post("/marketplace/list-published")
+def list_published_products(ctx: WritableCtx, db: DbSession) -> dict:
+    """Put everything this shop already publishes onto the marketplace.
+
+    The shop switch runs this when it is turned on, but a shop that was
+    already listed before its catalogue was never gets that moment — and a
+    seller looking at a marketplace with none of their products in it has no
+    way to tell what is missing.  This is that way.
+    """
+    ctx.require(Permission.SHOP_MANAGE)
+    store = _store(db, ctx)
+    if not store.list_on_marketplace:
+        raise ConflictError(
+            "This shop is not on the marketplace. Switch it on first."
+        )
+    return {"listed": list_published_on_marketplace(db, ctx)}
 
 
 @router.get("/summary")

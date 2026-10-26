@@ -824,3 +824,48 @@ def test_a_shop_asked_directly_is_not_told_it_is_competing(client, business):
     notice = _notices(business)[0]
     assert notice.title.startswith("Proforma request")
     assert "other shops" not in (notice.body or "")
+
+
+def test_a_shop_already_listed_can_bring_its_catalogue_in_later(client, business):
+    """The state the switch's own catch-up cannot reach.
+
+    A shop that joined the marketplace before it had a catalogue — or before
+    publishing carried a listing with it — never sees the switch go off-to-on
+    again, so the products it published in between sit outside.
+    """
+    store = _store_of(business)
+    store.list_on_marketplace = True
+    business.db.flush()
+    stranded = business.add_product("Teff 25kg")
+    stranded.is_published = True  # published without going through set_published
+    held_back = business.add_product("Damaged sacks")
+    business.db.flush()
+
+    response = client.post(
+        "/api/v1/shop/marketplace/list-published", headers=business.headers()
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json() == {"listed": 1}
+    business.db.expire(stranded)
+    business.db.expire(held_back)
+    assert stranded.on_marketplace is True
+    assert held_back.on_marketplace is False
+
+
+def test_a_shop_that_is_not_on_the_marketplace_is_told_so(client, business):
+    store = _store_of(business)
+    store.list_on_marketplace = False
+    business.db.flush()
+    product = business.add_product("Teff 25kg")
+    product.is_published = True
+    business.db.flush()
+
+    response = client.post(
+        "/api/v1/shop/marketplace/list-published", headers=business.headers()
+    )
+
+    assert response.status_code == 409, response.json()
+    assert "not on the marketplace" in response.json()["message"]
+    business.db.expire(product)
+    assert product.on_marketplace is False

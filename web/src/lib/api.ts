@@ -1078,6 +1078,8 @@ export const api = {
   store: () => request<Store>("/shop/settings"),
   updateStore: (body: Record<string, unknown>) =>
     request<Store>("/shop/settings", { method: "PATCH", body }),
+  listPublishedOnMarketplace: () =>
+    request<{ listed: number }>("/shop/marketplace/list-published", { method: "POST" }),
   enquiries: (params: { status?: string; limit?: number } = {}) =>
     request<Page<Enquiry>>(`/shop/enquiries${toQuery(params)}`),
   updateEnquiry: (id: string, status: string) =>
