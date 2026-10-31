@@ -83,13 +83,20 @@ export function statusTone(status: string): "ok" | "warn" | "danger" | "muted" {
     case "completed":
     case "ok":
       return "ok";
+    case "received":
+      return "ok";
     case "overdue":
     case "out_of_stock":
     case "critical":
+    case "rejected":
       return "danger";
     case "partially_paid":
     case "warning":
     case "outstanding":
+    // Waiting on somebody: a request on its decision, an approval on the
+    // branch that asked taking it up.
+    case "requested":
+    case "approved":
       return "warn";
     default:
       return "muted";

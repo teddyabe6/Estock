@@ -427,6 +427,15 @@ tbody tr:last-child td {
   border-bottom: none;
 }
 
+/* A totals row carries the figure the eye goes to, so it is ruled off from the
+   rows it adds up rather than reading as one more of them. */
+tfoot td,
+tfoot th {
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+  font-weight: 600;
+}
+
 /* ---------- Badges ---------- */
 
 .badge {

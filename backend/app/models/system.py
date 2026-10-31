@@ -35,6 +35,10 @@ class NotificationKind(StrEnum):
     PROFORMA_WAITING = "proforma_waiting"
     #: A buyer sent proof that they have paid, for the seller to check.
     PAYMENT_SLIP = "payment_slip"
+    #: A branch has asked another branch for stock, and is waiting on a decision.
+    STOCK_REQUEST = "stock_request"
+    #: That request was approved or rejected, for whoever asked.
+    STOCK_REQUEST_DECIDED = "stock_request_decided"
     TRIAL_EXPIRY = "trial_expiry"
     #: A paid subscription period ran out.  Distinct from TRIAL_EXPIRY so
     #: the two notices cannot suppress each other in the daily de-duplication.

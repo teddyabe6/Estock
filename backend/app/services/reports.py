@@ -740,7 +740,18 @@ def home_dashboard(db: Session, ctx: AuthContext, *, today: date | None = None) 
         payload["today"] = summary.as_dict(include_cost=ctx.has(Permission.COST_VIEW))
 
     if ctx.has(Permission.STOCK_VIEW):
-        from app.services.inventory import low_stock_items
+        from app.services.inventory import branches_awaiting_opening_stock, low_stock_items
+
+        # A branch nobody has counted yet is the reminder that greets whoever
+        # first signs in to it (PRD 6).
+        payload["stock_setup"] = [
+            {
+                "branch_id": str(branch.branch_id),
+                "branch_name": branch.branch_name,
+                "product_count": branch.product_count,
+            }
+            for branch in branches_awaiting_opening_stock(db, ctx)
+        ]
 
         items = low_stock_items(db, ctx.tenant_id, ctx.visible_branch_ids(db))
         payload["low_stock_count"] = len(items)

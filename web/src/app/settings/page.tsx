@@ -5,6 +5,7 @@
  * pricing rule and the subscription (PRD 4, 5, 6, 8.2, 17).
  */
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
@@ -196,7 +197,9 @@ function BranchesSection() {
   const [address, setAddress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState<Branch | null>(null);
   const manage = canWrite && can("branch:manage");
+  const mayCount = canWrite && can("stock:adjust");
 
   const load = useCallback(() => api.branches().then(setBranches).catch((c) => setError(describeError(c))), []);
 
@@ -208,9 +211,10 @@ function BranchesSection() {
     event.preventDefault();
     setBusy(true);
     try {
-      await api.createBranch({ name, address: address || undefined });
+      const branch = await api.createBranch({ name, address: address || undefined });
       setName("");
       setAddress("");
+      setCreated(branch);
       await load();
       await refresh();
     } catch (cause) {
@@ -266,6 +270,19 @@ function BranchesSection() {
           </tbody>
         </table>
       </div>
+      {created && (
+        <div className="alert ok" role="status" style={{ marginTop: 12 }}>
+          <strong>{created.name} is open.</strong> Every product is already available there with
+          nothing on hand.{" "}
+          {mayCount ? (
+            <Link href={`/stock?tab=opening&branch=${created.id}`}>
+              Record what is on its shelves →
+            </Link>
+          ) : (
+            "Someone who can adjust stock needs to record what is on its shelves."
+          )}
+        </div>
+      )}
       {manage && (
         <form onSubmit={add} className="grid" style={{ marginTop: 12, alignItems: "end" }}>
           <Field label="New branch">

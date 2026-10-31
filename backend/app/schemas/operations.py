@@ -59,6 +59,97 @@ class StockLevelOut(BaseModel):
     status: str
 
 
+class BranchStockSetupOut(BaseModel):
+    """A branch with nothing recorded against it yet."""
+
+    branch_id: uuid.UUID
+    branch_name: str
+    location_id: uuid.UUID | None = None
+    product_count: int
+
+
+class OpeningSheetRowOut(BaseModel):
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    name: str
+    sku: str | None = None
+    unit: str
+    #: What this location holds now; the guide posts the difference.
+    quantity: Decimal
+
+
+class OpeningSheetOut(BaseModel):
+    branch_id: uuid.UUID
+    branch_name: str
+    location_id: uuid.UUID
+    location_name: str
+    rows: list[OpeningSheetRowOut]
+    total: int
+    limit: int
+    offset: int
+    #: Products already carrying a quantity here, out of the catalogue total.
+    recorded: int
+    product_count: int
+
+
+class OpeningStockLineIn(BaseModel):
+    variant_id: uuid.UUID
+    #: Counted on the shelf, not a change.  Zero is a legitimate answer.
+    quantity: Decimal = Field(ge=0)
+
+
+class OpeningStockIn(BaseModel):
+    branch_id: uuid.UUID
+    lines: list[OpeningStockLineIn] = Field(min_length=1)
+    note: str | None = Field(None, max_length=255)
+    #: Lets a retried submit of a long sheet land once.
+    idempotency_key: str | None = Field(None, max_length=64)
+
+
+class OpeningStockOut(BaseModel):
+    branch_id: uuid.UUID
+    #: Lines that moved the ledger.  A quantity that was already right is not
+    #: one of them, which is why this can be fewer than was submitted.
+    recorded: int
+    unchanged: int
+    movements: list[MovementOut] = []
+
+
+class StockOverviewBranch(BaseModel):
+    branch_id: uuid.UUID
+    name: str
+    is_default: bool
+    #: Everything this branch holds of the products in the overview.
+    total: Decimal
+
+
+class StockOverviewRow(BaseModel):
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    name: str
+    sku: str | None = None
+    unit: str
+    min_stock: Decimal | None = None
+    reorder_level: Decimal | None = None
+    #: One entry per branch in ``StockOverviewOut.branches``, zeroes included.
+    quantities: dict[uuid.UUID, Decimal]
+    total: Decimal
+    #: Judged on the combined total: an item is only short when no branch has
+    #: enough to send.
+    status: str
+
+
+class StockOverviewOut(BaseModel):
+    branches: list[StockOverviewBranch]
+    rows: list[StockOverviewRow]
+    grand_total: Decimal
+    #: Products matching the filter.  The totals cover all of them; ``rows``
+    #: is the requested page.
+    total: int
+    limit: int
+    offset: int
+
+
 class TransferLineIn(BaseModel):
     variant_id: uuid.UUID
     quantity: Decimal = Field(gt=0)
@@ -68,6 +159,31 @@ class TransferIn(BaseModel):
     from_location_id: uuid.UUID
     to_location_id: uuid.UUID
     lines: list[TransferLineIn] = Field(min_length=1)
+    note: str | None = Field(None, max_length=2000)
+
+
+class TransferBranchOut(BaseModel):
+    """A branch a transfer could involve.  Names only — never a quantity."""
+
+    branch_id: uuid.UUID
+    branch_name: str
+    location_id: uuid.UUID | None = None
+    #: The caller may operate here, so it can be the receiving end.
+    is_mine: bool
+
+
+class TransferRequestIn(BaseModel):
+    """One branch asking another for stock it has run out of."""
+
+    from_location_id: uuid.UUID
+    to_location_id: uuid.UUID
+    lines: list[TransferLineIn] = Field(min_length=1)
+    note: str | None = Field(None, max_length=2000, description="Why it is needed")
+
+
+class TransferDecisionIn(BaseModel):
+    """The owner's answer.  A refusal has to say why; an approval may."""
+
     note: str | None = Field(None, max_length=2000)
 
 
@@ -81,17 +197,39 @@ class TransferLineOut(Schema):
     id: uuid.UUID
     product_id: uuid.UUID
     variant_id: uuid.UUID
+    #: Resolved here rather than looked up by the caller, which cannot name a
+    #: product it holds none of.
+    name: str | None = None
     quantity_sent: Decimal
     quantity_received: Decimal | None = None
     note: str | None = None
 
 
 class TransferOut(Schema):
+    """A transfer or a request — the same record at different stages.
+
+    Branch and location names travel with it because the branch at one end may
+    be one the reader has no access to, and "…" is no way to tell somebody who
+    their stock is going to.
+    """
+
     id: uuid.UUID
     reference: str
     from_location_id: uuid.UUID
+    from_location_name: str | None = None
+    from_branch_id: uuid.UUID | None = None
+    from_branch_name: str | None = None
     to_location_id: uuid.UUID
+    to_location_name: str | None = None
+    to_branch_id: uuid.UUID | None = None
+    to_branch_name: str | None = None
     status: str
+    requested_at: datetime | None = None
+    requested_by_name: str | None = None
+    decided_at: datetime | None = None
+    decided_by_name: str | None = None
+    decision_note: str | None = None
+    accepted_at: datetime | None = None
     dispatched_at: datetime | None = None
     received_at: datetime | None = None
     note: str | None = None

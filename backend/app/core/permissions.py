@@ -31,6 +31,11 @@ class Permission(StrEnum):
     STOCK_VIEW = "stock:view"
     STOCK_RECEIVE = "stock:receive"
     STOCK_TRANSFER = "stock:transfer"
+    #: Decide a branch's request for another branch's stock.  Separate from
+    #: stock:transfer, which is the authority to move stock you already have
+    #: charge of; this is the authority to spend a branch's stock on behalf of
+    #: another, which in most shops is the owner's alone (PRD 5.1, 9).
+    STOCK_TRANSFER_APPROVE = "stock:transfer_approve"
     STOCK_ADJUST = "stock:adjust"
     STOCK_COUNT = "stock:count"
 

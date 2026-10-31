@@ -18,7 +18,8 @@ export default function HomePage() {
 }
 
 function Home() {
-  const { session } = useSession();
+  const { session, can, canWrite } = useSession();
+  const mayCount = canWrite && can("stock:adjust");
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +49,20 @@ function Home() {
       />
 
       <Alert>{error}</Alert>
+
+      {mayCount && data?.stock_setup && data.stock_setup.length > 0 && (
+        <div className="alert warn" role="status" style={{ marginBottom: 12 }}>
+          <strong>
+            {data.stock_setup.length === 1
+              ? `${data.stock_setup[0].branch_name} has no stock recorded yet.`
+              : `${data.stock_setup.length} branches have no stock recorded yet.`}
+          </strong>{" "}
+          Every product is available there with nothing on hand.{" "}
+          <Link href={`/stock?tab=opening&branch=${data.stock_setup[0].branch_id}`}>
+            Record what is on the shelves →
+          </Link>
+        </div>
+      )}
 
       {data?.today && (
         <div className="grid">

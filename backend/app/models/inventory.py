@@ -68,10 +68,38 @@ STOCK_OUT_REASONS = frozenset(
 
 
 class TransferStatus(StrEnum):
+    """One ladder for both ways stock moves between branches (PRD 9).
+
+    A branch with stock to spare *pushes* it: ``draft`` → ``dispatched`` →
+    ``received``.  A branch that has run out *pulls* it, and has to be given
+    permission first: ``requested`` → ``approved`` (or ``rejected``) →
+    ``received``, the stock moving only once the branch that asked accepts
+    what was approved.  Both end up as one row with one reference, so the
+    record of what was asked for, allowed, refused and actually moved is a
+    single list rather than two.
+    """
+
     DRAFT = "draft"
+    #: A branch has asked another for stock and is waiting on the owner.
+    REQUESTED = "requested"
+    #: The owner said yes.  Nothing has moved yet: the branch that asked still
+    #: has to accept, because only it knows whether it still needs the goods.
+    APPROVED = "approved"
+    #: The owner said no, with a reason.  Terminal.
+    REJECTED = "rejected"
     DISPATCHED = "dispatched"
     RECEIVED = "received"
     CANCELLED = "cancelled"
+
+
+#: Statuses in which nothing has moved and the transfer can still be called off.
+OPEN_TRANSFER_STATUSES = frozenset(
+    {
+        TransferStatus.DRAFT,
+        TransferStatus.REQUESTED,
+        TransferStatus.APPROVED,
+    }
+)
 
 
 class StockCountStatus(StrEnum):
@@ -168,6 +196,28 @@ class StockTransfer(UUIDPrimaryKey, Timestamped, TenantScoped, Auditable, Base):
     status: Mapped[TransferStatus] = mapped_column(
         enum_column(TransferStatus), default=TransferStatus.DRAFT, nullable=False
     )
+
+    # Each milestone keeps its own moment and actor, so the history of a
+    # transfer can be read off the row rather than reassembled from the audit
+    # log.  All are null on a transfer pushed straight out as a draft.
+    requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    requested_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    #: When the request was approved or rejected.  Which of the two it was is
+    #: the status, so there is no pair of columns that could disagree with it.
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    #: Why, in the decider's words.  Required to reject, optional to approve.
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    #: When the branch that asked took the approved goods.
+    accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    accepted_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="SET NULL")
+    )
+
     dispatched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     received_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     dispatched_by_id: Mapped[uuid.UUID | None] = mapped_column(

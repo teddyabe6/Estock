@@ -13,16 +13,23 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.audit import AuditAction, record_audit
 from app.core.db import supports_row_locks, utcnow
-from app.core.errors import ConflictError, InsufficientStock, NotFoundError, ValidationError
+from app.core.errors import (
+    ConflictError,
+    InsufficientStock,
+    NotFoundError,
+    PermissionDenied,
+    ValidationError,
+)
 from app.core.permissions import Permission
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
 from app.models.catalogue import Product, ProductVariant
 from app.models.inventory import (
+    OPEN_TRANSFER_STATUSES,
     STOCK_IN_REASONS,
     STOCK_OUT_REASONS,
     MovementReason,
@@ -35,7 +42,7 @@ from app.models.inventory import (
     StockTransferLine,
     TransferStatus,
 )
-from app.models.organisation import StockLocation
+from app.models.organisation import Branch, StockLocation
 from app.services.numbering import next_number
 
 ZERO = Decimal("0.000")
@@ -327,6 +334,7 @@ def adjust_stock(
     quantity: Decimal,
     reason: MovementReason,
     note: str | None = None,
+    idempotency_key: str | None = None,
 ) -> StockMovement:
     """Record an approved adjustment, damage or loss (PRD 9)."""
     ctx.require(Permission.STOCK_ADJUST)
@@ -357,6 +365,7 @@ def adjust_stock(
             reason=reason,
             note=note,
             source_type="adjustment",
+            idempotency_key=idempotency_key,
         ),
     )
     record_audit(
@@ -428,6 +437,455 @@ def create_transfer(
         )
     db.flush()
     return transfer
+
+
+@dataclass(slots=True)
+class TransferBranch:
+    branch_id: uuid.UUID
+    branch_name: str
+    #: Where a request to this branch would be filled from.
+    location_id: uuid.UUID | None
+    #: The caller may operate here, so it can be the receiving end.
+    is_mine: bool
+
+
+def transfer_branches(db: Session, ctx: AuthContext) -> list[TransferBranch]:
+    """Every active branch a transfer or a request could involve.
+
+    Names, and nothing else.  A branch cannot ask another for stock without
+    knowing that it exists, and within one business a branch's name is not a
+    secret — but what it holds is, so no quantity comes back from here
+    (PRD 15: no unauthorised cross-branch visibility).
+    """
+    ctx.require(Permission.STOCK_TRANSFER)
+    branches = db.execute(
+        tenant_query(Branch, ctx.tenant_id)
+        .where(Branch.is_active.is_(True))
+        .order_by(Branch.is_default.desc(), Branch.name)
+    ).scalars()
+    return [
+        TransferBranch(
+            branch_id=branch.id,
+            branch_name=branch.name,
+            location_id=(
+                branch.default_location.id if branch.default_location is not None else None
+            ),
+            is_mine=ctx.can_access_branch(branch.id),
+        )
+        for branch in branches
+    ]
+
+
+def request_transfer(
+    db: Session,
+    ctx: AuthContext,
+    *,
+    from_location_id: uuid.UUID,
+    to_location_id: uuid.UUID,
+    lines: list[tuple[uuid.UUID, Decimal]],
+    note: str | None = None,
+) -> StockTransfer:
+    """Ask another branch for stock, for the owner to allow or refuse (PRD 9).
+
+    The mirror image of :func:`create_transfer`: there, a branch with stock to
+    spare sends it; here, a branch that has run out asks for it.  The asking
+    branch needs no authority over the branch it is asking — that is the whole
+    point — so only the destination is checked against its own assignments.
+    Nothing moves yet.
+    """
+    ctx.require(Permission.STOCK_TRANSFER)
+    if not lines:
+        raise ValidationError("Add at least one product to the request")
+
+    source = get_tenant_object(
+        db, StockLocation, from_location_id, ctx.tenant_id, label="Source location"
+    )
+    destination = get_tenant_object(
+        db, StockLocation, to_location_id, ctx.tenant_id, label="Destination location"
+    )
+    if source.branch_id == destination.branch_id:
+        raise ValidationError(
+            "Ask a different branch — stock already in your own branch needs a "
+            "transfer, not a request"
+        )
+    # Only the receiving end: a branch asks for its own shelves.
+    ctx.require_branch(destination.branch_id)
+
+    transfer = StockTransfer(
+        tenant_id=ctx.tenant_id,
+        reference=next_number(db, StockTransfer, ctx.tenant_id, "transfer", column="reference"),
+        from_location_id=from_location_id,
+        to_location_id=to_location_id,
+        status=TransferStatus.REQUESTED,
+        note=note,
+        requested_at=utcnow(),
+        requested_by_id=ctx.user_id,
+        created_by_id=ctx.user_id,
+    )
+    db.add(transfer)
+    db.flush()
+
+    refs = MovementRefs(db, ctx.tenant_id, variant_ids=[variant_id for variant_id, _ in lines])
+    for variant_id, quantity in lines:
+        if Decimal(quantity) <= 0:
+            raise ValidationError("Requested quantities must be positive")
+        variant = refs.variant(variant_id)
+        transfer.lines.append(
+            StockTransferLine(
+                transfer_id=transfer.id,
+                product_id=variant.product_id,
+                variant_id=variant_id,
+                quantity_sent=Decimal(quantity),
+            )
+        )
+    db.flush()
+
+    record_audit(
+        db,
+        action=AuditAction.STOCK_TRANSFER_REQUESTED,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id,
+        entity_type="stock_transfer",
+        entity_id=transfer.id,
+        summary=f"Requested {transfer.reference} from {source.name}",
+        payload={"lines": len(transfer.lines)},
+    )
+    _notify_approvers(db, ctx, transfer, source=source, destination=destination)
+    return transfer
+
+
+def approve_transfer(
+    db: Session, ctx: AuthContext, transfer_id: uuid.UUID, *, note: str | None = None
+) -> StockTransfer:
+    """Allow a request, without moving anything (PRD 9).
+
+    Approval and movement are deliberately apart.  Days can pass between the
+    two, and only the branch that asked knows whether it still needs the goods
+    when the answer finally comes, so it has to accept before the stock leaves
+    the shelf it is counted on.
+    """
+    transfer = _decidable(db, ctx, transfer_id)
+    transfer.status = TransferStatus.APPROVED
+    transfer.decided_at = utcnow()
+    transfer.decided_by_id = ctx.user_id
+    transfer.decision_note = (note or "").strip() or None
+    record_audit(
+        db,
+        action=AuditAction.STOCK_TRANSFER_APPROVED,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id,
+        entity_type="stock_transfer",
+        entity_id=transfer.id,
+        summary=f"Approved {transfer.reference}",
+        payload={"note": transfer.decision_note},
+    )
+    _notify_requester(
+        db,
+        transfer,
+        title=f"Stock request {transfer.reference} was approved",
+        body=(
+            (transfer.decision_note + " · " if transfer.decision_note else "")
+            + "Accept it to bring the stock across."
+        ),
+    )
+    db.flush()
+    return transfer
+
+
+def reject_transfer(
+    db: Session, ctx: AuthContext, transfer_id: uuid.UUID, *, note: str
+) -> StockTransfer:
+    """Refuse a request, with the reason the branch that asked will read."""
+    if not (note or "").strip():
+        raise ValidationError("Say why the request is being refused")
+    transfer = _decidable(db, ctx, transfer_id)
+    transfer.status = TransferStatus.REJECTED
+    transfer.decided_at = utcnow()
+    transfer.decided_by_id = ctx.user_id
+    transfer.decision_note = note.strip()
+    record_audit(
+        db,
+        action=AuditAction.STOCK_TRANSFER_REJECTED,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id,
+        entity_type="stock_transfer",
+        entity_id=transfer.id,
+        summary=f"Rejected {transfer.reference}",
+        payload={"note": transfer.decision_note},
+    )
+    _notify_requester(
+        db,
+        transfer,
+        title=f"Stock request {transfer.reference} was turned down",
+        body=transfer.decision_note,
+    )
+    db.flush()
+    return transfer
+
+
+def accept_transfer(db: Session, ctx: AuthContext, transfer_id: uuid.UUID) -> StockTransfer:
+    """Take up an approved request, moving the stock in one step (PRD 9).
+
+    Both legs post together: the source gives up exactly what the destination
+    gains, so no quantity is ever in flight and in nobody's count.  A push
+    transfer has a dispatch and a receipt because the goods spend time on a
+    lorry; here the branch that asked is saying "yes, now", and the two
+    moments are the same one.
+
+    If the source has sold the stock in the meantime, this refuses and the
+    request stays approved — the goods simply are not there to take.
+    """
+    ctx.require(Permission.STOCK_TRANSFER)
+    transfer = get_tenant_object(db, StockTransfer, transfer_id, ctx.tenant_id, label="Transfer")
+    if transfer.status != TransferStatus.APPROVED:
+        raise ConflictError(
+            f"Only an approved request can be accepted; this one is {transfer.status}"
+        )
+    destination = get_tenant_object(
+        db, StockLocation, transfer.to_location_id, ctx.tenant_id, label="Destination location"
+    )
+    # The branch that asked is the branch that accepts.
+    ctx.require_branch(destination.branch_id)
+
+    refs = MovementRefs(
+        db,
+        ctx.tenant_id,
+        variant_ids=[line.variant_id for line in transfer.lines],
+        location_ids=[transfer.from_location_id, transfer.to_location_id],
+    )
+
+    # The whole request is checked before any of it is posted, so a shortfall
+    # on the third line cannot leave the first two already moved.  A transfer
+    # is one decision and it either happens or it does not.  post_movement
+    # refuses each line on its own as well; this only brings the refusal
+    # forward, and names the branch that is short.
+    if not ctx.tenant.allow_negative_stock:
+        source = refs.location(transfer.from_location_id)
+        for line in transfer.lines:
+            variant = refs.variant(line.variant_id)
+            if not variant.product.track_stock:
+                continue
+            available = get_balance(
+                db, ctx.tenant_id, line.variant_id, transfer.from_location_id
+            )
+            if available < Decimal(line.quantity_sent):
+                raise InsufficientStock(
+                    f"{source.name} has {available} of {variant.display_name} left, "
+                    f"and the request is for {line.quantity_sent}",
+                    details={
+                        "variant_id": str(line.variant_id),
+                        "available": str(available),
+                        "requested": str(line.quantity_sent),
+                    },
+                )
+
+    for line in transfer.lines:
+        post_movement(
+            db,
+            ctx,
+            StockPosting(
+                variant_id=line.variant_id,
+                location_id=transfer.from_location_id,
+                quantity=-Decimal(line.quantity_sent),
+                reason=MovementReason.TRANSFER_OUT,
+                source_type="transfer",
+                source_id=transfer.id,
+                idempotency_key=f"transfer-out:{transfer.id}:{line.id}",
+                note=f"Transfer {transfer.reference}",
+            ),
+            refs=refs,
+        )
+        post_movement(
+            db,
+            ctx,
+            StockPosting(
+                variant_id=line.variant_id,
+                location_id=transfer.to_location_id,
+                quantity=Decimal(line.quantity_sent),
+                reason=MovementReason.TRANSFER_IN,
+                source_type="transfer",
+                source_id=transfer.id,
+                idempotency_key=f"transfer-in:{transfer.id}:{line.id}",
+                note=f"Transfer {transfer.reference}",
+            ),
+            refs=refs,
+        )
+        # Nothing was counted in: what was approved is what moved.  A shortfall
+        # found afterwards is the destination's own adjustment to make.
+        line.quantity_received = Decimal(line.quantity_sent)
+
+    moment = utcnow()
+    transfer.status = TransferStatus.RECEIVED
+    transfer.accepted_at = moment
+    transfer.accepted_by_id = ctx.user_id
+    # The same person caused both legs, so both carry their name.
+    transfer.dispatched_at = moment
+    transfer.dispatched_by_id = ctx.user_id
+    transfer.received_at = moment
+    transfer.received_by_id = ctx.user_id
+    record_audit(
+        db,
+        action=AuditAction.STOCK_TRANSFER_RECEIVED,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id,
+        entity_type="stock_transfer",
+        entity_id=transfer.id,
+        summary=f"Accepted and completed {transfer.reference}",
+    )
+    db.flush()
+    return transfer
+
+
+def cancel_transfer(
+    db: Session, ctx: AuthContext, transfer_id: uuid.UUID, *, note: str | None = None
+) -> StockTransfer:
+    """Call off a transfer or request before anything has moved.
+
+    The branch that asked may change its mind, which matters most once a
+    request has been approved: "accept" has to have an answer other than yes,
+    or an approval nobody wants sits there looking like stock on its way.
+    """
+    ctx.require(Permission.STOCK_TRANSFER)
+    transfer = get_tenant_object(db, StockTransfer, transfer_id, ctx.tenant_id, label="Transfer")
+    if transfer.status not in OPEN_TRANSFER_STATUSES:
+        raise ConflictError(f"A {transfer.status} transfer cannot be cancelled")
+
+    source = get_tenant_object(
+        db, StockLocation, transfer.from_location_id, ctx.tenant_id, label="Source location"
+    )
+    destination = get_tenant_object(
+        db, StockLocation, transfer.to_location_id, ctx.tenant_id, label="Destination location"
+    )
+    # Either end may call it off, as may anybody who could have decided it.
+    if not (
+        ctx.can_access_branch(destination.branch_id)
+        or ctx.can_access_branch(source.branch_id)
+        or ctx.has(Permission.STOCK_TRANSFER_APPROVE)
+    ):
+        raise PermissionDenied("You do not have access to this transfer")
+
+    transfer.status = TransferStatus.CANCELLED
+    if (note or "").strip():
+        transfer.decision_note = note.strip()
+    record_audit(
+        db,
+        action=AuditAction.STOCK_TRANSFER_CANCELLED,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.user_id,
+        entity_type="stock_transfer",
+        entity_id=transfer.id,
+        summary=f"Cancelled {transfer.reference}",
+        payload={"note": transfer.decision_note},
+    )
+    db.flush()
+    return transfer
+
+
+def _decidable(db: Session, ctx: AuthContext, transfer_id: uuid.UUID) -> StockTransfer:
+    """The request to decide, once the caller is allowed to decide it."""
+    ctx.require(Permission.STOCK_TRANSFER_APPROVE)
+    transfer = get_tenant_object(db, StockTransfer, transfer_id, ctx.tenant_id, label="Transfer")
+    if transfer.status != TransferStatus.REQUESTED:
+        raise ConflictError(
+            f"Only a request awaiting a decision can be decided; this one is {transfer.status}"
+        )
+    source = get_tenant_object(
+        db, StockLocation, transfer.from_location_id, ctx.tenant_id, label="Source location"
+    )
+    # The decision spends the source branch's stock, so it belongs to whoever
+    # has charge of that branch — not to whoever happens to hold the permission.
+    ctx.require_branch(source.branch_id)
+    return transfer
+
+
+def _notify_approvers(
+    db: Session,
+    ctx: AuthContext,
+    transfer: StockTransfer,
+    *,
+    source: StockLocation,
+    destination: StockLocation,
+) -> None:
+    from app.models.system import NotificationKind
+    from app.services.notifications import notify, recipients_for
+
+    for membership in recipients_for(db, ctx.tenant_id, Permission.STOCK_TRANSFER_APPROVE):
+        notify(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=membership.user_id,
+            kind=NotificationKind.STOCK_REQUEST,
+            title=f"{destination.name} is asking {source.name} for stock",
+            body=(
+                f"Request {transfer.reference} · {len(transfer.lines)} item(s)"
+                + (f" · {transfer.note}" if transfer.note else "")
+            ),
+            link="/stock?tab=transfers",
+            entity_type="stock_transfer",
+            entity_id=transfer.id,
+        )
+    db.flush()
+
+
+def _notify_requester(
+    db: Session, transfer: StockTransfer, *, title: str, body: str | None
+) -> None:
+    """Tell whoever asked what came of it.  A request nobody answers is worse
+    than a refusal, and a decision nobody hears about is the same thing."""
+    if transfer.requested_by_id is None:
+        return
+    from app.models.system import NotificationKind
+    from app.services.notifications import notify
+
+    notify(
+        db,
+        tenant_id=transfer.tenant_id,
+        user_id=transfer.requested_by_id,
+        kind=NotificationKind.STOCK_REQUEST_DECIDED,
+        title=title,
+        body=body,
+        link="/stock?tab=transfers",
+        entity_type="stock_transfer",
+        entity_id=transfer.id,
+    )
+
+
+def visible_transfers(
+    db: Session,
+    ctx: AuthContext,
+    *,
+    statuses: list[TransferStatus] | None = None,
+    limit: int = 50,
+) -> list[StockTransfer]:
+    """Transfers and requests the caller has a part in.
+
+    Whoever may decide requests sees all of them, because the decision is
+    theirs wherever it is asked for.  Everybody else sees what their own
+    branches sent, asked for or were asked for.
+    """
+    ctx.require(Permission.STOCK_VIEW)
+    stmt = tenant_query(StockTransfer, ctx.tenant_id)
+    if not ctx.has(Permission.STOCK_TRANSFER_APPROVE):
+        mine = (
+            select(StockLocation.id)
+            .where(
+                StockLocation.tenant_id == ctx.tenant_id,
+                StockLocation.branch_id.in_(ctx.visible_branch_ids(db)),
+            )
+            .scalar_subquery()
+        )
+        stmt = stmt.where(
+            or_(
+                StockTransfer.from_location_id.in_(mine),
+                StockTransfer.to_location_id.in_(mine),
+            )
+        )
+    if statuses:
+        stmt = stmt.where(StockTransfer.status.in_(statuses))
+    rows = db.execute(
+        stmt.order_by(StockTransfer.created_at.desc()).limit(min(limit, 200))
+    ).scalars()
+    return list(rows)
 
 
 def dispatch_transfer(db: Session, ctx: AuthContext, transfer_id: uuid.UUID) -> StockTransfer:
@@ -785,6 +1243,473 @@ def classify_stock_level(
     if reorder_level is not None and quantity <= reorder_level:
         return "warning"
     return "ok"
+
+
+# --------------------------------------------------------------------------- #
+# Opening stock for a branch that has just been created
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class BranchStockSetup:
+    """A branch where nothing has been recorded yet, and the size of the job."""
+
+    branch_id: uuid.UUID
+    branch_name: str
+    location_id: uuid.UUID | None
+    #: Stocked products in the catalogue, all of them waiting to be counted.
+    product_count: int
+
+
+def branches_awaiting_opening_stock(
+    db: Session, ctx: AuthContext
+) -> list[BranchStockSetup]:
+    """Visible branches with no stock movement of any kind against them.
+
+    Derived from the absence of movements rather than stored as a flag on the
+    branch.  A flag would have to be cleared by whatever first touched the
+    stock — a receipt, a transfer, a sale — and any path that forgot would
+    leave the business nagged forever.  The ledger already knows, and the
+    moment a single quantity is recorded the question has been answered.
+
+    A business with no stocked products yet is not asked: there is nothing to
+    count, and the catalogue comes first.
+    """
+    if not ctx.has(Permission.STOCK_VIEW):
+        return []
+    visible = ctx.visible_branch_ids(db)
+    if not visible:
+        return []
+
+    product_count = db.execute(
+        select(func.count())
+        .select_from(ProductVariant)
+        .join(Product, Product.id == ProductVariant.product_id)
+        .where(
+            Product.tenant_id == ctx.tenant_id,
+            Product.track_stock.is_(True),
+            Product.is_active.is_(True),
+            ProductVariant.is_active.is_(True),
+        )
+    ).scalar_one()
+    if not product_count:
+        return []
+
+    touched = {
+        row[0]
+        for row in db.execute(
+            select(StockMovement.branch_id)
+            .where(
+                StockMovement.tenant_id == ctx.tenant_id,
+                StockMovement.branch_id.in_(visible),
+            )
+            .distinct()
+        )
+    }
+    branches = db.execute(
+        tenant_query(Branch, ctx.tenant_id)
+        .where(Branch.id.in_(visible), Branch.is_active.is_(True))
+        .order_by(Branch.is_default.desc(), Branch.name)
+    ).scalars()
+    return [
+        BranchStockSetup(
+            branch_id=branch.id,
+            branch_name=branch.name,
+            location_id=(
+                branch.default_location.id if branch.default_location is not None else None
+            ),
+            product_count=product_count,
+        )
+        for branch in branches
+        if branch.id not in touched
+    ]
+
+
+@dataclass(slots=True)
+class OpeningSheetRow:
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    name: str
+    sku: str | None
+    unit: str
+    #: What this location is recorded as holding now.  Shown so that a second
+    #: pass through the guide corrects the figures rather than doubling them.
+    quantity: Decimal
+
+
+@dataclass(slots=True)
+class OpeningSheet:
+    branch_id: uuid.UUID
+    branch_name: str
+    location_id: uuid.UUID
+    location_name: str
+    rows: list[OpeningSheetRow]
+    #: Products matching the filter, of which ``rows`` is one page.
+    total_rows: int
+    #: Products already carrying a quantity here, against the catalogue total,
+    #: so the guide can say how much of the walk is left.
+    recorded: int
+    product_count: int
+
+
+def opening_sheet(
+    db: Session,
+    ctx: AuthContext,
+    *,
+    branch_id: uuid.UUID,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> OpeningSheet:
+    """Every product a branch could stock, with what it is recorded as holding.
+
+    One location — the branch's default — because the guide asks for counted
+    quantities and posts the difference, and a difference only makes sense
+    against the shelf it is measured from.  A branch with a second location
+    records that one through a count or a transfer, not through this.
+    """
+    ctx.require(Permission.STOCK_VIEW)
+    ctx.require_branch(branch_id)
+    branch = get_tenant_object(db, Branch, branch_id, ctx.tenant_id, label="Branch")
+    location = branch.default_location
+    if location is None:
+        raise ValidationError(f"{branch.name} has no stock location to record against")
+
+    catalogue = [
+        Product.tenant_id == ctx.tenant_id,
+        Product.track_stock.is_(True),
+        Product.is_active.is_(True),
+        ProductVariant.is_active.is_(True),
+    ]
+    matching = (
+        select(
+            ProductVariant.id,
+            ProductVariant.product_id,
+            ProductVariant.name.label("variant_name"),
+            ProductVariant.sku,
+            Product.name,
+            Product.unit_of_measure,
+        )
+        .join(Product, Product.id == ProductVariant.product_id)
+        .where(*catalogue)
+    )
+    if q and q.strip():
+        matching = matching.where(func.lower(Product.name).like(f"%{q.strip().lower()}%"))
+
+    total_rows = db.execute(
+        select(func.count()).select_from(matching.subquery())
+    ).scalar_one()
+    page = db.execute(
+        matching.order_by(Product.name, ProductVariant.sort_order, ProductVariant.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    held: dict[uuid.UUID, Decimal] = {}
+    if page:
+        for row in db.execute(
+            select(StockBalance.variant_id, StockBalance.quantity).where(
+                StockBalance.tenant_id == ctx.tenant_id,
+                StockBalance.location_id == location.id,
+                StockBalance.variant_id.in_([r.id for r in page]),
+            )
+        ):
+            held[row.variant_id] = Decimal(row.quantity or 0)
+
+    product_count = db.execute(
+        select(func.count())
+        .select_from(ProductVariant)
+        .join(Product, Product.id == ProductVariant.product_id)
+        .where(*catalogue)
+    ).scalar_one()
+    recorded = db.execute(
+        select(func.count())
+        .select_from(StockBalance)
+        .join(Product, Product.id == StockBalance.product_id)
+        .join(ProductVariant, ProductVariant.id == StockBalance.variant_id)
+        .where(
+            *catalogue,
+            StockBalance.tenant_id == ctx.tenant_id,
+            StockBalance.location_id == location.id,
+            StockBalance.quantity != 0,
+        )
+    ).scalar_one()
+
+    return OpeningSheet(
+        branch_id=branch.id,
+        branch_name=branch.name,
+        location_id=location.id,
+        location_name=location.name,
+        rows=[
+            OpeningSheetRow(
+                product_id=row.product_id,
+                variant_id=row.id,
+                name=f"{row.name} — {row.variant_name}" if row.variant_name else row.name,
+                sku=row.sku,
+                unit=row.unit_of_measure,
+                quantity=held.get(row.id, ZERO),
+            )
+            for row in page
+        ],
+        total_rows=total_rows,
+        recorded=recorded,
+        product_count=product_count,
+    )
+
+
+def record_opening_stock(
+    db: Session,
+    ctx: AuthContext,
+    *,
+    branch_id: uuid.UUID,
+    counted: list[tuple[uuid.UUID, Decimal]],
+    note: str | None = None,
+    idempotency_key: str | None = None,
+) -> list[StockMovement]:
+    """Set what a branch holds from counted quantities (PRD 8.3, 9).
+
+    The guide collects what is on the shelf, not what changed, because that is
+    the only question somebody walking a new branch can answer.  The difference
+    against what is already recorded is what gets posted, so a quantity that is
+    already right posts nothing and a second pass corrects rather than doubles.
+
+    Every line lands in the ledger with a reason, an actor and a note, like any
+    other adjustment — opening stock is never a silently written balance.
+    """
+    ctx.require(Permission.STOCK_ADJUST)
+    ctx.require_branch(branch_id)
+    branch = get_tenant_object(db, Branch, branch_id, ctx.tenant_id, label="Branch")
+    location = branch.default_location
+    if location is None:
+        raise ValidationError(f"{branch.name} has no stock location to record against")
+    if not counted:
+        raise ValidationError("Enter a quantity for at least one product")
+
+    reason_note = (note or "").strip() or f"Opening stock for {branch.name}"
+    posted: list[StockMovement] = []
+    for variant_id, quantity in counted:
+        quantity = Decimal(quantity)
+        if quantity < 0:
+            raise ValidationError("A counted quantity cannot be negative")
+        difference = quantity - get_balance(db, ctx.tenant_id, variant_id, location.id)
+        if difference == 0:
+            continue
+        posted.append(
+            adjust_stock(
+                db,
+                ctx,
+                variant_id=variant_id,
+                location_id=location.id,
+                quantity=difference,
+                # Stock appearing at a branch for the first time is its opening
+                # balance; a correction downwards cannot be, because opening is
+                # one of the reasons that may only ever add (STOCK_IN_REASONS).
+                reason=(
+                    MovementReason.OPENING if difference > 0 else MovementReason.ADJUSTMENT
+                ),
+                note=reason_note,
+                idempotency_key=(
+                    f"opening:{idempotency_key}:{variant_id}" if idempotency_key else None
+                ),
+            )
+        )
+    db.flush()
+    return posted
+
+
+# --------------------------------------------------------------------------- #
+# The owner's view across branches
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class BranchColumn:
+    """One branch in the overview, with everything it holds."""
+
+    branch_id: uuid.UUID
+    name: str
+    is_default: bool
+    total: Decimal
+
+
+@dataclass(slots=True)
+class OverviewRow:
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    name: str
+    sku: str | None
+    unit: str
+    min_stock: Decimal | None
+    reorder_level: Decimal | None
+    #: Quantity at each branch in the overview, including the zeroes.
+    quantities: dict[uuid.UUID, Decimal]
+    total: Decimal
+    status: str
+
+
+@dataclass(slots=True)
+class StockOverview:
+    branches: list[BranchColumn]
+    rows: list[OverviewRow]
+    grand_total: Decimal
+    #: Products matching the filter, of which ``rows`` is one page.  The branch
+    #: and grand totals cover all of them, not just the page.
+    total_rows: int
+
+
+def _overview_scope(tenant_id: uuid.UUID, q: str | None) -> list:
+    """What counts as a stocked product for the overview."""
+    conditions = [Product.tenant_id == tenant_id, Product.track_stock.is_(True)]
+    if q and q.strip():
+        conditions.append(func.lower(Product.name).like(f"%{q.strip().lower()}%"))
+    return conditions
+
+
+def stock_overview(
+    db: Session,
+    ctx: AuthContext,
+    *,
+    branch_id: uuid.UUID | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> StockOverview:
+    """Every stocked product against every branch the caller may see (PRD 9, 15).
+
+    Driven from the catalogue rather than from the balances, because a branch
+    that has never recorded a movement has no balance rows at all — and "none
+    of it has reached the new branch yet" is exactly what somebody opens this
+    to find out.  A branch therefore always gets a column, and a product
+    always gets a cell in it, even when the honest answer is zero.
+    """
+    ctx.require(Permission.STOCK_VIEW)
+    visible = ctx.visible_branch_ids(db)
+    if branch_id is not None:
+        ctx.require_branch(branch_id)
+        visible = [branch_id] if branch_id in visible else []
+
+    columns = {
+        row.id: BranchColumn(
+            branch_id=row.id, name=row.name, is_default=row.is_default, total=ZERO
+        )
+        for row in db.execute(
+            select(Branch.id, Branch.name, Branch.is_default)
+            .where(Branch.tenant_id == ctx.tenant_id, Branch.id.in_(visible))
+            .order_by(Branch.is_default.desc(), Branch.name)
+        )
+    }
+
+    scope = _overview_scope(ctx.tenant_id, q)
+    stocked_somewhere = (
+        select(StockBalance.variant_id)
+        .where(
+            StockBalance.tenant_id == ctx.tenant_id,
+            StockBalance.branch_id.in_(visible),
+            StockBalance.quantity != 0,
+        )
+        .scalar_subquery()
+    )
+    matching = (
+        select(
+            ProductVariant.id,
+            ProductVariant.product_id,
+            ProductVariant.name.label("variant_name"),
+            ProductVariant.sku,
+            ProductVariant.min_stock,
+            ProductVariant.reorder_level,
+            Product.name,
+            Product.unit_of_measure,
+        )
+        .join(Product, Product.id == ProductVariant.product_id)
+        .where(
+            *scope,
+            # Stock sitting on a shelf belongs in a stock overview even if the
+            # product has since been deactivated; one that is deactivated and
+            # empty is just clutter.
+            or_(
+                and_(Product.is_active.is_(True), ProductVariant.is_active.is_(True)),
+                ProductVariant.id.in_(stocked_somewhere),
+            ),
+        )
+    )
+    total_rows = db.execute(
+        select(func.count()).select_from(matching.subquery())
+    ).scalar_one()
+    page = db.execute(
+        matching.order_by(Product.name, ProductVariant.sort_order, ProductVariant.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    cells: dict[tuple[uuid.UUID, uuid.UUID], Decimal] = {}
+    if page and visible:
+        for cell in db.execute(
+            select(
+                StockBalance.variant_id,
+                StockBalance.branch_id,
+                func.sum(StockBalance.quantity).label("quantity"),
+            )
+            .where(
+                StockBalance.tenant_id == ctx.tenant_id,
+                StockBalance.variant_id.in_([row.id for row in page]),
+                StockBalance.branch_id.in_(visible),
+            )
+            .group_by(StockBalance.variant_id, StockBalance.branch_id)
+        ):
+            cells[(cell.variant_id, cell.branch_id)] = Decimal(cell.quantity or 0)
+
+    rows: list[OverviewRow] = []
+    for row in page:
+        quantities = {
+            column.branch_id: cells.get((row.id, column.branch_id), ZERO)
+            for column in columns.values()
+        }
+        total = sum(quantities.values(), ZERO)
+        min_stock = Decimal(row.min_stock) if row.min_stock is not None else None
+        reorder = Decimal(row.reorder_level) if row.reorder_level is not None else None
+        rows.append(
+            OverviewRow(
+                product_id=row.product_id,
+                variant_id=row.id,
+                name=f"{row.name} — {row.variant_name}" if row.variant_name else row.name,
+                sku=row.sku,
+                unit=row.unit_of_measure,
+                min_stock=min_stock,
+                reorder_level=reorder,
+                quantities=quantities,
+                total=total,
+                # Against the whole business: an item is only really short when
+                # no branch has any to send.
+                status=classify_stock_level(total, min_stock, reorder),
+            )
+        )
+
+    # The column and grand totals cover every matching product, not the page,
+    # so paging through the list never changes what the business holds.
+    if visible:
+        for branch_total in db.execute(
+            select(
+                StockBalance.branch_id,
+                func.sum(StockBalance.quantity).label("quantity"),
+            )
+            .join(Product, Product.id == StockBalance.product_id)
+            .where(
+                *scope,
+                StockBalance.tenant_id == ctx.tenant_id,
+                StockBalance.branch_id.in_(visible),
+            )
+            .group_by(StockBalance.branch_id)
+        ):
+            column = columns.get(branch_total.branch_id)
+            if column is not None:
+                column.total = Decimal(branch_total.quantity or 0)
+
+    return StockOverview(
+        branches=list(columns.values()),
+        rows=rows,
+        grand_total=sum((column.total for column in columns.values()), ZERO),
+        total_rows=total_rows,
+    )
 
 
 def reconcile_balances(db: Session, tenant_id: uuid.UUID) -> list[dict]:

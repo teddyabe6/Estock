@@ -321,6 +321,8 @@ export type Dashboard = {
     total_sales: string;
     gross_profit?: string;
   }>;
+  /** Branches with no stock recorded against them yet. */
+  stock_setup?: Array<{ branch_id: string; branch_name: string; product_count: number }>;
   setup?: Array<{ key: string; label: string; done: boolean; action_url: string | null }>;
   setup_complete?: boolean;
 };
@@ -537,6 +539,54 @@ export type StockLevel = {
   status: string;
 };
 
+export type BranchStockSetup = {
+  branch_id: string;
+  branch_name: string;
+  location_id: string | null;
+  product_count: number;
+};
+
+export type OpeningSheet = {
+  branch_id: string;
+  branch_name: string;
+  location_id: string;
+  location_name: string;
+  rows: Array<{
+    product_id: string;
+    variant_id: string;
+    name: string;
+    sku: string | null;
+    unit: string;
+    quantity: string;
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
+  recorded: number;
+  product_count: number;
+};
+
+export type StockOverview = {
+  branches: Array<{ branch_id: string; name: string; is_default: boolean; total: string }>;
+  rows: Array<{
+    product_id: string;
+    variant_id: string;
+    name: string;
+    sku: string | null;
+    unit: string;
+    min_stock: string | null;
+    reorder_level: string | null;
+    /** Keyed by branch id; every branch in `branches` has an entry. */
+    quantities: Record<string, string>;
+    total: string;
+    status: string;
+  }>;
+  grand_total: string;
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type StockLocation = {
   id: string;
   name: string;
@@ -559,12 +609,32 @@ export type Movement = {
   source_type: string | null;
 };
 
+export type TransferBranch = {
+  branch_id: string;
+  branch_name: string;
+  location_id: string | null;
+  /** The signed-in user may operate here, so it can be the receiving end. */
+  is_mine: boolean;
+};
+
 export type Transfer = {
   id: string;
   reference: string;
   from_location_id: string;
+  from_location_name: string | null;
+  from_branch_id: string | null;
+  from_branch_name: string | null;
   to_location_id: string;
+  to_location_name: string | null;
+  to_branch_id: string | null;
+  to_branch_name: string | null;
   status: string;
+  requested_at: string | null;
+  requested_by_name: string | null;
+  decided_at: string | null;
+  decided_by_name: string | null;
+  decision_note: string | null;
+  accepted_at: string | null;
   dispatched_at: string | null;
   received_at: string | null;
   note: string | null;
@@ -572,6 +642,7 @@ export type Transfer = {
     id: string;
     product_id: string;
     variant_id: string;
+    name: string | null;
     quantity_sent: string;
     quantity_received: string | null;
     note: string | null;
@@ -987,15 +1058,42 @@ export const api = {
   stockLevels: (params: { branch_id?: string; q?: string; limit?: number } = {}) =>
     request<Page<StockLevel>>(`/stock/levels${toQuery(params)}`),
   lowStock: () => request<StockLevel[]>("/stock/low"),
+  stockOverview: (params: { branch_id?: string; q?: string; limit?: number; offset?: number } = {}) =>
+    request<StockOverview>(`/stock/overview${toQuery(params)}`),
+  stockSetup: () => request<BranchStockSetup[]>("/stock/setup"),
+  openingSheet: (params: { branch_id: string; q?: string; limit?: number; offset?: number }) =>
+    request<OpeningSheet>(`/stock/opening${toQuery(params)}`),
+  recordOpeningStock: (body: {
+    branch_id: string;
+    lines: Array<{ variant_id: string; quantity: string }>;
+    note?: string;
+    idempotency_key?: string;
+  }) =>
+    request<{ branch_id: string; recorded: number; unchanged: number }>("/stock/opening", {
+      method: "POST",
+      body,
+    }),
   exportStock: () => download("/stock/levels/export", "estock-stock.csv"),
   movements: (params: { product_id?: string; branch_id?: string; limit?: number } = {}) =>
     request<Page<Movement>>(`/stock/movements${toQuery(params)}`),
   adjustStock: (body: Record<string, unknown>) =>
     request<Movement>("/stock/adjust", { method: "POST", body }),
   locations: () => request<StockLocation[]>("/locations"),
-  transfers: () => request<Transfer[]>("/stock/transfers"),
+  transfers: (params: { status?: string[]; limit?: number } = {}) =>
+    request<Transfer[]>(`/stock/transfers${toQuery(params)}`),
   createTransfer: (body: Record<string, unknown>) =>
     request<Transfer>("/stock/transfers", { method: "POST", body }),
+  transferBranches: () => request<TransferBranch[]>("/stock/branches"),
+  requestTransfer: (body: Record<string, unknown>) =>
+    request<Transfer>("/stock/requests", { method: "POST", body }),
+  approveTransfer: (id: string, note?: string) =>
+    request<Transfer>(`/stock/transfers/${id}/approve`, { method: "POST", body: { note } }),
+  rejectTransfer: (id: string, note: string) =>
+    request<Transfer>(`/stock/transfers/${id}/reject`, { method: "POST", body: { note } }),
+  acceptTransfer: (id: string) =>
+    request<Transfer>(`/stock/transfers/${id}/accept`, { method: "POST" }),
+  cancelTransfer: (id: string, note?: string) =>
+    request<Transfer>(`/stock/transfers/${id}/cancel`, { method: "POST", body: { note } }),
   dispatchTransfer: (id: string) =>
     request<Transfer>(`/stock/transfers/${id}/dispatch`, { method: "POST" }),
   receiveTransfer: (id: string, received: Record<string, string>) =>
@@ -1135,12 +1233,20 @@ export const api = {
 };
 
 function toQuery(params: Record<string, unknown>): string {
-  const entries = Object.entries(params).filter(
-    ([, value]) => value !== undefined && value !== null && value !== "",
-  );
-  if (entries.length === 0) return "";
-  const search = new URLSearchParams(
-    entries.map(([key, value]) => [key, String(value)]),
-  );
-  return `?${search.toString()}`;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    // An array becomes one parameter per element — `status=a&status=b` — which
+    // is what the API reads as a list. Joining them with a comma would arrive
+    // as a single nonsense value.
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== undefined && item !== null && item !== "") search.append(key, String(item));
+      }
+    } else {
+      search.append(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query ? `?${query}` : "";
 }

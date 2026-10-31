@@ -9,8 +9,11 @@ venv/
 .coverage
 htmlcov/
 
-# Local data and uploads — never committed
+# Local data and uploads — never committed.  Both spellings: the uploads land
+# beside the working directory, which is backend/ under `make test-backend`
+# and the repository root when pytest is pointed at backend/tests from there.
 backend/var/
+var/
 backend/.env
 .env
 .env.local
