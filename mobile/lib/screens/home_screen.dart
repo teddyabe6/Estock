@@ -178,11 +178,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Text('Nothing needs restocking right now.'),
               )
             else
+              // The same product can be short at one branch and fine at
+              // another; without the branch they read as the same row twice.
               ...lowStock.take(8).map((item) {
                 final row = Map<String, dynamic>.from(item as Map);
+                final branch = row['branch_name'] as String?;
                 return ListTile(
                   title: Text(row['name'] as String? ?? ''),
-                  subtitle: Text('${Money.quantity(row['quantity'])} on hand'),
+                  subtitle: Text(
+                    [
+                      if (state.hasManyBranches && branch != null) branch,
+                      '${Money.quantity(row['quantity'])} on hand',
+                    ].join(' · '),
+                  ),
                   trailing: StatusChip(status: row['severity'] as String? ?? ''),
                 );
               }),

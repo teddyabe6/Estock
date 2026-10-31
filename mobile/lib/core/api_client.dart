@@ -41,7 +41,9 @@ class ApiClient {
 
   static const _timeout = Duration(seconds: 20);
 
-  Future<dynamic> get(String path, {Map<String, String>? query, bool anonymous = false}) =>
+  /// A query value may be a string or a list of them; a list becomes one
+  /// parameter per entry, which is what the API reads as a list.
+  Future<dynamic> get(String path, {Map<String, dynamic>? query, bool anonymous = false}) =>
       _send('GET', path, query: query, anonymous: anonymous);
 
   Future<dynamic> post(String path, {Object? body, bool anonymous = false}) =>
@@ -53,7 +55,7 @@ class ApiClient {
     String method,
     String path, {
     Object? body,
-    Map<String, String>? query,
+    Map<String, dynamic>? query,
     bool anonymous = false,
   }) async {
     final uri = Uri.parse('$baseUrl$path').replace(

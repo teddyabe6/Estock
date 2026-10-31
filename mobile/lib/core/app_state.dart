@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/customer.dart';
 import '../models/product.dart';
 import '../models/session.dart';
+import '../models/stock.dart';
 import 'api_client.dart';
 import 'offline/catalogue_cache.dart';
 import 'offline/outbox.dart';
@@ -35,6 +36,21 @@ class AppState extends ChangeNotifier {
   UserSession? session;
   List<Product> products = const [];
   List<Customer> customers = const [];
+
+  /// What each branch holds, kept on the device so a lookup on the shop floor
+  /// does not need a connection.  Empty for a business with one branch, where
+  /// the catalogue's own figure already is the branch's.
+  StockByBranch branchStock = const StockByBranch.empty();
+
+  /// Branches with nothing recorded against them yet, for the prompt that
+  /// offers to count them.  Not cached: it leads to a screen that needs a
+  /// connection anyway, and a stale prompt is worse than none.
+  List<BranchToCount> branchesToCount = const [];
+
+  /// Transfers waiting on this user — requests they may decide, and approved
+  /// requests their own branch has yet to take up.
+  int transfersNeedingMe = 0;
+
   DateTime? catalogueFetchedAt;
   bool loading = true;
   String? error;
@@ -59,6 +75,20 @@ class AppState extends ChangeNotifier {
   /// True when the catalogue on screen came from the device, not the server.
   bool get showingCachedCatalogue => !sync.isOnline && products.isNotEmpty;
 
+  /// Branches the signed-in user may look at, main branch first.
+  List<Branch> get branches {
+    final all = [...(session?.branches ?? const <Branch>[])];
+    all.sort((a, b) {
+      if (a.isDefault != b.isDefault) return a.isDefault ? -1 : 1;
+      return a.name.compareTo(b.name);
+    });
+    return all;
+  }
+
+  /// Whether this shop has more than one branch to tell apart.  Everything
+  /// branch-shaped on the phone stays out of the way until it does.
+  bool get hasManyBranches => branches.length > 1;
+
   Future<void> start() async {
     final prefs = await SharedPreferences.getInstance();
     api.token = prefs.getString(_tokenKey);
@@ -76,6 +106,7 @@ class AppState extends ChangeNotifier {
 
     products = await catalogue.load();
     customers = await catalogue.loadCustomers();
+    branchStock = await catalogue.loadStock();
     catalogueFetchedAt = await catalogue.fetchedAt();
     loading = false;
     notifyListeners();
@@ -110,6 +141,9 @@ class AppState extends ChangeNotifier {
     _unreadNotifications = 0;
     products = const [];
     customers = const [];
+    branchStock = const StockByBranch.empty();
+    branchesToCount = const [];
+    transfersNeedingMe = 0;
     await catalogue.clear();
     // The outbox is deliberately kept: unsynced work is not thrown away
     // because someone signed out.
@@ -144,6 +178,7 @@ class AppState extends ChangeNotifier {
             .toList();
         await catalogue.saveCustomers(customers);
       }
+      if (session!.can('stock:view')) await _refreshStock();
       final dynamic notices =
           await api.get('/notifications', query: {'unread_only': 'true', 'limit': '1'});
       _unreadNotifications = ((notices as Map<String, dynamic>)['unread'] as num?)?.toInt() ?? 0;
@@ -158,6 +193,59 @@ class AppState extends ChangeNotifier {
       // A network failure is not an error to show: the cached data still works.
     } finally {
       notifyListeners();
+    }
+  }
+
+  /// The branch picture, what still needs counting, and what is waiting on
+  /// this user — all three together, because they are one screen's worth of
+  /// context and a phone should ask for them in one go.
+  ///
+  /// A failure here is not a failure of the refresh: the catalogue and the
+  /// session matter more, and the cached branch figures stay usable.
+  Future<void> _refreshStock() async {
+    if (hasManyBranches) {
+      try {
+        final dynamic overview =
+            await api.get('/stock/overview', query: {'limit': '200'});
+        branchStock =
+            StockByBranch.fromJson(Map<String, dynamic>.from(overview as Map));
+        await catalogue.saveStock(branchStock);
+      } on ApiException catch (exception) {
+        if (exception.isAuthError) rethrow;
+      }
+    }
+    try {
+      final dynamic waiting = await api.get('/stock/setup');
+      branchesToCount = (waiting as List<dynamic>)
+          .map((item) => BranchToCount.fromJson(Map<String, dynamic>.from(item as Map)))
+          .toList();
+    } on ApiException catch (exception) {
+      if (exception.isAuthError) rethrow;
+      branchesToCount = const [];
+    }
+    transfersNeedingMe = await _countTransfersNeedingMe();
+  }
+
+  /// Requests this user may decide, plus approved requests their own branch
+  /// has still to take up.  Anything else is somebody else's move to make.
+  Future<int> _countTransfersNeedingMe() async {
+    final user = session;
+    if (user == null || !user.can('stock:transfer')) return 0;
+    try {
+      // Both open statuses in one request: a phone on a metered connection
+      // should not pay twice for one badge.
+      final dynamic rows = await api.get('/stock/transfers', query: {
+        'status': ['requested', 'approved'],
+        'limit': '100',
+      });
+      final mine = user.branches.map((branch) => branch.id).toSet();
+      return (rows as List<dynamic>)
+          .map((item) => StockTransfer.fromJson(Map<String, dynamic>.from(item as Map)))
+          .where((transfer) => transfer.needsAnswerFrom(user, mine))
+          .length;
+    } on ApiException catch (exception) {
+      if (exception.isAuthError) rethrow;
+      return 0;
     }
   }
 

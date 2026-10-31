@@ -1165,6 +1165,10 @@ class LowStockItem:
     variant_id: uuid.UUID
     name: str
     branch_id: uuid.UUID
+    #: Carried with the row because the same product is short at one branch
+    #: and not at another, and a list that does not say which is a list of
+    #: duplicates.
+    branch_name: str
     quantity: Decimal
     min_stock: Decimal | None
     reorder_level: Decimal | None
@@ -1185,9 +1189,11 @@ def low_stock_items(
             ProductVariant.reorder_level,
             Product.name,
             ProductVariant.name.label("variant_name"),
+            Branch.name.label("branch_name"),
         )
         .join(ProductVariant, ProductVariant.id == StockBalance.variant_id)
         .join(Product, Product.id == StockBalance.product_id)
+        .join(Branch, Branch.id == StockBalance.branch_id)
         .where(
             StockBalance.tenant_id == tenant_id,
             Product.is_active.is_(True),
@@ -1201,6 +1207,7 @@ def low_stock_items(
             ProductVariant.reorder_level,
             Product.name,
             ProductVariant.name,
+            Branch.name,
         )
     )
     if branch_ids is not None:
@@ -1221,6 +1228,7 @@ def low_stock_items(
                 variant_id=row.variant_id,
                 name=label,
                 branch_id=row.branch_id,
+                branch_name=row.branch_name,
                 quantity=quantity,
                 min_stock=min_stock,
                 reorder_level=reorder,
@@ -1228,7 +1236,7 @@ def low_stock_items(
             )
         )
     order = {"out_of_stock": 0, "critical": 1, "warning": 2}
-    items.sort(key=lambda item: (order[item.severity], item.name))
+    items.sort(key=lambda item: (order[item.severity], item.name, item.branch_name))
     return items
 
 

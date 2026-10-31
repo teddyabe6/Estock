@@ -20,6 +20,8 @@ export default function HomePage() {
 function Home() {
   const { session, can, canWrite } = useSession();
   const mayCount = canWrite && can("stock:adjust");
+  // A single-shop business never needs telling which branch it is.
+  const manyBranches = (session?.branches.length ?? 0) > 1;
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -131,14 +133,18 @@ function Home() {
                 <thead>
                   <tr>
                     <th>Product</th>
+                    {manyBranches && <th>Branch</th>}
                     <th className="num">On hand</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
+                  {/* Keyed by branch as well: the same product can be short at
+                      one branch and fine at another, and those are two rows. */}
                   {data.low_stock.map((item) => (
-                    <tr key={`${item.product_id}-${item.name}`}>
+                    <tr key={`${item.variant_id}-${item.branch_id}`}>
                       <td>{item.name}</td>
+                      {manyBranches && <td className="muted">{item.branch_name}</td>}
                       <td className="num">{quantity(item.quantity)}</td>
                       <td>
                         <span

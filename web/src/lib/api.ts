@@ -308,7 +308,10 @@ export type Dashboard = {
   low_stock_count?: number;
   low_stock?: Array<{
     product_id: string;
+    variant_id: string;
     name: string;
+    branch_id: string;
+    branch_name: string;
     quantity: string;
     severity: string;
   }>;

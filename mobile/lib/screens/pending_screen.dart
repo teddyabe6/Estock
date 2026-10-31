@@ -145,23 +145,28 @@ class _PendingScreenState extends State<PendingScreen> {
                   ),
             ),
             const SizedBox(height: 10),
+            // Equal halves: the app's filled buttons ask for the full width,
+            // so a right-aligned row overflows and draws nothing at all.
             Row(
-              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                TextButton(
-                  onPressed: () async {
-                    await state.sync.dismissRejected(entry.id);
-                    await _load();
-                  },
-                  child: const Text('Discard'),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () async {
+                      await state.sync.dismissRejected(entry.id);
+                      await _load();
+                    },
+                    child: const Text('Discard'),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton.tonal(
-                  onPressed: () async {
-                    await state.sync.retryRejected(entry.id);
-                    await _load();
-                  },
-                  child: const Text('Try again'),
+                Expanded(
+                  child: FilledButton.tonal(
+                    onPressed: () async {
+                      await state.sync.retryRejected(entry.id);
+                      await _load();
+                    },
+                    child: const Text('Try again'),
+                  ),
                 ),
               ],
             ),

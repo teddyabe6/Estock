@@ -18,6 +18,7 @@ class _Tab {
     this.permission,
     this.ownsTitle = false,
     this.showsNotices = false,
+    this.actions,
   });
 
   /// What the bar calls it.
@@ -44,6 +45,10 @@ class _Tab {
   /// Set on the tab that leads to the notifications, which carries the count
   /// of what is waiting. A notice nobody can see is a sale lost.
   final bool showsNotices;
+
+  /// What this tab puts in the app bar, where a screen has work to offer
+  /// beyond what its body shows.
+  final List<Widget> Function(BuildContext context, AppState state)? actions;
 }
 
 /// The five the web shows on a phone, in the same order and with the same
@@ -74,6 +79,7 @@ const _tabs = <_Tab>[
     icon: Icons.inventory_2_outlined,
     screen: StockScreen(),
     permission: 'stock:view',
+    actions: stockTabActions,
   ),
   _Tab(
     label: 'Shop',
@@ -131,6 +137,7 @@ class _ShellScreenState extends State<ShellScreen> {
           : AppBar(
               title: Text(current.title),
               actions: [
+                ...?current.actions?.call(context, state),
                 if (state.sync.isSyncing)
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16),

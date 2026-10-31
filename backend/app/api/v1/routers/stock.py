@@ -228,6 +228,7 @@ def low_stock(ctx: Ctx, db: DbSession, branch_id: uuid.UUID | None = None) -> li
             variant_id=item.variant_id,
             name=item.name,
             branch_id=item.branch_id,
+            branch_name=item.branch_name,
             quantity=item.quantity,
             min_stock=item.min_stock,
             reorder_level=item.reorder_level,

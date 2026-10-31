@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/customer.dart';
 import '../../models/product.dart';
+import '../../models/stock.dart';
 
 /// Local copy of the catalogue and the customer list, so a sale — cash or
 /// credit — can be recorded with no connection.
@@ -16,6 +17,7 @@ class CatalogueCache {
 
   static const _productsKey = 'estock.catalogue.products.v1';
   static const _customersKey = 'estock.catalogue.customers.v1';
+  static const _stockKey = 'estock.catalogue.branch_stock.v1';
   static const _fetchedAtKey = 'estock.catalogue.fetched_at.v1';
 
   SharedPreferences? _preferences;
@@ -50,6 +52,29 @@ class CatalogueCache {
     return _decode(prefs.getString(_customersKey), Customer.fromJson);
   }
 
+  /// Keep the cross-branch picture beside the catalogue.
+  ///
+  /// "How many have we got here" is asked on the shop floor, standing in
+  /// front of the shelf, which is where the signal is worst — so the answer
+  /// has to already be on the device.
+  Future<void> saveStock(StockByBranch stock) async {
+    final prefs = await _prefs;
+    await prefs.setString(_stockKey, jsonEncode(stock.toJson()));
+  }
+
+  Future<StockByBranch> loadStock() async {
+    final prefs = await _prefs;
+    final raw = prefs.getString(_stockKey);
+    if (raw == null || raw.isEmpty) return const StockByBranch.empty();
+    try {
+      return StockByBranch.fromJson(
+        Map<String, dynamic>.from(jsonDecode(raw) as Map),
+      );
+    } catch (_) {
+      return const StockByBranch.empty();
+    }
+  }
+
   List<T> _decode<T>(String? raw, T Function(Map<String, dynamic>) build) {
     if (raw == null || raw.isEmpty) return const [];
     try {
@@ -74,6 +99,7 @@ class CatalogueCache {
     final prefs = await _prefs;
     await prefs.remove(_productsKey);
     await prefs.remove(_customersKey);
+    await prefs.remove(_stockKey);
     await prefs.remove(_fetchedAtKey);
   }
 }

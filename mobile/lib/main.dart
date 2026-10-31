@@ -8,6 +8,9 @@ import 'screens/notifications_screen.dart';
 import 'screens/pending_screen.dart';
 import 'screens/shell_screen.dart';
 import 'screens/sign_in_screen.dart';
+import 'screens/stock_count_screen.dart';
+import 'screens/stock_request_screen.dart';
+import 'screens/stock_transfers_screen.dart';
 
 /// Where the API lives. Set at build time:
 ///
@@ -42,6 +45,17 @@ class EstockApp extends StatelessWidget {
           '/credit': (_) => const CreditScreen(),
           '/notifications': (_) => const NotificationsScreen(),
           '/pending': (_) => const PendingScreen(),
+          '/stock/transfers': (_) => const StockTransfersScreen(),
+          // Both take the thing they were opened for: the branch that needs
+          // counting, or the product somebody has run out of.
+          '/stock/count': (context) => StockCountScreen(
+                branchId:
+                    ModalRoute.of(context)?.settings.arguments as String?,
+              ),
+          '/stock/ask': (context) => StockRequestScreen(
+                productId:
+                    ModalRoute.of(context)?.settings.arguments as String?,
+              ),
         },
         home: const _Root(),
       ),

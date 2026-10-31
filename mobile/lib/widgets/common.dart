@@ -122,6 +122,30 @@ class EmptyState extends StatelessWidget {
   }
 }
 
+/// The two answers to a dialog's question, side by side.
+///
+/// Material stacks a dialog's actions when they will not fit on one line, and
+/// the app's filled buttons ask for the full width, so they never fit: the
+/// confirming action ends up a full-width slab with the way out tucked above
+/// it. Equal halves is both the shape intended and the better thumb target.
+class DialogActions extends StatelessWidget {
+  const DialogActions({super.key, required this.back, required this.confirm});
+
+  final Widget back;
+  final Widget confirm;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: back),
+        const SizedBox(width: 8),
+        Expanded(child: confirm),
+      ],
+    );
+  }
+}
+
 /// Section heading inside a scrolling screen.
 class SectionTitle extends StatelessWidget {
   const SectionTitle(this.text, {super.key, this.trailing});

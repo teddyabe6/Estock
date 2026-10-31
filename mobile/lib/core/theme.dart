@@ -103,19 +103,25 @@ class EstockTheme {
     );
   }
 
-  /// Colour for a stock or credit status chip.
+  /// Colour for a stock, credit or transfer status chip.
   static Color statusColour(String status, ColorScheme scheme) {
     switch (status) {
       case 'out_of_stock':
       case 'critical':
       case 'overdue':
+      case 'rejected':
         return scheme.error;
       case 'warning':
       case 'partially_paid':
+      // Waiting on somebody: a request on its answer, an allowed one on the
+      // branch that asked taking it up.
+      case 'requested':
+      case 'approved':
         return const Color(0xFF9A6200);
       case 'paid':
       case 'ok':
       case 'completed':
+      case 'received':
         return const Color(0xFF157F46);
       default:
         return scheme.onSurfaceVariant;

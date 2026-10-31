@@ -761,6 +761,7 @@ def home_dashboard(db: Session, ctx: AuthContext, *, today: date | None = None) 
                 "variant_id": str(item.variant_id),
                 "name": item.name,
                 "branch_id": str(item.branch_id),
+                "branch_name": item.branch_name,
                 "quantity": str(item.quantity),
                 "severity": item.severity,
             }
