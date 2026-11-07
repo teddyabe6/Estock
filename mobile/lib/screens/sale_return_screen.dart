@@ -298,7 +298,7 @@ class _SaleReturnScreenState extends State<SaleReturnScreen> {
                 // Most returns are the whole line, so it is one tap.
                 TextButton(
                   onPressed: () => setState(() {
-                    field.text = Money.quantity(line.returnable);
+                    field.text = Money.plain(line.returnable);
                   }),
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 4),

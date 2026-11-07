@@ -24,6 +24,15 @@ void main() {
       expect(Money.quantity('10.500'), '10.5');
       expect(Money.quantity('1234.125'), '1,234.125');
     });
+
+    // A quantity written back into a field has to survive being read again,
+    // and a thousands separator does not parse.
+    test('a quantity meant for a field carries no separator', () {
+      expect(Money.plain('1500.000'), '1500');
+      expect(Money.plain('2.500'), '2.5');
+      expect(Money.plain(''), '');
+      expect(double.tryParse(Money.plain('1234.125')), 1234.125);
+    });
   });
 
   group('due dates', () {

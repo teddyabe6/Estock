@@ -9,6 +9,7 @@ class Money {
 
   static final NumberFormat _amount = NumberFormat('#,##0.00');
   static final NumberFormat _quantity = NumberFormat('#,##0.###');
+  static final NumberFormat _plain = NumberFormat('0.###');
   static final DateFormat _shortDate = DateFormat('d MMM yyyy');
   static final DateFormat _dateTime = DateFormat('d MMM, HH:mm');
 
@@ -28,6 +29,13 @@ class Money {
   static String quantity(Object? value) {
     final parsed = parse(value);
     return parsed == null ? '—' : _quantity.format(parsed);
+  }
+
+  /// "1500" or "2.5" — a quantity written back into a field that has to
+  /// parse it again, so no grouping separator and no trailing zeros.
+  static String plain(Object? value) {
+    final parsed = parse(value);
+    return parsed == null ? '' : _plain.format(parsed);
   }
 
   static double? parse(Object? value) {
