@@ -235,8 +235,16 @@ def receipt(sale_id: uuid.UUID, ctx: Ctx, db: DbSession) -> dict:
             }
             for line in sale.lines
         ],
+        # Direction and all: a refund is a payment on this sale too, and a
+        # receipt that lists it as money taken reads as if the customer paid
+        # twice.  ``Sale.amount_paid`` nets the two; so must anything showing
+        # them one by one.
         "payments": [
-            {"method": str(p.method), "amount": str(p.amount)}
+            {
+                "method": str(p.method),
+                "amount": str(p.amount),
+                "direction": str(p.direction),
+            }
             for p in sale.payments
             if not p.is_reversed
         ],

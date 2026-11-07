@@ -178,10 +178,18 @@ function SaleDetail({ id }: { id: string }) {
                 <td colSpan={3} className="num"><strong>Total</strong></td>
                 <td className="num"><strong>{money(receipt.sale.total_amount, currency)}</strong></td>
               </tr>
+              {/* A refund is a payment on this sale too; listing it as money
+                  taken would read as if the customer paid twice. */}
               {receipt.payments.map((payment, index) => (
                 <tr key={`${payment.method}-${index}`}>
-                  <td colSpan={3} className="num muted">Paid by {payment.method.replace(/_/g, " ")}</td>
-                  <td className="num">{amount(payment.amount)}</td>
+                  <td colSpan={3} className="num muted">
+                    {payment.direction === "out" ? "Refunded by" : "Paid by"}{" "}
+                    {payment.method.replace(/_/g, " ")}
+                  </td>
+                  <td className="num">
+                    {payment.direction === "out" ? "−" : ""}
+                    {amount(payment.amount)}
+                  </td>
                 </tr>
               ))}
               {Number(receipt.sale.balance_due) > 0 && (

@@ -492,7 +492,7 @@ export type Receipt = {
     discount_amount: string;
     line_total: string;
   }>;
-  payments: Array<{ method: string; amount: string }>;
+  payments: Array<{ method: string; amount: string; direction: string }>;
 };
 
 export type Customer = {

@@ -9,6 +9,8 @@ import '../core/offline/outbox.dart';
 import '../models/customer.dart';
 import '../models/product.dart';
 import '../widgets/common.dart';
+import 'sale_detail_screen.dart';
+import 'sales_history_screen.dart';
 
 class _CartLine {
   _CartLine({
@@ -44,6 +46,24 @@ const _duePresets = <(String?, String)>[
   ('15_days', 'In 15 days'),
   ('30_days', 'In 30 days'),
 ];
+
+/// What the till offers besides selling: the sales already made.
+///
+/// The tab opens the till rather than the list, because a counter sells all
+/// day and looks a sale up only when a customer comes back. The list is one
+/// tap away for when they do.
+List<Widget> salesTabActions(BuildContext context, AppState state) {
+  if (!(state.session?.can('sale:view') ?? false)) return const [];
+  return [
+    IconButton(
+      tooltip: 'Sales already made',
+      icon: const Icon(Icons.receipt_long_outlined),
+      onPressed: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SalesHistoryScreen()),
+      ),
+    ),
+  ];
+}
 
 /// Record a sale. Works with or without a connection.
 ///
@@ -107,6 +127,7 @@ class _SaleScreenState extends State<SaleScreen> {
     if (_lines.isEmpty) return;
     final state = AppScope.of(context);
     final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
 
     if (_balance > 0 && _customer == null) {
       messenger.showSnackBar(const SnackBar(
@@ -147,10 +168,25 @@ class _SaleScreenState extends State<SaleScreen> {
           ? null
           : ((response['sale'] as Map?)?['number'] as String?);
 
+      final saleId = queued
+          ? null
+          : ((response['sale'] as Map?)?['id'] as String?);
       messenger.showSnackBar(SnackBar(
         content: Text(queued
             ? 'Saved on this phone. It will sync when you are back online.'
             : 'Sale $number recorded.'),
+        // The customer standing there usually wants the receipt, and this is
+        // the one moment the app knows exactly which sale they mean.
+        action: saleId == null || !(state.session?.can('sale:view') ?? false)
+            ? null
+            : SnackBarAction(
+                label: 'Receipt',
+                onPressed: () => navigator.push(
+                  MaterialPageRoute(
+                    builder: (_) => SaleDetailScreen(saleId: saleId),
+                  ),
+                ),
+              ),
       ));
 
       setState(() {

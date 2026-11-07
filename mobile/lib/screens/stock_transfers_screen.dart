@@ -370,38 +370,14 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
     required String hint,
     required String confirm,
     bool required = false,
-  }) async {
-    final controller = TextEditingController();
-    final note = await showDialog<String>(
-      context: context,
-      builder: (dialog) => StatefulBuilder(
-        builder: (dialog, setDialogState) => AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: InputDecoration(hintText: hint),
-            onChanged: (_) => setDialogState(() {}),
-          ),
-          actions: [
-            DialogActions(
-              back: OutlinedButton(
-                onPressed: () => Navigator.of(dialog).pop(),
-                child: const Text('Back'),
-              ),
-              confirm: FilledButton(
-                onPressed: required && controller.text.trim().isEmpty
-                    ? null
-                    : () => Navigator.of(dialog).pop(controller.text.trim()),
-                child: Text(confirm),
-              ),
-            ),
-          ],
-        ),
-      ),
+  }) {
+    return askForReason(
+      context,
+      title: title,
+      hint: hint,
+      confirm: confirm,
+      minLength: required ? 1 : 0,
     );
-    controller.dispose();
-    return note;
   }
 
   /// Taking up a request moves stock, so it is worth one clear sentence first.

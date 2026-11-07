@@ -70,8 +70,10 @@ const _tabs = <_Tab>[
     icon: Icons.receipt_long_outlined,
     screen: SaleScreen(),
     // The web's Sales tab opens a list of sales, so it asks for sale:view.
-    // This one opens the till, which is a sale being made.
+    // This one opens the till, which is a sale being made; the list is an
+    // action on it.
     permission: 'sale:create',
+    actions: salesTabActions,
   ),
   _Tab(
     label: 'Stock',

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
 import '../widgets/common.dart';
+import 'sales_history_screen.dart';
 
 /// Everything that does not earn a place in the bottom bar (PRD 7).
 class MoreScreen extends StatelessWidget {
@@ -48,6 +49,16 @@ class MoreScreen extends StatelessWidget {
         ),
         // Hidden rather than greyed out, which is what the web does with a
         // screen a role may not open.
+        if (session?.can('sale:view') ?? false)
+          ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('Sales'),
+            subtitle: const Text('Find a sale, its receipt or a refund'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SalesHistoryScreen()),
+            ),
+          ),
         if (session?.can('credit:view') ?? false) ...[
           const SectionTitle('Credit'),
           ListTile(

@@ -757,3 +757,27 @@ def test_a_return_belongs_to_the_day_it_came_back(business):
     assert yesterdays.returns_value == Decimal("0.00")
     assert todays.net_sales == Decimal("0.00")
     assert todays.returns_value == Decimal("200.00")
+
+
+def test_the_receipt_tells_a_refund_from_a_payment(client, business):
+    """A receipt that lists a refund as money taken reads as paid twice.
+
+    ``Sale.amount_paid`` nets the two by direction; anything that prints them
+    one by one has to carry the direction too, or a 500 sale with 200 back
+    shows 700 against it.
+    """
+    product = business.add_product("Teff", selling_price="100", opening_stock="10")
+    sale = _sell(business, product, quantity="5").sale
+    _return(business, sale, quantity="2")
+    business.db.flush()
+
+    receipt = client.get(
+        f"/api/v1/sales/{sale.id}/receipt", headers=business.headers()
+    ).json()
+
+    assert [(p["direction"], p["amount"]) for p in receipt["payments"]] == [
+        ("in", "500.00"),
+        ("out", "200.00"),
+    ]
+    # And the sale's own figure still agrees with netting them.
+    assert receipt["sale"]["amount_paid"] == "300.00"
