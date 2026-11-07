@@ -139,7 +139,8 @@ function SaleDetail({ id }: { id: string }) {
         {sale.returns.length > 0 && <CameBack sale={sale} />}
       </div>
 
-      <div className="card receipt">
+      {/* A receipt is a receipt: it keeps its columns at any width. */}
+      <div className="card receipt" data-keep-grid>
         <div className="centre">
           <strong>{receipt.business.name}</strong>
           <div className="muted" style={{ fontSize: "0.85rem" }}>

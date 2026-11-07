@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { StackedTables } from "@/components/StackedTables";
 import { SessionProvider } from "@/lib/session";
 import "./globals.css";
 
@@ -14,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <SessionProvider>{children}</SessionProvider>
+        <StackedTables />
       </body>
     </html>
   );

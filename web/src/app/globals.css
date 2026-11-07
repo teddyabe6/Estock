@@ -436,6 +436,95 @@ tfoot th {
   font-weight: 600;
 }
 
+/* A table that will not fit the width it is given folds into one card per
+   row, each cell naming the column it came from.  StackedTables measures and
+   sets the flag; everything in here is what the flag means.  A table wide
+   enough for its screen is untouched, so a short one still reads as a table
+   on a phone.
+
+   Screen only: paper is wide, and a receipt is a receipt. */
+@media screen {
+  table[data-stacked] {
+    display: block;
+  }
+
+  /* Out of sight, not out of the accessibility tree: the column names are
+     still what a screen reader reads each cell against. */
+  table[data-stacked] > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  table[data-stacked] > tbody,
+  table[data-stacked] > tfoot {
+    display: block;
+  }
+
+  table[data-stacked] > tbody > tr,
+  table[data-stacked] > tfoot > tr {
+    display: block;
+    padding: 5px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  table[data-stacked] > tbody > tr + tr,
+  table[data-stacked] > tfoot > tr {
+    margin-top: 8px;
+  }
+
+  /* The totals row is still the figure the eye goes to, so it keeps its
+     weight rather than reading as one more card. */
+  table[data-stacked] > tfoot > tr {
+    border-width: 2px;
+    font-weight: 600;
+  }
+
+  /* Name beside value, as two columns of their own.  A cell laid out as a
+     table gathers everything after the name into one anonymous cell, so a
+     value of several parts — a product and the badge after it — stays in
+     its own column and wraps within it, and a name that needs two lines
+     makes the row taller instead of landing on what is beside it. */
+  table[data-stacked] td,
+  table[data-stacked] tbody th,
+  table[data-stacked] tfoot th {
+    display: table;
+    width: 100%;
+    border-spacing: 0;
+    padding: 4px 12px;
+    border-bottom: none;
+    white-space: normal;
+  }
+
+  table[data-stacked] td[data-label]::before {
+    content: attr(data-label);
+    display: table-cell;
+    width: 7.25rem;
+    padding-right: 10px;
+    /* The cell may be right-aligned, for a figure; its name is not. */
+    text-align: left;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  /* Nothing to scroll sideways any more, so the wrapper stops reaching into
+     the card's gutters for room it no longer needs. */
+  .table-wrap:has(> table[data-stacked]) {
+    overflow-x: visible;
+    margin: 0;
+    padding: 0;
+  }
+}
+
 /* ---------- Badges ---------- */
 
 .badge {
