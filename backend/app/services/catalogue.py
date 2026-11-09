@@ -370,23 +370,39 @@ def update_variant(
     return variant
 
 
+#: What a catalogue can be ordered by — and so, grouped by.
+PRODUCT_SORTS = ("name", "price", "stock", "category")
+
+#: The way round each column is usually read, when nobody says.
+_PRODUCT_FACING = {"name": "asc", "price": "desc", "stock": "desc", "category": "asc"}
+
+
 def search_products(
     db: Session,
     ctx: AuthContext,
     *,
     query: str | None = None,
     category_id: uuid.UUID | None = None,
-    published_only: bool = False,
+    published: bool | None = None,
     include_inactive: bool = False,
+    sort: str = "name",
+    direction: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[Product], int]:
+    """A page of the catalogue, narrowed and ordered as the reader asked.
+
+    Price and quantity come from a product's variants, so they are read
+    through correlated subqueries rather than a join: a join would multiply
+    the rows and make the count wrong, and the point of the count is that a
+    pager can be honest about what is left.
+    """
     ctx.require(Permission.PRODUCT_VIEW)
     stmt = tenant_query(Product, ctx.tenant_id)
     if not include_inactive:
         stmt = stmt.where(Product.is_active.is_(True))
-    if published_only:
-        stmt = stmt.where(Product.is_published.is_(True))
+    if published is not None:
+        stmt = stmt.where(Product.is_published.is_(published))
     if category_id is not None:
         stmt = stmt.where(Product.category_id == category_id)
     if query:
@@ -410,9 +426,56 @@ def search_products(
     total = db.execute(
         select(func.count()).select_from(stmt.subquery())
     ).scalar_one()
-    rows = db.execute(
-        stmt.order_by(Product.name).limit(limit).offset(offset)
-    ).scalars().all()
+
+    cheapest = (
+        select(func.min(ProductVariant.selling_price))
+        .where(
+            ProductVariant.product_id == Product.id,
+            ProductVariant.tenant_id == ctx.tenant_id,
+        )
+        .correlate(Product)
+        .scalar_subquery()
+    )
+    held = (
+        select(func.coalesce(func.sum(StockBalance.quantity), 0))
+        .where(
+            StockBalance.product_id == Product.id,
+            StockBalance.tenant_id == ctx.tenant_id,
+            StockBalance.branch_id.in_(ctx.visible_branch_ids(db)),
+        )
+        .correlate(Product)
+        .scalar_subquery()
+    )
+    # Outside the subquery, not inside it: a product with no category
+    # matches no row, so the subquery is null and a coalesce written within
+    # it never fires.  Which also settles where null sorts — SQLite puts it
+    # first and PostgreSQL last, and "uncategorised" is not a heading
+    # anybody wants at the top.
+    category_name = func.coalesce(
+        select(Category.name)
+        .where(Category.id == Product.category_id)
+        .correlate(Product)
+        .scalar_subquery(),
+        "\uffff",
+    )
+    leading = {
+        "name": Product.name,
+        "price": cheapest,
+        "stock": held,
+        "category": category_name,
+    }.get(sort, Product.name)
+    facing = direction or _PRODUCT_FACING.get(sort, "asc")
+    order = leading.desc() if facing == "desc" else leading.asc()
+
+    rows = (
+        db.execute(
+            # Alphabetical under whatever the heading is, and a stable
+            # tie-break so a product never appears on two pages.
+            stmt.order_by(order, Product.name, Product.id).limit(limit).offset(offset)
+        )
+        .scalars()
+        .all()
+    )
     return list(rows), total
 
 

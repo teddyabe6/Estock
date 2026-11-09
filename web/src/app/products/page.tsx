@@ -6,13 +6,64 @@
  */
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
-import { Alert, Badge, Drawer, Empty, Field, PageHead, Toggle } from "@/components/ui";
-import { api, type ImportPreview, type ImportUpload, type Product } from "@/lib/api";
+import {
+  Alert,
+  Badge,
+  Drawer,
+  Empty,
+  Field,
+  FilterBar,
+  GroupRow,
+  PageHead,
+  Pager,
+  Picker,
+  SortableHead,
+  Toggle,
+  nextOrder,
+  ordering,
+} from "@/components/ui";
+import {
+  api,
+  type Category,
+  type ImportPreview,
+  type ImportUpload,
+  type Product,
+  type ProductSort,
+} from "@/lib/api";
 import { money, quantity } from "@/lib/format";
 import { describeError, useSession } from "@/lib/session";
+
+const PAGE = 50;
+
+/**
+ * An order as one choice rather than a column and a direction to assemble.
+ * By category is an order too: ask for it that way and a category's
+ * products arrive together, which is all grouping is.
+ */
+const ORDERS = [
+  { value: "name", label: "Name A–Z", sort: "name", direction: "asc" },
+  { value: "name-down", label: "Name Z–A", sort: "name", direction: "desc" },
+  { value: "dearest", label: "Dearest first", sort: "price", direction: "desc" },
+  { value: "cheapest", label: "Cheapest first", sort: "price", direction: "asc" },
+  { value: "most", label: "Most on hand", sort: "stock", direction: "desc" },
+  { value: "fewest", label: "Fewest on hand", sort: "stock", direction: "asc" },
+  { value: "category", label: "By category", sort: "category", direction: "asc" },
+] as const satisfies ReadonlyArray<{
+  value: string;
+  label: string;
+  sort: ProductSort;
+  direction: "asc" | "desc";
+}>;
+
+/** Whether a product is on the shop's own storefront. */
+const ONLINE = [
+  { value: "", label: "On and off the shop" },
+  { value: "yes", label: "On the shop" },
+  { value: "no", label: "Not on the shop" },
+] as const;
 
 export default function ProductsPage() {
   return (
@@ -29,17 +80,41 @@ function Products() {
   const params = useSearchParams();
   const [items, setItems] = useState<Product[]>([]);
   const [total, setTotal] = useState(0);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => params.get("q") ?? "");
+  const [categoryId, setCategoryId] = useState("");
+  const [online, setOnline] = useState("");
+  const [archived, setArchived] = useState(false);
+  const [order, setOrder] = useState("name");
+  const [offset, setOffset] = useState(0);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(params.get("add") === "1");
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
 
-  const load = useCallback(async (q: string) => {
+  const chosen = ordering(ORDERS, order);
+
+  useEffect(() => {
+    api
+      .categories()
+      .then((all) => setCategories(all.filter((c) => c.is_active)))
+      .catch(() => setCategories([]));
+  }, []);
+
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const page = await api.products({ q: q || undefined, limit: 200 });
+      const page = await api.products({
+        q: search || undefined,
+        category_id: categoryId || undefined,
+        published: online === "" ? undefined : online === "yes",
+        include_inactive: archived || undefined,
+        sort: chosen.sort,
+        direction: chosen.direction,
+        limit: PAGE,
+        offset,
+      });
       setItems(page.items);
       setTotal(page.total);
       setError(null);
@@ -48,17 +123,25 @@ function Products() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [search, categoryId, online, archived, chosen.sort, chosen.direction, offset]);
 
   useEffect(() => {
     // Debounce so typing does not fire a request per keystroke.
-    const timer = setTimeout(() => void load(search), 250);
+    const timer = setTimeout(() => void load(), 250);
     return () => clearTimeout(timer);
-  }, [search, load]);
+  }, [load]);
+
+  // Narrowing the list invalidates where you were in it.
+  useEffect(() => {
+    setOffset(0);
+  }, [search, categoryId, online, archived, order]);
+
+  const headSort = (by: ProductSort) => setOrder(nextOrder(ORDERS, chosen, by).value);
 
   const currency = session?.currency ?? "ETB";
   const showCost = can("cost:view");
   const manage = canWrite && can("product:manage");
+  const narrowed = Boolean(search || categoryId || online || archived);
 
   async function togglePublish(product: Product) {
     try {
@@ -96,7 +179,7 @@ function Products() {
         <AddProduct
           onDone={() => {
             setAdding(false);
-            void load(search);
+            void load();
           }}
         />
       )}
@@ -105,39 +188,122 @@ function Products() {
         <ImportWizard
           onDone={() => {
             setImporting(false);
-            void load(search);
+            void load();
           }}
         />
       )}
 
       <div className="card">
-        <Field label="Search" hint="name, SKU or barcode">
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Start typing…" />
-        </Field>
+        <FilterBar
+          active={
+            [categoryId, online, archived ? "archived" : "", order === "name" ? "" : order]
+              .filter(Boolean).length
+          }
+          primary={
+            <label className="field filter wide">
+              <span>
+                Search <em className="hint">name, SKU or barcode</em>
+              </span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Start typing…"
+              />
+            </label>
+          }
+        >
+          {categories.length > 0 && (
+            <Picker
+              label="Category"
+              value={categoryId}
+              onChange={setCategoryId}
+              options={[
+                { value: "", label: "Every category" },
+                ...categories.map((c) => ({ value: c.id, label: c.name })),
+              ]}
+            />
+          )}
+          {can("shop:view") && (
+            <Picker label="Online" value={online} onChange={setOnline} options={ONLINE} />
+          )}
+          <Picker
+            label="Shown"
+            value={archived ? "all" : "selling"}
+            onChange={(value) => setArchived(value === "all")}
+            options={[
+              { value: "selling", label: "Still selling" },
+              { value: "all", label: "Including archived" },
+            ]}
+          />
+          <Picker label="Order" value={order} onChange={setOrder} options={ORDERS} />
+        </FilterBar>
 
         {items.length === 0 && !loading ? (
-          <Empty title="No products yet">
-            <p>Add your first product, or import a spreadsheet.</p>
+          <Empty title={narrowed ? "Nothing matches that" : "No products yet"}>
+            <p>
+              {narrowed
+                ? "Widen the filters, or clear the search."
+                : "Add your first product, or import a spreadsheet."}
+            </p>
           </Empty>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Category</th>
-                  <th className="num">Price</th>
+                  <SortableHead
+                    label="Name"
+                    by="name"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
+                  <SortableHead
+                    label="Category"
+                    by="category"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
+                  <SortableHead
+                    label="Price"
+                    by="price"
+                    className="num"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
                   {showCost && <th className="num">Cost</th>}
-                  <th className="num">On hand</th>
+                  <SortableHead
+                    label="On hand"
+                    by="stock"
+                    className="num"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
                   <th>Status</th>
                   {(manage || can("shop:manage")) && <th />}
                 </tr>
               </thead>
               <tbody>
-                {items.map((product) => {
+                {items.map((product, index) => {
                   const variant = product.variants[0];
+                  const heading =
+                    chosen.sort === "category" &&
+                    (index === 0 ||
+                      items[index - 1].category_name !== product.category_name)
+                      ? (product.category_name ?? "No category")
+                      : null;
                   return (
-                    <tr key={product.id}>
+                    <Fragment key={product.id}>
+                      {heading && (
+                        <GroupRow
+                          label={heading}
+                          span={5 + (showCost ? 1 : 0) + (manage || can("shop:manage") ? 1 : 0)}
+                        />
+                      )}
+                      <tr>
                       <td>
                         {manage ? (
                           <button type="button" className="link" onClick={() => setEditing(product)}>
@@ -152,13 +318,25 @@ function Products() {
                             <span className="badge ok">online</span>
                           </>
                         )}
+                        {/* Only worth saying once the archived ones are
+                            being shown; until then every row is selling. */}
+                        {archived && product.is_active === false && (
+                          <>
+                            {" "}
+                            <span className="badge">archived</span>
+                          </>
+                        )}
                         {product.sku && (
                           <div className="muted" style={{ fontSize: "0.8rem" }}>
                             {product.sku}
                           </div>
                         )}
                       </td>
-                      <td className="muted">{product.category_name ?? "—"}</td>
+                      {/* Under its own heading the category would be the
+                          same word on every row of the group. */}
+                      <td className="muted">
+                        {chosen.sort === "category" ? "" : (product.category_name ?? "—")}
+                      </td>
                       <td className="num">{money(variant?.selling_price, currency)}</td>
                       {showCost && (
                         <td className="num">{money(variant?.average_cost ?? variant?.landed_cost, currency)}</td>
@@ -180,13 +358,22 @@ function Products() {
                           )}
                         </td>
                       )}
-                    </tr>
+                      </tr>
+                    </Fragment>
                   );
                 })}
               </tbody>
             </table>
           </div>
         )}
+
+        <Pager
+          total={total}
+          limit={PAGE}
+          offset={offset}
+          onOffset={setOffset}
+          noun="products"
+        />
       </div>
 
       {editing && (
@@ -195,7 +382,7 @@ function Products() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            void load(search);
+            void load();
           }}
         />
       )}

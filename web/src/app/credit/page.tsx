@@ -18,6 +18,8 @@ import {
   SortableHead,
   Stat,
   Tabs,
+  nextOrder,
+  ordering,
 } from "@/components/ui";
 import {
   api,
@@ -110,7 +112,7 @@ function Credit() {
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(params.get("open"));
 
-  const chosen = ORDERS.find((o) => o.value === order) ?? ORDERS[0];
+  const chosen = ordering(ORDERS, order);
   const branches = session?.branches ?? [];
   const items = page?.items ?? [];
 
@@ -151,11 +153,7 @@ function Credit() {
     setOffset(0);
   }, [kind, view, branchId, search, order]);
 
-  function headSort(by: CreditSort) {
-    const flipped = chosen.sort === by && chosen.direction === "asc" ? "desc" : "asc";
-    const match = ORDERS.find((o) => o.sort === by && o.direction === flipped);
-    setOrder((match ?? ORDERS.find((o) => o.sort === by) ?? chosen).value);
-  }
+  const headSort = (by: CreditSort) => setOrder(nextOrder(ORDERS, chosen, by).value);
 
   return (
     <>

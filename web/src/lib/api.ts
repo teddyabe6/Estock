@@ -598,6 +598,7 @@ export type StockOverview = {
 export type StockSort = "product" | "branch" | "category" | "quantity" | "status";
 export type OverviewSort = "product" | "category" | "total";
 export type SaleSort = "when" | "total" | "branch";
+export type ProductSort = "name" | "price" | "stock" | "category";
 export type CreditSort = "due" | "outstanding" | "issued" | "name";
 
 export type StockLocation = {
@@ -1015,8 +1016,21 @@ export const api = {
   dashboard: () => request<Dashboard>("/dashboard"),
 
   // Catalogue
-  products: (params: { q?: string; limit?: number; offset?: number; include_inactive?: boolean } = {}) =>
-    request<Page<Product>>(`/products${toQuery(params)}`),
+  products: (
+    params: {
+      /** A name, SKU, barcode or brand. */
+      q?: string;
+      category_id?: string;
+      /** True for the ones on the online shop, false for the ones not. */
+      published?: boolean;
+      include_inactive?: boolean;
+      /** The order, which is also the grouping. */
+      sort?: ProductSort;
+      direction?: "asc" | "desc";
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => request<Page<Product>>(`/products${toQuery(params)}`),
   product: (id: string) => request<Product>(`/products/${id}`),
   createProduct: (body: Record<string, unknown>) =>
     request<Product>("/products", { method: "POST", body }),

@@ -56,18 +56,33 @@ def list_products(
     db: DbSession,
     q: str | None = None,
     category_id: uuid.UUID | None = None,
-    published_only: bool = False,
+    published: bool | None = Query(
+        None, description="True for the ones on the online shop, False for the ones not."
+    ),
     include_inactive: bool = False,
+    sort: str = Query("name", pattern="^(name|price|stock|category)$"),
+    direction: str | None = Query(
+        None,
+        pattern="^(asc|desc)$",
+        description="Defaults to whichever way round the column is usually read.",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Page[ProductOut]:
+    """The catalogue, narrowed and ordered as the reader asked (PRD 8).
+
+    The order is the grouping: ask for it by category and a category's
+    products arrive together, so a heading can be drawn as the list is read.
+    """
     products, total = search_products(
         db,
         ctx,
         query=q,
         category_id=category_id,
-        published_only=published_only,
+        published=published,
         include_inactive=include_inactive,
+        sort=sort,
+        direction=direction,
         limit=limit,
         offset=offset,
     )

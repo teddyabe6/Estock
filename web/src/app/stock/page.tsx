@@ -17,13 +17,16 @@ import {
   Field,
   FilterBar,
   GroupRow,
+  type Ordering,
   PageHead,
   Pager,
   Pick,
-  PickList,
   Picker,
+  PickList,
   SortableHead,
   Tabs,
+  nextOrder,
+  ordering,
 } from "@/components/ui";
 import {
   api,
@@ -215,15 +218,9 @@ function useCategories() {
  * is a thing somebody wants, where "total, descending" is two things they
  * have to assemble.
  */
-type Ordering<T extends string> = { value: string; label: string; sort: T; direction: "asc" | "desc" };
-
-function ordering<T extends string>(list: ReadonlyArray<Ordering<T>>, value: string) {
-  return list.find((option) => option.value === value) ?? list[0];
-}
-
 const LEVEL_ORDERS: ReadonlyArray<Ordering<StockSort>> = [
   { value: "product", label: "Product A–Z", sort: "product", direction: "asc" },
-  { value: "urgent", label: "Most urgent first", sort: "status", direction: "asc" },
+  { value: "urgent", label: "Most urgent", sort: "status", direction: "asc" },
   { value: "fewest", label: "Fewest on hand", sort: "quantity", direction: "asc" },
   { value: "most", label: "Most on hand", sort: "quantity", direction: "desc" },
   { value: "branch", label: "By branch", sort: "branch", direction: "asc" },
@@ -377,12 +374,7 @@ function Overview() {
   const columns = shown.length + 3;
   const narrowed = Boolean(search || categoryId || branchId);
 
-  /** The same state the order picker drives, from the heading. */
-  function headSort(by: OverviewSort) {
-    const flipped = chosen.sort === by && chosen.direction === "asc" ? "desc" : "asc";
-    const match = OVERVIEW_ORDERS.find((o) => o.sort === by && o.direction === flipped);
-    setOrder((match ?? OVERVIEW_ORDERS.find((o) => o.sort === by) ?? chosen).value);
-  }
+  const headSort = (by: OverviewSort) => setOrder(nextOrder(OVERVIEW_ORDERS, chosen, by).value);
 
   return (
     <div className="card">
@@ -606,11 +598,7 @@ function Levels({ initialLow }: { initialLow: boolean }) {
     return () => clearTimeout(timer);
   }, [search, branchId, categoryId, status, chosen.sort, chosen.direction, offset]);
 
-  function headSort(by: StockSort) {
-    const flipped = chosen.sort === by && chosen.direction === "asc" ? "desc" : "asc";
-    const match = LEVEL_ORDERS.find((o) => o.sort === by && o.direction === flipped);
-    setOrder((match ?? LEVEL_ORDERS.find((o) => o.sort === by) ?? chosen).value);
-  }
+  const headSort = (by: StockSort) => setOrder(nextOrder(LEVEL_ORDERS, chosen, by).value);
 
   /** What a row sits under, when the list is grouped at all. */
   function grouped(row: StockLevel): string | null {

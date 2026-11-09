@@ -284,6 +284,42 @@ export function Picker({
   );
 }
 
+/** One of the orders a list offers: a column, and the way round it is read. */
+export type Ordering<T extends string> = {
+  value: string;
+  label: string;
+  sort: T;
+  direction: "asc" | "desc";
+};
+
+/** The order a value names, or the first one, which is the default. */
+export function ordering<T extends string>(
+  orders: ReadonlyArray<Ordering<T>>,
+  value: string,
+): Ordering<T> {
+  return orders.find((option) => option.value === value) ?? orders[0];
+}
+
+/**
+ * Which order a click on a column heading moves to.
+ *
+ * The first order listed for a column is the way round that column is
+ * usually read — dearest for a price, newest for a date, soonest for a due
+ * date — so a first click gives that and a second turns it over.  Starting
+ * every column ascending would make the heading disagree with the order
+ * picker sitting above it, which names the same thing.
+ */
+export function nextOrder<T extends string>(
+  orders: ReadonlyArray<Ordering<T>>,
+  current: Ordering<T>,
+  by: T,
+): Ordering<T> {
+  const forColumn = orders.filter((option) => option.sort === by);
+  if (forColumn.length === 0) return current;
+  if (current.sort !== by) return forColumn[0];
+  return forColumn.find((option) => option.value !== current.value) ?? forColumn[0];
+}
+
 /**
  * A column heading that reorders the list.
  *

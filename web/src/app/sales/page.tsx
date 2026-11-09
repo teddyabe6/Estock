@@ -25,6 +25,8 @@ import {
   Pager,
   Picker,
   SortableHead,
+  nextOrder,
+  ordering,
 } from "@/components/ui";
 import { api, type Page, type Sale, type SaleSort } from "@/lib/api";
 import { amount, dateTime } from "@/lib/format";
@@ -84,7 +86,7 @@ function Sales() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const chosen = ORDERS.find((o) => o.value === order) ?? ORDERS[0];
+  const chosen = ordering(ORDERS, order);
   const branches = session?.branches ?? [];
   const currency = session?.currency ?? "ETB";
 
@@ -118,11 +120,7 @@ function Sales() {
     return () => clearTimeout(timer);
   }, [search, branchId, status, from, to, chosen.sort, chosen.direction, offset]);
 
-  function headSort(by: SaleSort) {
-    const flipped = chosen.sort === by && chosen.direction === "desc" ? "asc" : "desc";
-    const match = ORDERS.find((o) => o.sort === by && o.direction === flipped);
-    setOrder((match ?? ORDERS.find((o) => o.sort === by) ?? chosen).value);
-  }
+  const headSort = (by: SaleSort) => setOrder(nextOrder(ORDERS, chosen, by).value);
 
   const nameOf = (id: string) => branches.find((b) => b.id === id)?.name ?? "Another branch";
   const rows = page?.items ?? [];

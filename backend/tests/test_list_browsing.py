@@ -293,3 +293,148 @@ def test_another_business_sees_none_of_these(client, business, other_business):
 
     assert sales["items"] == []
     assert credit["items"] == []
+
+
+# --------------------------------------------------------------------------- #
+# The catalogue
+# --------------------------------------------------------------------------- #
+
+
+def names(body) -> list[str]:
+    return [row["name"] for row in body["items"]]
+
+
+def test_products_can_be_narrowed_to_one_category(client, business):
+    business.add_product("Teff flour", category_name="Grains")
+    business.add_product("Sugar", category_name="Grains")
+    business.add_product("Cement", category_name="Building")
+    grains = next(
+        row["category_id"]
+        for row in client.get("/api/v1/products", headers=business.headers()).json()[
+            "items"
+        ]
+        if row["category_name"] == "Grains"
+    )
+
+    body = client.get(
+        f"/api/v1/products?category_id={grains}", headers=business.headers()
+    ).json()
+
+    assert sorted(names(body)) == ["Sugar", "Teff flour"]
+    assert body["total"] == 2
+
+
+def test_products_can_be_narrowed_to_what_is_on_the_shop_and_what_is_not(
+    client, business, db
+):
+    listed = business.add_product("Listed")
+    business.add_product("Unlisted")
+    listed.is_published = True
+    db.flush()
+
+    on = client.get("/api/v1/products?published=true", headers=business.headers()).json()
+    off = client.get(
+        "/api/v1/products?published=false", headers=business.headers()
+    ).json()
+    both = client.get("/api/v1/products", headers=business.headers()).json()
+
+    assert names(on) == ["Listed"]
+    assert names(off) == ["Unlisted"]
+    assert both["total"] == 2
+
+
+def test_an_archived_product_is_out_of_the_way_but_not_out_of_reach(
+    client, business, db
+):
+    business.add_product("Selling")
+    gone = business.add_product("Discontinued")
+    gone.is_active = False
+    db.flush()
+
+    default = client.get("/api/v1/products", headers=business.headers()).json()
+    with_archived = client.get(
+        "/api/v1/products?include_inactive=true", headers=business.headers()
+    ).json()
+
+    assert names(default) == ["Selling"]
+    assert default["total"] == 1
+    assert sorted(names(with_archived)) == ["Discontinued", "Selling"]
+
+
+def test_products_can_lead_with_the_dearest_or_the_cheapest(client, business):
+    business.add_product("Middling", selling_price="500")
+    business.add_product("Dear", selling_price="5000")
+    business.add_product("Cheap", selling_price="5")
+
+    down = client.get("/api/v1/products?sort=price", headers=business.headers()).json()
+    up = client.get(
+        "/api/v1/products?sort=price&direction=asc", headers=business.headers()
+    ).json()
+
+    # Price reads dearest first unless asked otherwise.
+    assert names(down) == ["Dear", "Middling", "Cheap"]
+    assert names(up) == ["Cheap", "Middling", "Dear"]
+
+
+def test_products_can_lead_with_the_emptiest_shelf(client, business):
+    business.add_product("Plenty", opening_stock="900")
+    business.add_product("Some", opening_stock="40")
+    business.add_product("Almost none", opening_stock="1")
+
+    up = client.get(
+        "/api/v1/products?sort=stock&direction=asc", headers=business.headers()
+    ).json()
+
+    assert names(up) == ["Almost none", "Some", "Plenty"]
+
+
+def test_grouping_products_by_category_keeps_a_category_together(client, business):
+    business.add_product("Apple", category_name="Fruit")
+    business.add_product("Banana", category_name="Fruit")
+    business.add_product("Cement", category_name="Building")
+    business.add_product("Uncategorised")
+
+    body = client.get(
+        "/api/v1/products?sort=category", headers=business.headers()
+    ).json()
+
+    assert [row["category_name"] for row in body["items"]] == [
+        "Building",
+        "Fruit",
+        "Fruit",
+        None,
+    ]
+    # Alphabetical within the heading, so the rows under it never shuffle.
+    assert names(body) == ["Cement", "Apple", "Banana", "Uncategorised"]
+
+
+def test_a_narrowed_catalogue_pages_over_what_is_left(client, business):
+    for n in range(6):
+        business.add_product(f"Grain {n}", category_name="Grains")
+    business.add_product("Cement", category_name="Building")
+    grains = next(
+        row["category_id"]
+        for row in client.get(
+            "/api/v1/products?limit=50", headers=business.headers()
+        ).json()["items"]
+        if row["category_name"] == "Grains"
+    )
+
+    page = client.get(
+        f"/api/v1/products?category_id={grains}&limit=4&offset=4",
+        headers=business.headers(),
+    ).json()
+
+    assert page["total"] == 6
+    assert len(page["items"]) == 2
+    assert all(row["category_name"] == "Grains" for row in page["items"])
+
+
+def test_another_business_sees_none_of_this_catalogue(client, business, other_business):
+    business.add_product("Teff flour", category_name="Grains")
+
+    body = client.get(
+        "/api/v1/products?sort=category", headers=other_business.headers()
+    ).json()
+
+    assert body["items"] == []
