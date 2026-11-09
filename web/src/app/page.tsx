@@ -35,6 +35,9 @@ function Home() {
   }, []);
 
   const currency = data?.currency ?? session?.currency ?? "ETB";
+  // The shop's own today, not the browser's: a till in Addis closing at
+  // midnight local is still yesterday's takings to a server in UTC.
+  const soldToday = data ? `/sales?date_from=${data.date}&date_to=${data.date}` : "/sales";
 
   return (
     <>
@@ -68,9 +71,12 @@ function Home() {
 
       {data?.today && (
         <div className="grid">
-          <Stat label="Sales today" value={money(data.today.net_sales, currency)} />
-          <Stat label="Orders" value={data.today.sale_count} />
-          <Stat label="Items sold" value={quantity(data.today.items_sold)} />
+          {/* Each of today's figures opens the sales it was added up from.
+              Profit is not one of them: it is worked out from cost against
+              revenue, so there is no list of profits to show. */}
+          <Stat label="Sales today" value={money(data.today.net_sales, currency)} href={soldToday} />
+          <Stat label="Orders" value={data.today.sale_count} href={soldToday} />
+          <Stat label="Items sold" value={quantity(data.today.items_sold)} href={soldToday} />
           {data.today.gross_profit !== undefined && (
             <Stat
               label="Gross profit"
@@ -91,16 +97,19 @@ function Home() {
                   label="Customers owe you"
                   value={money(data.receivables.total_outstanding, currency)}
                   note={`${data.receivables.transaction_count} open balance(s)`}
+                  href="/credit?kind=receivable&view=outstanding"
                 />
                 <Stat
                   label="Due within 7 days"
                   value={money(data.receivables.due_within_7_days, currency)}
                   tone={Number(data.receivables.due_within_7_days) > 0 ? "warn" : "muted"}
+                  href="/credit?kind=receivable&view=due_soon"
                 />
                 <Stat
                   label="Overdue"
                   value={money(data.receivables.overdue, currency)}
                   tone={Number(data.receivables.overdue) > 0 ? "danger" : "muted"}
+                  href="/credit?kind=receivable&view=overdue"
                 />
               </>
             )}
@@ -109,6 +118,7 @@ function Home() {
                 label="You owe suppliers"
                 value={money(data.payables.total_outstanding, currency)}
                 note={`${data.payables.transaction_count} open balance(s)`}
+                href="/credit?kind=payable&view=outstanding"
               />
             )}
           </div>

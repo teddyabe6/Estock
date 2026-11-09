@@ -392,15 +392,19 @@ function Overview() {
         recorded yet still gets a column, holding zero.
       </p>
       <Alert>{error}</Alert>
-      <FilterBar>
-        <label className="field filter wide">
-          <span>Search</span>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Product name…"
-          />
-        </label>
+      <FilterBar
+        active={[branchId, categoryId, order === "product" ? "" : order].filter(Boolean).length}
+        primary={
+          <label className="field filter wide">
+            <span>Search</span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Product name…"
+            />
+          </label>
+        }
+      >
         {branches.length > 1 && (
           <Picker
             label="Branch"
@@ -621,15 +625,22 @@ function Levels({ initialLow }: { initialLow: boolean }) {
   return (
     <div className="card">
       <Alert>{error}</Alert>
-      <FilterBar>
-        <label className="field filter wide">
-          <span>Search</span>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Product name…"
-          />
-        </label>
+      <FilterBar
+        active={
+          [branchId, categoryId, status, order === "product" ? "" : order].filter(Boolean)
+            .length
+        }
+        primary={
+          <label className="field filter wide">
+            <span>Search</span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Product name…"
+            />
+          </label>
+        }
+      >
         {branches.length > 1 && (
           <Picker
             label="Branch"
@@ -2136,7 +2147,7 @@ function Movements() {
         corrected by a movement that undoes it, and both stay on the record.
       </p>
       <Alert>{error}</Alert>
-      <FilterBar>
+      <FilterBar active={[branchId, reason, since, until].filter(Boolean).length}>
         {branches.length > 1 && (
           <Picker
             label="Branch"

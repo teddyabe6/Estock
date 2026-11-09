@@ -11,7 +11,8 @@
  */
 
 import Link from "next/link";
-import { Fragment, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Fragment, Suspense, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import {
@@ -57,19 +58,27 @@ const STATUSES = [
 export default function SalesPage() {
   return (
     <AppShell>
-      <Sales />
+      <Suspense fallback={<p className="muted">Loading…</p>}>
+        <Sales />
+      </Suspense>
     </AppShell>
   );
 }
 
 function Sales() {
   const { session, can, canWrite } = useSession();
+  const params = useSearchParams();
+  // Opened from a figure on the dashboard, the list arrives already showing
+  // the rows that figure was added up from.
   const [page, setPage] = useState<Page<Sale> | null>(null);
-  const [search, setSearch] = useState("");
-  const [branchId, setBranchId] = useState("");
-  const [status, setStatus] = useState<"completed" | "voided" | "all">("completed");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [search, setSearch] = useState(() => params.get("q") ?? "");
+  const [branchId, setBranchId] = useState(() => params.get("branch_id") ?? "");
+  const [status, setStatus] = useState<"completed" | "voided" | "all">(() => {
+    const asked = params.get("status");
+    return asked === "voided" || asked === "all" ? asked : "completed";
+  });
+  const [from, setFrom] = useState(() => params.get("date_from") ?? "");
+  const [to, setTo] = useState(() => params.get("date_to") ?? "");
   const [order, setOrder] = useState("newest");
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -136,17 +145,24 @@ function Sales() {
       <Alert>{error}</Alert>
 
       <div className="card">
-        <FilterBar>
-          <label className="field filter wide">
-            <span>
-              Search <em className="hint">number or customer</em>
-            </span>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="S-2026-000012, or a name…"
-            />
-          </label>
+        <FilterBar
+          active={
+            [branchId, status === "completed" ? "" : status, from, to,
+              order === "newest" ? "" : order].filter(Boolean).length
+          }
+          primary={
+            <label className="field filter wide">
+              <span>
+                Search <em className="hint">number or customer</em>
+              </span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="S-2026-000012, or a name…"
+              />
+            </label>
+          }
+        >
           {branches.length > 1 && (
             <Picker
               label="Branch"

@@ -94,7 +94,12 @@ function Credit() {
   const [kind, setKind] = useState<Kind>(
     params.get("kind") === "payable" && canSeePayables ? "payable" : "receivable",
   );
-  const [view, setView] = useState<View>("outstanding");
+  // Opened from a figure on the dashboard, the list arrives already on the
+  // view that figure came from.
+  const [view, setView] = useState<View>(() => {
+    const asked = params.get("view");
+    return VIEWS.some((v) => v.value === asked) ? (asked as View) : "outstanding";
+  });
   const [search, setSearch] = useState("");
   const [branchId, setBranchId] = useState("");
   const [order, setOrder] = useState("due");
@@ -221,17 +226,21 @@ function Credit() {
       <div className="card" style={{ marginTop: 14 }}>
         <Tabs value={view} options={VIEWS} onChange={setView} />
 
-        <FilterBar>
-          <label className="field filter wide">
-            <span>
-              Search <em className="hint">reference or name</em>
-            </span>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={kind === "receivable" ? "A customer, or CR-…" : "A supplier, or CR-…"}
-            />
-          </label>
+        <FilterBar
+          active={[branchId, order === "due" ? "" : order].filter(Boolean).length}
+          primary={
+            <label className="field filter wide">
+              <span>
+                Search <em className="hint">reference or name</em>
+              </span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={kind === "receivable" ? "A customer, or CR-…" : "A supplier, or CR-…"}
+              />
+            </label>
+          }
+        >
           {branches.length > 1 && (
             <Picker
               label="Branch"

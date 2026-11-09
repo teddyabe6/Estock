@@ -2,29 +2,46 @@
 
 /** Small presentational pieces shared across screens. */
 
-import type { ReactNode } from "react";
+import Link from "next/link";
+import { useId, useState, type ReactNode } from "react";
 
 import { statusTone } from "@/lib/format";
 
+/**
+ * One figure, and where it came from.
+ *
+ * With `href` the whole card is the way into the list behind the number —
+ * a figure somebody is looking at is a question they are about to ask, and
+ * the shortest answer is the rows it was added up from.  Without one it is
+ * just a figure, and does not pretend otherwise.
+ */
 export function Stat({
   label,
   value,
   note,
   tone = "muted",
+  href,
 }: {
   label: string;
   value: ReactNode;
   note?: ReactNode;
   tone?: "ok" | "warn" | "danger" | "muted";
+  href?: string;
 }) {
   const cls =
     tone === "danger" ? "stat is-danger" : tone === "warn" ? "stat is-warn" : "stat";
-  return (
-    <div className={cls}>
+  const inside = (
+    <>
       <div className="label">{label}</div>
       <div className="value">{value}</div>
       {note ? <div className="note">{note}</div> : null}
-    </div>
+    </>
+  );
+  if (!href) return <div className={cls}>{inside}</div>;
+  return (
+    <Link className={`${cls} is-link`} href={href}>
+      {inside}
+    </Link>
   );
 }
 
@@ -200,9 +217,43 @@ export function Drawer({
  * One place for the search box, the filters and the order, so every list in
  * the app is narrowed the same way and a control that does not apply — a
  * branch filter in a one-branch shop — can simply be left out.
+ *
+ * On a desk they sit in one row.  On a phone they do not: five controls
+ * with their labels is three hundred pixels of chrome above a list, so the
+ * screen is mostly the question and barely the answer.  There, `primary`
+ * stays — the search box, which is what the hand reaches for — and the rest
+ * folds behind one button that says how many of them are set, so a filter
+ * left on cannot quietly explain a figure.
  */
-export function FilterBar({ children }: { children: ReactNode }) {
-  return <div className="filter-bar">{children}</div>;
+export function FilterBar({
+  primary,
+  active = 0,
+  children,
+}: {
+  primary?: ReactNode;
+  /** How many of the folded controls are away from their default. */
+  active?: number;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <div className="filter-bar" data-open={open ? "" : undefined}>
+      {primary ? <div className="filter-primary">{primary}</div> : null}
+      <button
+        type="button"
+        className={active > 0 ? "filter-toggle secondary is-on" : "filter-toggle secondary"}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((was) => !was)}
+      >
+        {active > 0 ? `Filters (${active})` : "Filters"}
+      </button>
+      <div className="filter-rest" id={id}>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 /** One labelled control inside a FilterBar. */
