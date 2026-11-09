@@ -170,6 +170,9 @@ export type PlatformSwitch = {
   per_tenant: boolean;
 };
 
+/** One page of a list the console reads a page at a time. */
+export type AdminPage<T> = { items: T[]; total: number; limit: number; offset: number };
+
 export type AuditRow = {
   id: string;
   created_at: string;
@@ -215,9 +218,7 @@ export const adminApi = {
     }),
 
   shops: (params: { q?: string; status?: string; limit?: number; offset?: number } = {}) =>
-    call<{ total: number; limit: number; offset: number; items: ShopRow[] }>(
-      `/platform/tenants${qs(params)}`,
-    ),
+    call<AdminPage<ShopRow>>(`/platform/tenants${qs(params)}`),
 
   setShopStatus: (tenantId: string, status: string, reason?: string) =>
     call<{ id: string; status: string }>(`/platform/tenants/${tenantId}/status`, {
@@ -247,9 +248,7 @@ export const adminApi = {
   billingSummary: () => call<BillingSummary>("/platform/billing/summary"),
 
   invoices: (params: { tenant_id?: string; status?: string; limit?: number; offset?: number } = {}) =>
-    call<{ total: number; limit: number; offset: number; items: Invoice[] }>(
-      `/platform/invoices${qs(params)}`,
-    ),
+    call<AdminPage<Invoice>>(`/platform/invoices${qs(params)}`),
 
   invoice: (id: string) => call<Invoice>(`/platform/invoices/${id}`),
 
@@ -306,8 +305,8 @@ export const adminApi = {
       body: { tenant_id: tenantId, reason, minutes },
     }),
 
-  auditEvents: (params: { tenant_id?: string; limit?: number } = {}) =>
-    call<AuditRow[]>(`/platform/audit-events${qs(params)}`),
+  auditEvents: (params: { tenant_id?: string; limit?: number; offset?: number } = {}) =>
+    call<AdminPage<AuditRow>>(`/platform/audit-events${qs(params)}`),
 
   runDailyJobs: () => call<Record<string, unknown>>("/platform/jobs/run-daily", { method: "POST" }),
 };

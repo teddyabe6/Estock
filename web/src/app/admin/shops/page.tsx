@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AdminShell, ShopStatus } from "@/components/AdminShell";
-import { Alert, Empty, PageHead } from "@/components/ui";
+import { Alert, Empty, PageHead, Pager } from "@/components/ui";
 import { adminApi, SHOP_STATUS_NOTE, SHOP_STATUSES, type ShopRow } from "@/lib/admin";
 import { useAdmin, useAdminCall } from "@/lib/adminSession";
 import { shortDate } from "@/lib/format";
@@ -137,29 +137,13 @@ export default function AdminShopsPage() {
         </table>
       )}
 
-      {total > PAGE && (
-        <div className="row" style={{ marginTop: 12 }}>
-          <button
-            type="button"
-            className="secondary"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE))}
-          >
-            Previous
-          </button>
-          <span className="muted">
-            {offset + 1}–{Math.min(offset + PAGE, total)} of {total}
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            disabled={offset + PAGE >= total}
-            onClick={() => setOffset(offset + PAGE)}
-          >
-            Next
-          </button>
-        </div>
-      )}
+      <Pager
+        total={total}
+        limit={PAGE}
+        offset={offset}
+        onOffset={setOffset}
+        noun="shops"
+      />
     </AdminShell>
   );
 }

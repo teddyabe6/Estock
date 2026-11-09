@@ -1022,14 +1022,25 @@ button.link:hover:not(:disabled) {
   margin-bottom: 14px;
 }
 
+/* A search box and the chips that narrow it.  It wraps rather than
+   squeezing: side by side on a desk, and on a phone the box takes its own
+   line instead of shrinking to a stub too narrow to read what is typed in
+   it. */
 .search-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
 }
 
 .search-row input {
-  flex: 1;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.search-row .chips {
+  min-width: 0;
+  margin-bottom: 0;
 }
 
 .chips {

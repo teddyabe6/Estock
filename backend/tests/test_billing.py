@@ -1181,3 +1181,75 @@ def test_a_listed_invoice_refuses_to_pretend_it_has_no_payments(db, business):
         db, business.tenant.id, with_payments=True
     )
     assert len(with_rows[0].invoice.payments) == 1
+
+
+# --------------------------------------------------------------------------- #
+# The trail an operator reads afterwards
+# --------------------------------------------------------------------------- #
+
+
+def test_the_audit_trail_is_read_a_page_at_a_time(client, db, business, admin_headers):
+    """A log only grows, so its older half has to stay reachable."""
+    from app.core.audit import record_audit
+
+    for n in range(7):
+        record_audit(
+            db,
+            tenant_id=business.tenant.id,
+            action="tenant.status_changed",
+            summary=f"Change {n}",
+            actor_label="Billing",
+        )
+    db.flush()
+
+    first = client.get(
+        "/api/v1/platform/audit-events?limit=3", headers=admin_headers
+    ).json()
+    second = client.get(
+        "/api/v1/platform/audit-events?limit=3&offset=3", headers=admin_headers
+    ).json()
+
+    assert first["total"] == second["total"] >= 7
+    assert len(first["items"]) == 3
+    assert len(second["items"]) == 3
+    # No row appears on both pages, which an unstable order would allow.
+    assert {row["id"] for row in first["items"]}.isdisjoint(
+        row["id"] for row in second["items"]
+    )
+
+
+def test_the_audit_trail_counts_only_the_shop_it_is_narrowed_to(
+    client, db, business, other_business, admin_headers
+):
+    from app.core.audit import record_audit
+
+    record_audit(
+        db,
+        tenant_id=business.tenant.id,
+        action="tenant.status_changed",
+        summary="Theirs",
+        actor_label="Billing",
+    )
+    record_audit(
+        db,
+        tenant_id=other_business.tenant.id,
+        action="tenant.status_changed",
+        summary="Somebody else's",
+        actor_label="Billing",
+    )
+    db.flush()
+
+    everything = client.get(
+        "/api/v1/platform/audit-events", headers=admin_headers
+    ).json()
+    theirs = client.get(
+        f"/api/v1/platform/audit-events?tenant_id={business.tenant.id}",
+        headers=admin_headers,
+    ).json()
+
+    assert theirs["total"] < everything["total"]
+    assert all(
+        row["tenant_id"] == str(business.tenant.id) for row in theirs["items"]
+    )
+    # The count follows the filter, or the pager lies about what is left.
+    assert theirs["total"] == len(theirs["items"])

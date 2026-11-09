@@ -13,10 +13,12 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AdminShell } from "@/components/AdminShell";
-import { Alert, Empty, PageHead } from "@/components/ui";
+import { Alert, Empty, PageHead, Pager } from "@/components/ui";
 import { adminApi, type AuditRow, type ShopRow } from "@/lib/admin";
 import { useAdmin, useAdminCall } from "@/lib/adminSession";
 import { dateTime } from "@/lib/format";
+
+const PAGE = 50;
 
 /** The actions an operator is usually looking for, named in plain words. */
 const LABELS: Record<string, string> = {
@@ -53,6 +55,8 @@ export default function AdminAuditPage() {
   const [events, setEvents] = useState<AuditRow[]>([]);
   const [shops, setShops] = useState<ShopRow[]>([]);
   const [tenantId, setTenantId] = useState("");
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -66,11 +70,12 @@ export default function AdminAuditPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, shopPage] = await Promise.all([
-        adminApi.auditEvents({ tenant_id: tenantId || undefined, limit: 200 }),
+      const [page, shopPage] = await Promise.all([
+        adminApi.auditEvents({ tenant_id: tenantId || undefined, limit: PAGE, offset }),
         adminApi.shops({ limit: 200 }),
       ]);
-      setEvents(rows);
+      setEvents(page.items);
+      setTotal(page.total);
       setShops(shopPage.items);
       setError(null);
     } catch (cause) {
@@ -78,11 +83,17 @@ export default function AdminAuditPage() {
     } finally {
       setLoading(false);
     }
-  }, [describe, tenantId]);
+  }, [describe, tenantId, offset]);
 
   useEffect(() => {
     if (admin) void load();
   }, [admin, load]);
+
+  // Narrowing to one shop invalidates where you were: page four of the whole
+  // trail is not page four of that shop's.
+  useEffect(() => {
+    setOffset(0);
+  }, [tenantId]);
 
   const nameFor = (id: string | null) =>
     id ? (shops.find((shop) => shop.id === id)?.name ?? "—") : "platform";
@@ -146,6 +157,14 @@ export default function AdminAuditPage() {
           </tbody>
         </table>
       )}
+
+      <Pager
+        total={total}
+        limit={PAGE}
+        offset={offset}
+        onOffset={setOffset}
+        noun="entries"
+      />
     </AdminShell>
   );
 }

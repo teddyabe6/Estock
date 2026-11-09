@@ -35,6 +35,7 @@ from app.models.platform import (
     TenantStatus,
 )
 from app.models.sales import PaymentMethod, Sale
+from app.schemas.common import Page
 from app.services import billing, platform_settings
 from app.services import subscription as subscription_service
 
@@ -436,27 +437,45 @@ def grant_support_access(
     }
 
 
-@router.get("/audit-events")
+@router.get("/audit-events", response_model=Page[dict])
 def audit_events(
     admin: PlatformAdminUser,
     db: DbSession,
     tenant_id: uuid.UUID | None = None,
     limit: int = Query(50, ge=1, le=200),
-) -> list[dict]:
-    stmt = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)
+    offset: int = Query(0, ge=0),
+) -> Page[dict]:
+    """The trail of privileged actions, newest first, a page at a time.
+
+    A log only grows, so returning its first two hundred rows and nothing
+    else means the older half of it cannot be reached at all — which is the
+    half somebody looking into what happened last month needs.
+    """
+    scope = select(AuditEvent)
     if tenant_id is not None:
-        stmt = stmt.where(AuditEvent.tenant_id == tenant_id)
-    return [
-        {
-            "id": str(event.id),
-            "created_at": event.created_at.isoformat(),
-            "tenant_id": str(event.tenant_id) if event.tenant_id else None,
-            "action": event.action,
-            "summary": event.summary,
-            "actor_label": event.actor_label,
-        }
-        for event in db.execute(stmt).scalars()
-    ]
+        scope = scope.where(AuditEvent.tenant_id == tenant_id)
+    total = db.execute(select(func.count()).select_from(scope.subquery())).scalar_one()
+    rows = db.execute(
+        scope.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+        .limit(limit)
+        .offset(offset)
+    ).scalars()
+    return Page(
+        items=[
+            {
+                "id": str(event.id),
+                "created_at": event.created_at.isoformat(),
+                "tenant_id": str(event.tenant_id) if event.tenant_id else None,
+                "action": event.action,
+                "summary": event.summary,
+                "actor_label": event.actor_label,
+            }
+            for event in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("/jobs/run-daily")

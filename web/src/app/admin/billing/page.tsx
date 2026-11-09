@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AdminShell, InvoiceStatus } from "@/components/AdminShell";
-import { Alert, Empty, PageHead, Stat } from "@/components/ui";
+import { Alert, Empty, PageHead, Pager, Stat } from "@/components/ui";
 import {
   adminApi,
   INVOICE_STATUSES,
@@ -174,29 +174,13 @@ export default function AdminBillingPage() {
         </table>
       )}
 
-      {total > PAGE && (
-        <div className="row" style={{ marginTop: 12 }}>
-          <button
-            type="button"
-            className="secondary"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE))}
-          >
-            Previous
-          </button>
-          <span className="muted">
-            {offset + 1}–{Math.min(offset + PAGE, total)} of {total}
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            disabled={offset + PAGE >= total}
-            onClick={() => setOffset(offset + PAGE)}
-          >
-            Next
-          </button>
-        </div>
-      )}
+      <Pager
+        total={total}
+        limit={PAGE}
+        offset={offset}
+        onOffset={setOffset}
+        noun="invoices"
+      />
 
       <p className="muted" style={{ marginTop: 16 }}>
         Recording a payment, voiding an invoice or reversing a payment is done on the
