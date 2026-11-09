@@ -379,6 +379,45 @@ main {
   color: var(--warn);
 }
 
+/* A row of figures is a glance, not a page.  One card per row on a phone
+   put five of them — the whole credit summary — above the list they
+   summarise, so the balances themselves started a screen and a half down.
+   Two across, with the type sized to fit, is three rows instead of five and
+   still one glance.
+
+   Scoped to grids that hold figures: `.grid` is also the form layout, and a
+   160-pixel text field is not a text field. */
+@media (max-width: 560px) {
+  .grid:has(> .stat) {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .grid:has(> .stat) > .stat {
+    padding: 10px 12px;
+  }
+
+  .grid:has(> .stat) .label {
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+  }
+
+  .grid:has(> .stat) .value {
+    font-size: 1.1rem;
+    margin-top: 2px;
+  }
+
+  .grid:has(> .stat) .note {
+    font-size: 0.72rem;
+  }
+
+  /* An odd one out would sit alone beside a gap, so it takes the whole row
+     rather than looking like something failed to load. */
+  .grid:has(> .stat) > .stat:last-child:nth-child(odd) {
+    grid-column: span 2;
+  }
+}
+
 /* ---------- Tables ---------- */
 
 .table-wrap {
