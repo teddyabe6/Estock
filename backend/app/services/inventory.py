@@ -27,7 +27,7 @@ from app.core.errors import (
 )
 from app.core.permissions import Permission
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
-from app.models.catalogue import Product, ProductVariant
+from app.models.catalogue import Category, Product, ProductVariant
 from app.models.inventory import (
     OPEN_TRANSFER_STATUSES,
     STOCK_IN_REASONS,
@@ -1547,6 +1547,8 @@ class OverviewRow:
     name: str
     sku: str | None
     unit: str
+    #: What the row groups under, when the list is asked for by category.
+    category_name: str | None
     min_stock: Decimal | None
     reorder_level: Decimal | None
     #: Quantity at each branch in the overview, including the zeroes.
@@ -1565,11 +1567,15 @@ class StockOverview:
     total_rows: int
 
 
-def _overview_scope(tenant_id: uuid.UUID, q: str | None) -> list:
+def _overview_scope(
+    tenant_id: uuid.UUID, q: str | None, category_id: uuid.UUID | None = None
+) -> list:
     """What counts as a stocked product for the overview."""
     conditions = [Product.tenant_id == tenant_id, Product.track_stock.is_(True)]
     if q and q.strip():
         conditions.append(func.lower(Product.name).like(f"%{q.strip().lower()}%"))
+    if category_id is not None:
+        conditions.append(Product.category_id == category_id)
     return conditions
 
 
@@ -1579,6 +1585,9 @@ def stock_overview(
     *,
     branch_id: uuid.UUID | None = None,
     q: str | None = None,
+    category_id: uuid.UUID | None = None,
+    sort: str = "product",
+    direction: str = "asc",
     limit: int = 100,
     offset: int = 0,
 ) -> StockOverview:
@@ -1607,7 +1616,7 @@ def stock_overview(
         )
     }
 
-    scope = _overview_scope(ctx.tenant_id, q)
+    scope = _overview_scope(ctx.tenant_id, q, category_id)
     stocked_somewhere = (
         select(StockBalance.variant_id)
         .where(
@@ -1616,6 +1625,20 @@ def stock_overview(
             StockBalance.quantity != 0,
         )
         .scalar_subquery()
+    )
+    # Held across every visible branch, joined in so the list can be ordered
+    # by it in the database and still be read a page at a time.
+    held = (
+        select(
+            StockBalance.variant_id.label("variant_id"),
+            func.sum(StockBalance.quantity).label("held"),
+        )
+        .where(
+            StockBalance.tenant_id == ctx.tenant_id,
+            StockBalance.branch_id.in_(visible),
+        )
+        .group_by(StockBalance.variant_id)
+        .subquery()
     )
     matching = (
         select(
@@ -1627,8 +1650,11 @@ def stock_overview(
             ProductVariant.reorder_level,
             Product.name,
             Product.unit_of_measure,
+            Category.name.label("category_name"),
         )
         .join(Product, Product.id == ProductVariant.product_id)
+        .outerjoin(Category, Category.id == Product.category_id)
+        .outerjoin(held, held.c.variant_id == ProductVariant.id)
         .where(
             *scope,
             # Stock sitting on a shelf belongs in a stock overview even if the
@@ -1643,10 +1669,19 @@ def stock_overview(
     total_rows = db.execute(
         select(func.count()).select_from(matching.subquery())
     ).scalar_one()
+
+    # Ordering is how the list is grouped: ask for it by category and a
+    # category's products arrive together, whichever page they land on.
+    alphabetical = (Product.name, ProductVariant.sort_order, ProductVariant.id)
+    leading = {
+        "product": Product.name,
+        # Uncategorised last: it is not a heading anybody wants at the top.
+        "category": func.coalesce(Category.name, "\uffff"),
+        "total": func.coalesce(held.c.held, 0),
+    }.get(sort, Product.name)
+    order = leading.desc() if direction == "desc" else leading.asc()
     page = db.execute(
-        matching.order_by(Product.name, ProductVariant.sort_order, ProductVariant.id)
-        .limit(limit)
-        .offset(offset)
+        matching.order_by(order, *alphabetical).limit(limit).offset(offset)
     ).all()
 
     cells: dict[tuple[uuid.UUID, uuid.UUID], Decimal] = {}
@@ -1682,6 +1717,7 @@ def stock_overview(
                 name=f"{row.name} — {row.variant_name}" if row.variant_name else row.name,
                 sku=row.sku,
                 unit=row.unit_of_measure,
+                category_name=row.category_name,
                 min_stock=min_stock,
                 reorder_level=reorder,
                 quantities=quantities,

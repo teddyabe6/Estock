@@ -7,19 +7,37 @@
  */
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
-import { Alert, Badge, Empty, Field, PageHead, Tabs } from "@/components/ui";
+import {
+  Alert,
+  Badge,
+  Empty,
+  Field,
+  FilterBar,
+  GroupRow,
+  PageHead,
+  Pager,
+  Pick,
+  PickList,
+  Picker,
+  SortableHead,
+  Tabs,
+} from "@/components/ui";
 import {
   api,
   type BranchStockSetup,
+  type Category,
   type OpeningSheet,
   type Movement,
+  type OverviewSort,
+  type Page,
   type Product,
   type StockLevel,
   type StockLocation,
   type StockOverview,
+  type StockSort,
   type Supplier,
   type Transfer,
   type TransferBranch,
@@ -27,7 +45,17 @@ import {
 import { dateTime, money, quantity } from "@/lib/format";
 import { describeError, useSession } from "@/lib/session";
 
-type Tab = "overview" | "levels" | "opening" | "receive" | "adjust" | "transfers" | "movements";
+const TABS = [
+  "overview",
+  "levels",
+  "opening",
+  "receive",
+  "adjust",
+  "transfers",
+  "movements",
+] as const;
+
+type Tab = (typeof TABS)[number];
 
 export default function StockPage() {
   return (
@@ -43,10 +71,10 @@ function Stock() {
   const { can, canWrite, session } = useSession();
   const params = useSearchParams();
   const [tab, setTab] = useState<Tab>(() => {
-    const asked = params.get("tab");
-    return asked === "receive" || asked === "transfers" || asked === "overview" || asked === "opening"
-      ? asked
-      : "levels";
+    // Any tab may be linked to, so a notification or a bookmark can point at
+    // the ledger as readily as at the list.
+    const asked = params.get("tab") as Tab | null;
+    return asked && TABS.includes(asked) ? asked : "levels";
   });
   const [error, setError] = useState<string | null>(null);
   // null until the first answer comes back: "no branch needs counting" and
@@ -163,6 +191,62 @@ function useLocations() {
   );
 }
 
+/**
+ * The shop's categories, for the filter and the headings.
+ *
+ * Fetched once per view that needs it and left empty on failure, because a
+ * filter nobody can fill is worth hiding, not worth an error.
+ */
+function useCategories() {
+  const [categories, setCategories] = useState<Category[]>([]);
+  useEffect(() => {
+    api
+      .categories()
+      .then((all) => setCategories(all.filter((c) => c.is_active)))
+      .catch(() => setCategories([]));
+  }, []);
+  return categories;
+}
+
+/**
+ * An order a list can be put in, as one choice.
+ *
+ * Column and direction together rather than two controls: "most held first"
+ * is a thing somebody wants, where "total, descending" is two things they
+ * have to assemble.
+ */
+type Ordering<T extends string> = { value: string; label: string; sort: T; direction: "asc" | "desc" };
+
+function ordering<T extends string>(list: ReadonlyArray<Ordering<T>>, value: string) {
+  return list.find((option) => option.value === value) ?? list[0];
+}
+
+const LEVEL_ORDERS: ReadonlyArray<Ordering<StockSort>> = [
+  { value: "product", label: "Product A–Z", sort: "product", direction: "asc" },
+  { value: "urgent", label: "Most urgent first", sort: "status", direction: "asc" },
+  { value: "fewest", label: "Fewest on hand", sort: "quantity", direction: "asc" },
+  { value: "most", label: "Most on hand", sort: "quantity", direction: "desc" },
+  { value: "branch", label: "By branch", sort: "branch", direction: "asc" },
+  { value: "category", label: "By category", sort: "category", direction: "asc" },
+];
+
+const OVERVIEW_ORDERS: ReadonlyArray<Ordering<OverviewSort>> = [
+  { value: "product", label: "Product A–Z", sort: "product", direction: "asc" },
+  { value: "most", label: "Most held", sort: "total", direction: "desc" },
+  { value: "fewest", label: "Least held", sort: "total", direction: "asc" },
+  { value: "category", label: "By category", sort: "category", direction: "asc" },
+];
+
+/** The statuses worth filtering a stock list down to. */
+const STATUS_FILTERS = [
+  { value: "", label: "Any status" },
+  { value: "low", label: "Needs attention" },
+  { value: "out_of_stock", label: "Out of stock" },
+  { value: "critical", label: "Critical" },
+  { value: "warning", label: "Warning" },
+  { value: "ok", label: "Ok" },
+] as const;
+
 function ProductPicker({
   onPick,
   label = "Find a product",
@@ -191,42 +275,43 @@ function ProductPicker({
     };
   }, [search]);
 
+  function take(product: Product) {
+    onPick(product);
+    setSearch("");
+    setResults([]);
+  }
+
   return (
     <div>
       <Field label={label} hint="name, SKU or barcode">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Start typing…" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            // A scanner types fast and finishes with Enter, and Enter in a
+            // search box should never submit the form around it.
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            if (results[0]) take(results[0]);
+          }}
+          placeholder="Start typing…"
+        />
       </Field>
       {results.length > 0 && (
-        <div className="table-wrap" style={{ marginBottom: 12 }}>
-          <table>
-            <tbody>
-              {results.map((product) => (
-                <tr key={product.id}>
-                  <td>
-                    {product.name}
-                    <span className="muted" style={{ fontSize: "0.82rem" }}>
-                      {" "}
-                      · {product.track_stock ? `${quantity(product.quantity_on_hand)} on hand` : "not stocked"}
-                    </span>
-                  </td>
-                  <td className="num">
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => {
-                        onPick(product);
-                        setSearch("");
-                        setResults([]);
-                      }}
-                    >
-                      Add
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <PickList>
+          {results.map((product) => (
+            <Pick
+              key={product.id}
+              onPick={() => take(product)}
+              name={product.name}
+              meta={
+                product.track_stock
+                  ? `· ${quantity(product.quantity_on_hand)} on hand`
+                  : "· not stocked"
+              }
+            />
+          ))}
+        </PickList>
       )}
     </div>
   );
@@ -246,16 +331,23 @@ const OVERVIEW_PAGE = 100;
  */
 function Overview() {
   const { session } = useSession();
+  const categories = useCategories();
   const [data, setData] = useState<StockOverview | null>(null);
   const [branchId, setBranchId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [search, setSearch] = useState("");
+  const [order, setOrder] = useState("product");
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const chosen = ordering(OVERVIEW_ORDERS, order);
+
+  // Narrowing the list invalidates where you were in it: page four of the
+  // old answer is not page four of the new one.
   useEffect(() => {
     setOffset(0);
-  }, [search, branchId]);
+  }, [search, branchId, categoryId, order]);
 
   useEffect(() => {
     setLoading(true);
@@ -263,7 +355,10 @@ function Overview() {
       api
         .stockOverview({
           branch_id: branchId || undefined,
+          category_id: categoryId || undefined,
           q: search || undefined,
+          sort: chosen.sort,
+          direction: chosen.direction,
           limit: OVERVIEW_PAGE,
           offset,
         })
@@ -275,10 +370,19 @@ function Overview() {
         .finally(() => setLoading(false));
     }, 200);
     return () => clearTimeout(timer);
-  }, [branchId, search, offset]);
+  }, [branchId, categoryId, search, chosen.sort, chosen.direction, offset]);
 
   const branches = session?.branches ?? [];
   const shown = data?.branches ?? [];
+  const columns = shown.length + 3;
+  const narrowed = Boolean(search || categoryId || branchId);
+
+  /** The same state the order picker drives, from the heading. */
+  function headSort(by: OverviewSort) {
+    const flipped = chosen.sort === by && chosen.direction === "asc" ? "desc" : "asc";
+    const match = OVERVIEW_ORDERS.find((o) => o.sort === by && o.direction === flipped);
+    setOrder((match ?? OVERVIEW_ORDERS.find((o) => o.sort === by) ?? chosen).value);
+  }
 
   return (
     <div className="card">
@@ -288,35 +392,45 @@ function Overview() {
         recorded yet still gets a column, holding zero.
       </p>
       <Alert>{error}</Alert>
-      <div className="row" style={{ marginBottom: 8 }}>
-        <div style={{ flex: 1, minWidth: 180 }}>
-          <Field label="Search">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Product name…"
-            />
-          </Field>
-        </div>
-        <div style={{ minWidth: 180 }}>
-          <Field label="Branch">
-            <select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-              <option value="">All branches</option>
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>
-                  {branch.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-      </div>
+      <FilterBar>
+        <label className="field filter wide">
+          <span>Search</span>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Product name…"
+          />
+        </label>
+        {branches.length > 1 && (
+          <Picker
+            label="Branch"
+            value={branchId}
+            onChange={setBranchId}
+            options={[
+              { value: "", label: "All branches" },
+              ...branches.map((branch) => ({ value: branch.id, label: branch.name })),
+            ]}
+          />
+        )}
+        {categories.length > 0 && (
+          <Picker
+            label="Category"
+            value={categoryId}
+            onChange={setCategoryId}
+            options={[
+              { value: "", label: "Every category" },
+              ...categories.map((c) => ({ value: c.id, label: c.name })),
+            ]}
+          />
+        )}
+        <Picker label="Order" value={order} onChange={setOrder} options={OVERVIEW_ORDERS} />
+      </FilterBar>
 
       {data && data.rows.length === 0 && !loading ? (
-        <Empty title={search ? "Nothing matches that" : "No stocked products yet"}>
+        <Empty title={narrowed ? "Nothing matches that" : "No stocked products yet"}>
           <p>
-            {search
-              ? "Try part of the product name."
+            {narrowed
+              ? "Try part of the product name, or widen the filters."
               : "Add products, then record what each branch actually has."}
           </p>
         </Empty>
@@ -325,46 +439,70 @@ function Overview() {
           <table>
             <thead>
               <tr>
-                <th>Product</th>
+                <SortableHead
+                  label="Product"
+                  by="product"
+                  sort={chosen.sort}
+                  direction={chosen.direction}
+                  onSort={headSort}
+                />
                 {shown.map((branch) => (
                   <th key={branch.branch_id} className="num">
                     {branch.name}
                   </th>
                 ))}
-                <th className="num">All branches</th>
+                <SortableHead
+                  label="All branches"
+                  by="total"
+                  className="num"
+                  sort={chosen.sort}
+                  direction={chosen.direction}
+                  onSort={headSort}
+                />
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {(data?.rows ?? []).map((row) => (
-                <tr key={row.variant_id}>
-                  <td>
-                    {row.name}
-                    {row.sku && (
-                      <div className="muted" style={{ fontSize: "0.8rem" }}>
-                        {row.sku}
-                      </div>
-                    )}
-                  </td>
-                  {shown.map((branch) => {
-                    const held = row.quantities[branch.branch_id] ?? "0";
-                    return (
-                      <td
-                        key={branch.branch_id}
-                        className={Number(held) === 0 ? "num muted" : "num"}
-                      >
-                        {quantity(held)}
+              {(data?.rows ?? []).map((row, index) => {
+                const previous = index > 0 ? (data?.rows ?? [])[index - 1] : undefined;
+                const heading =
+                  chosen.sort === "category" &&
+                  (index === 0 || previous?.category_name !== row.category_name)
+                    ? (row.category_name ?? "No category")
+                    : null;
+                return (
+                  <Fragment key={row.variant_id}>
+                    {heading && <GroupRow label={heading} span={columns} />}
+                    <tr>
+                      <td>
+                        {row.name}
+                        {row.sku && (
+                          <div className="muted" style={{ fontSize: "0.8rem" }}>
+                            {row.sku}
+                          </div>
+                        )}
                       </td>
-                    );
-                  })}
-                  <td className="num">
-                    <strong>{quantity(row.total)}</strong>
-                  </td>
-                  <td className="nowrap">
-                    <Badge status={row.status} />
-                  </td>
-                </tr>
-              ))}
+                      {shown.map((branch) => {
+                        const held = row.quantities[branch.branch_id] ?? "0";
+                        return (
+                          <td
+                            key={branch.branch_id}
+                            className={Number(held) === 0 ? "num muted" : "num"}
+                          >
+                            {quantity(held)}
+                          </td>
+                        );
+                      })}
+                      <td className="num">
+                        <strong>{quantity(row.total)}</strong>
+                      </td>
+                      <td className="nowrap">
+                        <Badge status={row.status} />
+                      </td>
+                    </tr>
+                  </Fragment>
+                );
+              })}
             </tbody>
             {data && (
               <tfoot>
@@ -391,28 +529,14 @@ function Overview() {
         </div>
       )}
 
-      {data && data.total > OVERVIEW_PAGE && (
-        <div className="row" style={{ marginTop: 10, alignItems: "center" }}>
-          <button
-            type="button"
-            className="secondary"
-            disabled={offset === 0}
-            onClick={() => setOffset((o) => Math.max(0, o - OVERVIEW_PAGE))}
-          >
-            Previous
-          </button>
-          <span className="muted" style={{ fontSize: "0.88rem" }}>
-            {offset + 1}–{Math.min(offset + OVERVIEW_PAGE, data.total)} of {data.total}
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            disabled={offset + OVERVIEW_PAGE >= data.total}
-            onClick={() => setOffset((o) => o + OVERVIEW_PAGE)}
-          >
-            Next
-          </button>
-        </div>
+      {data && (
+        <Pager
+          total={data.total}
+          limit={OVERVIEW_PAGE}
+          offset={offset}
+          onOffset={setOffset}
+          noun="products"
+        />
       )}
     </div>
   );
@@ -422,51 +546,121 @@ function Overview() {
 // On hand
 // --------------------------------------------------------------------------- //
 
+const LEVELS_PAGE = 50;
+
+/**
+ * One row per product per branch: how much is on hand, and whether that is
+ * enough (PRD 9).
+ *
+ * A shop with a few hundred products across a few branches has a few
+ * thousand rows here, so the list is narrowed before it is read and read a
+ * page at a time.  Grouping is done by asking the server for the rows in
+ * that order and drawing a heading when the value changes, which is the
+ * only kind of grouping that survives a page boundary.
+ */
 function Levels({ initialLow }: { initialLow: boolean }) {
-  const [items, setItems] = useState<StockLevel[]>([]);
+  const { session } = useSession();
+  const categories = useCategories();
+  const [page, setPage] = useState<Page<StockLevel> | null>(null);
   const [search, setSearch] = useState("");
-  const [lowOnly, setLowOnly] = useState(initialLow);
+  const [branchId, setBranchId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [status, setStatus] = useState(initialLow ? "low" : "");
+  const [order, setOrder] = useState(initialLow ? "urgent" : "product");
+  const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const chosen = ordering(LEVEL_ORDERS, order);
+  const branches = session?.branches ?? [];
+
+  useEffect(() => {
+    setOffset(0);
+  }, [search, branchId, categoryId, status, order]);
 
   useEffect(() => {
     setLoading(true);
     const timer = setTimeout(() => {
-      const request = lowOnly
-        ? api.lowStock()
-        : api.stockLevels({ q: search || undefined, limit: 200 }).then((page) => page.items);
-      request
-        .then((rows) => {
-          setItems(rows);
+      api
+        .stockLevels({
+          q: search || undefined,
+          branch_id: branchId || undefined,
+          category_id: categoryId || undefined,
+          status: status || undefined,
+          sort: chosen.sort,
+          direction: chosen.direction,
+          limit: LEVELS_PAGE,
+          offset,
+        })
+        .then((result) => {
+          setPage(result);
           setError(null);
         })
         .catch((cause) => setError(describeError(cause, "Could not load stock")))
         .finally(() => setLoading(false));
     }, 200);
     return () => clearTimeout(timer);
-  }, [search, lowOnly]);
+  }, [search, branchId, categoryId, status, chosen.sort, chosen.direction, offset]);
+
+  function headSort(by: StockSort) {
+    const flipped = chosen.sort === by && chosen.direction === "asc" ? "desc" : "asc";
+    const match = LEVEL_ORDERS.find((o) => o.sort === by && o.direction === flipped);
+    setOrder((match ?? LEVEL_ORDERS.find((o) => o.sort === by) ?? chosen).value);
+  }
+
+  /** What a row sits under, when the list is grouped at all. */
+  function grouped(row: StockLevel): string | null {
+    if (chosen.sort === "branch") return row.branch_name ?? "No branch";
+    if (chosen.sort === "category") return row.category_name ?? "No category";
+    return null;
+  }
+
+  const rows = page?.items ?? [];
+  const narrowed = Boolean(search || branchId || categoryId || status);
 
   return (
     <div className="card">
       <Alert>{error}</Alert>
-      <div className="row" style={{ marginBottom: 8 }}>
-        {!lowOnly && (
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <Field label="Search">
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Product name…" />
-            </Field>
-          </div>
+      <FilterBar>
+        <label className="field filter wide">
+          <span>Search</span>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Product name…"
+          />
+        </label>
+        {branches.length > 1 && (
+          <Picker
+            label="Branch"
+            value={branchId}
+            onChange={setBranchId}
+            options={[
+              { value: "", label: "All branches" },
+              ...branches.map((branch) => ({ value: branch.id, label: branch.name })),
+            ]}
+          />
         )}
-        <button type="button" className={lowOnly ? undefined : "secondary"} onClick={() => setLowOnly((v) => !v)}>
-          {lowOnly ? "Showing low stock" : "Show low stock"}
-        </button>
-      </div>
+        {categories.length > 0 && (
+          <Picker
+            label="Category"
+            value={categoryId}
+            onChange={setCategoryId}
+            options={[
+              { value: "", label: "Every category" },
+              ...categories.map((c) => ({ value: c.id, label: c.name })),
+            ]}
+          />
+        )}
+        <Picker label="Status" value={status} onChange={setStatus} options={STATUS_FILTERS} />
+        <Picker label="Order" value={order} onChange={setOrder} options={LEVEL_ORDERS} />
+      </FilterBar>
 
-      {items.length === 0 && !loading ? (
-        <Empty title={lowOnly ? "Nothing needs restocking" : "No stock recorded"}>
+      {rows.length === 0 && !loading ? (
+        <Empty title={narrowed ? "Nothing matches that" : "No stock recorded"}>
           <p>
-            {lowOnly
-              ? "Every tracked product is above its reorder level."
+            {narrowed
+              ? "Widen the filters, or clear the search."
               : "Add products with an opening quantity, or receive stock from a supplier."}
           </p>
         </Empty>
@@ -475,30 +669,85 @@ function Levels({ initialLow }: { initialLow: boolean }) {
           <table>
             <thead>
               <tr>
-                <th>Product</th>
-                <th>Branch</th>
-                <th className="num">On hand</th>
+                <SortableHead
+                  label="Product"
+                  by="product"
+                  sort={chosen.sort}
+                  direction={chosen.direction}
+                  onSort={headSort}
+                />
+                <SortableHead
+                  label="Branch"
+                  by="branch"
+                  sort={chosen.sort}
+                  direction={chosen.direction}
+                  onSort={headSort}
+                />
+                <SortableHead
+                  label="On hand"
+                  by="quantity"
+                  className="num"
+                  sort={chosen.sort}
+                  direction={chosen.direction}
+                  onSort={headSort}
+                />
                 <th className="num">Min</th>
                 <th className="num">Reorder at</th>
-                <th>Status</th>
+                <SortableHead
+                  label="Status"
+                  by="status"
+                  sort={chosen.sort}
+                  direction={chosen.direction}
+                  onSort={headSort}
+                />
               </tr>
             </thead>
             <tbody>
-              {items.map((row) => (
-                <tr key={`${row.variant_id}-${row.branch_id}`}>
-                  <td>{row.name}</td>
-                  <td className="muted">{row.branch_name ?? "—"}</td>
-                  <td className="num">{quantity(row.quantity)}</td>
-                  <td className="num muted">{quantity(row.min_stock)}</td>
-                  <td className="num muted">{quantity(row.reorder_level)}</td>
-                  <td className="nowrap">
-                    <Badge status={row.status} />
-                  </td>
-                </tr>
-              ))}
+              {rows.map((row, index) => {
+                const heading = grouped(row);
+                const previous = index > 0 ? grouped(rows[index - 1]) : null;
+                return (
+                  <Fragment key={`${row.variant_id}-${row.branch_id}`}>
+                    {heading && (index === 0 || heading !== previous) && (
+                      <GroupRow label={heading} span={6} />
+                    )}
+                    <tr>
+                      <td>
+                        {row.name}
+                        {row.category_name && chosen.sort !== "category" && (
+                          <div className="muted" style={{ fontSize: "0.8rem" }}>
+                            {row.category_name}
+                          </div>
+                        )}
+                      </td>
+                      {/* Under a branch heading the column would say it
+                          again on every row. */}
+                      <td className="muted">
+                        {chosen.sort === "branch" ? "" : (row.branch_name ?? "—")}
+                      </td>
+                      <td className="num">{quantity(row.quantity)}</td>
+                      <td className="num muted">{quantity(row.min_stock)}</td>
+                      <td className="num muted">{quantity(row.reorder_level)}</td>
+                      <td className="nowrap">
+                        <Badge status={row.status} />
+                      </td>
+                    </tr>
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
+      )}
+
+      {page && (
+        <Pager
+          total={page.total}
+          limit={LEVELS_PAGE}
+          offset={offset}
+          onOffset={setOffset}
+          noun="lines"
+        />
       )}
     </div>
   );
@@ -1812,29 +2061,122 @@ function ReceiveTransfer({
 // The ledger
 // --------------------------------------------------------------------------- //
 
+const LEDGER_PAGE = 50;
+
+/** Why stock moved, as a shopkeeper would say it. */
+const LEDGER_REASONS = [
+  { value: "", label: "Any reason" },
+  { value: "sale", label: "Sold" },
+  { value: "sale_return", label: "Came back" },
+  { value: "sale_void", label: "Sale voided" },
+  { value: "purchase", label: "Received" },
+  { value: "purchase_return", label: "Returned to supplier" },
+  { value: "transfer_out", label: "Sent to a branch" },
+  { value: "transfer_in", label: "Had from a branch" },
+  { value: "count_adjustment", label: "Counted" },
+  { value: "adjustment", label: "Adjusted" },
+  { value: "damage", label: "Damaged" },
+  { value: "loss", label: "Lost" },
+  { value: "opening", label: "Opening stock" },
+] as const;
+
+/**
+ * The stock ledger: every change, with who, when and why (PRD 9).
+ *
+ * Never trimmed and never reordered — an append-only record read newest
+ * first — so the only way through it is to narrow it and page it.  The
+ * names come from the server: resolving them here would mean holding the
+ * whole catalogue, and a catalogue fetched one page deep mislabels
+ * everything past it.
+ */
 function Movements() {
-  const [rows, setRows] = useState<Movement[]>([]);
-  const [names, setNames] = useState<Record<string, string>>({});
+  const { session } = useSession();
+  const [page, setPage] = useState<Page<Movement> | null>(null);
+  const [branchId, setBranchId] = useState("");
+  const [reason, setReason] = useState("");
+  const [since, setSince] = useState("");
+  const [until, setUntil] = useState("");
+  const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const branches = session?.branches ?? [];
 
   useEffect(() => {
+    setOffset(0);
+  }, [branchId, reason, since, until]);
+
+  useEffect(() => {
+    setLoading(true);
     api
-      .movements({ limit: 100 })
-      .then((page) => setRows(page.items))
-      .catch((cause) => setError(describeError(cause, "Could not load the ledger")));
-    api.products({ limit: 200 }).then((page) => {
-      const map: Record<string, string> = {};
-      for (const p of page.items) for (const v of p.variants) map[v.id] = v.display_name ?? p.name;
-      setNames(map);
-    }).catch(() => undefined);
-  }, []);
+      .movements({
+        branch_id: branchId || undefined,
+        reason: reason || undefined,
+        since: since || undefined,
+        until: until || undefined,
+        limit: LEDGER_PAGE,
+        offset,
+      })
+      .then((result) => {
+        setPage(result);
+        setError(null);
+      })
+      .catch((cause) => setError(describeError(cause, "Could not load the ledger")))
+      .finally(() => setLoading(false));
+  }, [branchId, reason, since, until, offset]);
+
+  const rows = page?.items ?? [];
+  const narrowed = Boolean(branchId || reason || since || until);
 
   return (
     <div className="card">
-      <div className="card-title">Recent movements</div>
+      <div className="card-title">Movements</div>
+      <p className="muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+        Every change to stock, newest first. Nothing here is edited or removed — a mistake is
+        corrected by a movement that undoes it, and both stay on the record.
+      </p>
       <Alert>{error}</Alert>
-      {rows.length === 0 ? (
-        <Empty title="Nothing has moved yet" />
+      <FilterBar>
+        {branches.length > 1 && (
+          <Picker
+            label="Branch"
+            value={branchId}
+            onChange={setBranchId}
+            options={[
+              { value: "", label: "All branches" },
+              ...branches.map((branch) => ({ value: branch.id, label: branch.name })),
+            ]}
+          />
+        )}
+        <Picker label="Reason" value={reason} onChange={setReason} options={LEDGER_REASONS} />
+        <label className="field filter">
+          <span>From</span>
+          <input type="date" value={since} max={until || undefined} onChange={(e) => setSince(e.target.value)} />
+        </label>
+        <label className="field filter">
+          <span>To</span>
+          <input type="date" value={until} min={since || undefined} onChange={(e) => setUntil(e.target.value)} />
+        </label>
+        {narrowed && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setBranchId("");
+              setReason("");
+              setSince("");
+              setUntil("");
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </FilterBar>
+
+      {rows.length === 0 && !loading ? (
+        <Empty title={narrowed ? "Nothing moved in that window" : "Nothing has moved yet"}>
+          {narrowed ? <p>Widen the dates, or clear the filters.</p> : undefined}
+        </Empty>
       ) : (
         <div className="table-wrap">
           <table>
@@ -1842,9 +2184,11 @@ function Movements() {
               <tr>
                 <th>When</th>
                 <th>Product</th>
+                {branches.length > 1 && <th>Branch</th>}
                 <th>Reason</th>
                 <th className="num">Change</th>
                 <th className="num">After</th>
+                <th>Who</th>
               </tr>
             </thead>
             <tbody>
@@ -1852,9 +2196,14 @@ function Movements() {
                 <tr key={m.id}>
                   <td className="muted nowrap">{dateTime(m.occurred_at)}</td>
                   <td>
-                    {names[m.variant_id] ?? "Product"}
-                    {m.note && <div className="muted" style={{ fontSize: "0.8rem" }}>{m.note}</div>}
+                    {m.product_name ?? "Product"}
+                    {m.note && (
+                      <div className="muted" style={{ fontSize: "0.8rem" }}>
+                        {m.note}
+                      </div>
+                    )}
                   </td>
+                  {branches.length > 1 && <td className="muted">{m.branch_name ?? "—"}</td>}
                   <td className="nowrap">
                     <Badge status={m.reason} />
                   </td>
@@ -1863,11 +2212,22 @@ function Movements() {
                     {quantity(m.quantity)}
                   </td>
                   <td className="num muted">{quantity(m.balance_after)}</td>
+                  <td className="muted nowrap">{m.by_name ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {page && (
+        <Pager
+          total={page.total}
+          limit={LEDGER_PAGE}
+          offset={offset}
+          onOffset={setOffset}
+          noun="movements"
+        />
       )}
     </div>
   );

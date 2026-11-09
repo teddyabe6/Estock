@@ -45,6 +45,12 @@ class MovementOut(Schema):
     occurred_at: datetime
     source_type: str | None = None
     source_id: uuid.UUID | None = None
+    #: Resolved for the ledger, so a reader is not left holding identifiers.
+    #: A client cannot resolve them itself without fetching the whole
+    #: catalogue, and silently mislabels everything past the page it fetched.
+    product_name: str | None = None
+    branch_name: str | None = None
+    by_name: str | None = None
 
 
 class StockLevelOut(BaseModel):
@@ -53,6 +59,9 @@ class StockLevelOut(BaseModel):
     name: str
     branch_id: uuid.UUID
     branch_name: str | None = None
+    #: What the row can be grouped and filtered by besides its branch.
+    category_id: uuid.UUID | None = None
+    category_name: str | None = None
     quantity: Decimal
     min_stock: Decimal | None = None
     reorder_level: Decimal | None = None
@@ -129,6 +138,8 @@ class StockOverviewRow(BaseModel):
     name: str
     sku: str | None = None
     unit: str
+    #: What the row groups under, when the list is asked for by category.
+    category_name: str | None = None
     min_stock: Decimal | None = None
     reorder_level: Decimal | None = None
     #: One entry per branch in ``StockOverviewOut.branches``, zeroes included.

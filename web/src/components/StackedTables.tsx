@@ -27,13 +27,23 @@
 
 import { useEffect } from "react";
 
-/** Column names, one per column, with a span counted once per column. */
+/**
+ * Column names, one per column, with a span counted once per column.
+ *
+ * Anything the heading hides from a screen reader is decoration — a sort
+ * arrow, an icon — and is no more part of the column's name here than it is
+ * there, so it is left out rather than read as "Product ↑".
+ */
 function headings(table: HTMLTableElement): string[] {
   const head = table.tHead?.rows[table.tHead.rows.length - 1];
   if (!head) return [];
   const names: string[] = [];
   for (const cell of Array.from(head.cells)) {
-    const text = (cell.textContent ?? "").trim();
+    const copy = cell.cloneNode(true) as HTMLElement;
+    for (const hidden of Array.from(copy.querySelectorAll("[aria-hidden='true']"))) {
+      hidden.remove();
+    }
+    const text = (copy.textContent ?? "").trim();
     for (let n = 0; n < Math.max(1, cell.colSpan); n += 1) names.push(text);
   }
   return names;

@@ -536,6 +536,9 @@ export type StockLevel = {
   name: string;
   branch_id: string;
   branch_name: string | null;
+  /** What the row groups and filters under besides its branch. */
+  category_id: string | null;
+  category_name: string | null;
   quantity: string;
   min_stock: string | null;
   reorder_level: string | null;
@@ -577,6 +580,7 @@ export type StockOverview = {
     name: string;
     sku: string | null;
     unit: string;
+    category_name: string | null;
     min_stock: string | null;
     reorder_level: string | null;
     /** Keyed by branch id; every branch in `branches` has an entry. */
@@ -589,6 +593,10 @@ export type StockOverview = {
   limit: number;
   offset: number;
 };
+
+/** What a stock list can be ordered by — and so, grouped by. */
+export type StockSort = "product" | "branch" | "category" | "quantity" | "status";
+export type OverviewSort = "product" | "category" | "total";
 
 export type StockLocation = {
   id: string;
@@ -610,6 +618,10 @@ export type Movement = {
   note: string | null;
   occurred_at: string;
   source_type: string | null;
+  /** Resolved by the API: a ledger of identifiers reads as no ledger at all. */
+  product_name: string | null;
+  branch_name: string | null;
+  by_name: string | null;
 };
 
 export type TransferBranch = {
@@ -1058,11 +1070,32 @@ export const api = {
     }),
 
   // Stock
-  stockLevels: (params: { branch_id?: string; q?: string; limit?: number } = {}) =>
-    request<Page<StockLevel>>(`/stock/levels${toQuery(params)}`),
+  stockLevels: (
+    params: {
+      branch_id?: string;
+      category_id?: string;
+      q?: string;
+      /** One status, or "low" for anything needing attention. */
+      status?: string;
+      /** The order, which is also the grouping. */
+      sort?: StockSort;
+      direction?: "asc" | "desc";
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => request<Page<StockLevel>>(`/stock/levels${toQuery(params)}`),
   lowStock: () => request<StockLevel[]>("/stock/low"),
-  stockOverview: (params: { branch_id?: string; q?: string; limit?: number; offset?: number } = {}) =>
-    request<StockOverview>(`/stock/overview${toQuery(params)}`),
+  stockOverview: (
+    params: {
+      branch_id?: string;
+      category_id?: string;
+      q?: string;
+      sort?: OverviewSort;
+      direction?: "asc" | "desc";
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => request<StockOverview>(`/stock/overview${toQuery(params)}`),
   stockSetup: () => request<BranchStockSetup[]>("/stock/setup"),
   openingSheet: (params: { branch_id: string; q?: string; limit?: number; offset?: number }) =>
     request<OpeningSheet>(`/stock/opening${toQuery(params)}`),
@@ -1077,8 +1110,19 @@ export const api = {
       body,
     }),
   exportStock: () => download("/stock/levels/export", "estock-stock.csv"),
-  movements: (params: { product_id?: string; branch_id?: string; limit?: number } = {}) =>
-    request<Page<Movement>>(`/stock/movements${toQuery(params)}`),
+  movements: (
+    params: {
+      product_id?: string;
+      variant_id?: string;
+      branch_id?: string;
+      reason?: string;
+      /** Whole days in the shop's own time zone, not the browser's. */
+      since?: string;
+      until?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => request<Page<Movement>>(`/stock/movements${toQuery(params)}`),
   adjustStock: (body: Record<string, unknown>) =>
     request<Movement>("/stock/adjust", { method: "POST", body }),
   locations: () => request<StockLocation[]>("/locations"),

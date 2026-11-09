@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query, status
 from fastapi.responses import StreamingResponse
@@ -14,8 +16,9 @@ from app.core.deps import Ctx, DbSession, WritableCtx
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
 from app.models.access import User
-from app.models.catalogue import Product, ProductVariant
+from app.models.catalogue import Category, Product, ProductVariant
 from app.models.inventory import (
+    MovementReason,
     StockBalance,
     StockCount,
     StockMovement,
@@ -74,7 +77,61 @@ from app.services.inventory import (
 router = APIRouter(prefix="/stock", tags=["stock"])
 
 
-def _levels(db, ctx, branch_id: uuid.UUID | None, q: str | None) -> list[StockLevelOut]:
+#: How urgent each status is, so "worst first" is one obvious order rather
+#: than the alphabet's opinion of the words.
+_URGENCY = {"out_of_stock": 0, "critical": 1, "warning": 2, "ok": 3}
+
+#: What a stock list can be ordered by.  Grouping is ordering: ask for the
+#: rows in category order and the category's rows arrive together, which is
+#: the only sort of grouping that survives being read a page at a time.
+LEVEL_SORTS = ("product", "branch", "category", "quantity", "status")
+
+
+def _tie_break(row: StockLevelOut) -> tuple:
+    """Within one heading, rows always read alphabetically."""
+    return (row.name.lower(), (row.branch_name or "").lower())
+
+
+#: The one column each order is really about.  A product with no category
+#: sorts last rather than first, because "uncategorised" is not a heading
+#: anybody wants at the top of the list.
+_LEVEL_KEYS = {
+    "product": lambda row: row.name.lower(),
+    "branch": lambda row: (row.branch_name or "").lower(),
+    "category": lambda row: (row.category_name or "\uffff").lower(),
+    "quantity": lambda row: row.quantity,
+    "status": lambda row: _URGENCY.get(row.status, 9),
+}
+
+
+def _sorted_levels(
+    items: list[StockLevelOut], sort: str, direction: str
+) -> list[StockLevelOut]:
+    """Order the rows, always breaking a tie alphabetically.
+
+    Sorted here rather than in SQL because status is worked out in Python
+    from three columns, and a list that sorts by one rule in the database
+    and another in the application is a list nobody can predict.
+
+    Two passes, and Python's sort is stable, so only the chosen column
+    reverses: the rows under one heading never read backwards.
+    """
+    rows = sorted(items, key=_tie_break)
+    rows.sort(key=_LEVEL_KEYS.get(sort, _tie_break), reverse=direction == "desc")
+    return rows
+
+
+def _levels(
+    db,
+    ctx,
+    branch_id: uuid.UUID | None,
+    q: str | None,
+    *,
+    category_id: uuid.UUID | None = None,
+    status_is: str | None = None,
+    sort: str = "product",
+    direction: str = "asc",
+) -> list[StockLevelOut]:
     ctx.require(Permission.STOCK_VIEW)
     allowed = ctx.visible_branch_ids(db)
     if branch_id is not None:
@@ -88,37 +145,45 @@ def _levels(db, ctx, branch_id: uuid.UUID | None, q: str | None) -> list[StockLe
             StockBalance.branch_id,
             func.sum(StockBalance.quantity).label("quantity"),
             Product.name,
+            Product.category_id,
             ProductVariant.name.label("variant_name"),
             ProductVariant.min_stock,
             ProductVariant.reorder_level,
             Branch.name.label("branch_name"),
+            Category.name.label("category_name"),
         )
         .join(Product, Product.id == StockBalance.product_id)
         .join(ProductVariant, ProductVariant.id == StockBalance.variant_id)
         .join(Branch, Branch.id == StockBalance.branch_id)
+        .outerjoin(Category, Category.id == Product.category_id)
         .where(StockBalance.tenant_id == ctx.tenant_id, StockBalance.branch_id.in_(allowed))
         .group_by(
             StockBalance.product_id,
             StockBalance.variant_id,
             StockBalance.branch_id,
             Product.name,
+            Product.category_id,
             ProductVariant.name,
             ProductVariant.min_stock,
             ProductVariant.reorder_level,
             Branch.name,
+            Category.name,
         )
     )
     if q:
         stmt = stmt.where(func.lower(Product.name).like(f"%{q.strip().lower()}%"))
+    if category_id is not None:
+        stmt = stmt.where(Product.category_id == category_id)
 
-    rows = db.execute(stmt.order_by(Product.name)).all()
-    return [
+    items = [
         StockLevelOut(
             product_id=row.product_id,
             variant_id=row.variant_id,
             name=f"{row.name} — {row.variant_name}" if row.variant_name else row.name,
             branch_id=row.branch_id,
             branch_name=row.branch_name,
+            category_id=row.category_id,
+            category_name=row.category_name,
             quantity=Decimal(row.quantity or 0),
             min_stock=row.min_stock,
             reorder_level=row.reorder_level,
@@ -126,8 +191,16 @@ def _levels(db, ctx, branch_id: uuid.UUID | None, q: str | None) -> list[StockLe
                 Decimal(row.quantity or 0), row.min_stock, row.reorder_level
             ),
         )
-        for row in rows
+        for row in db.execute(stmt).all()
     ]
+    if status_is:
+        # "low" is the question a shopkeeper actually asks: anything that
+        # needs attention, whichever shade of attention it needs.
+        wanted = (
+            {"out_of_stock", "critical", "warning"} if status_is == "low" else {status_is}
+        )
+        items = [row for row in items if row.status in wanted]
+    return _sorted_levels(items, sort, direction)
 
 
 @router.get("/levels", response_model=Page[StockLevelOut])
@@ -135,11 +208,35 @@ def stock_levels(
     ctx: Ctx,
     db: DbSession,
     branch_id: uuid.UUID | None = None,
+    category_id: uuid.UUID | None = None,
     q: str | None = None,
+    status_is: str | None = Query(
+        None,
+        alias="status",
+        pattern="^(low|out_of_stock|critical|warning|ok)$",
+        description="One status, or 'low' for anything needing attention.",
+    ),
+    sort: str = Query("product", pattern="^(product|branch|category|quantity|status)$"),
+    direction: str = Query("asc", pattern="^(asc|desc)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Page[StockLevelOut]:
-    items = _levels(db, ctx, branch_id, q)
+    """What is on hand, filtered and ordered as the reader asked (PRD 9).
+
+    The order is the grouping: rows that share a category or a branch arrive
+    together, so a heading can be drawn as the list is read and a group that
+    runs past the end of a page simply carries on at the top of the next.
+    """
+    items = _levels(
+        db,
+        ctx,
+        branch_id,
+        q,
+        category_id=category_id,
+        status_is=status_is,
+        sort=sort,
+        direction=direction,
+    )
     return Page(items=items[offset : offset + limit], total=len(items), limit=limit, offset=offset)
 
 
@@ -171,7 +268,10 @@ def overview(
     ctx: Ctx,
     db: DbSession,
     branch_id: uuid.UUID | None = None,
+    category_id: uuid.UUID | None = None,
     q: str | None = None,
+    sort: str = Query("product", pattern="^(product|category|total)$"),
+    direction: str = Query("asc", pattern="^(asc|desc)$"),
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> StockOverviewOut:
@@ -181,7 +281,17 @@ def overview(
     This answers "where is it", one row per product and a column per branch,
     so a shop with stock in the wrong place can see that at a glance.
     """
-    result = stock_overview(db, ctx, branch_id=branch_id, q=q, limit=limit, offset=offset)
+    result = stock_overview(
+        db,
+        ctx,
+        branch_id=branch_id,
+        q=q,
+        category_id=category_id,
+        sort=sort,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
     return StockOverviewOut(
         branches=[
             StockOverviewBranch(
@@ -199,6 +309,7 @@ def overview(
                 name=row.name,
                 sku=row.sku,
                 unit=row.unit,
+                category_name=row.category_name,
                 min_stock=row.min_stock,
                 reorder_level=row.reorder_level,
                 quantities=row.quantities,
@@ -238,6 +349,63 @@ def low_stock(ctx: Ctx, db: DbSession, branch_id: uuid.UUID | None = None) -> li
     ]
 
 
+def _movements_out(db, ctx, rows: list[StockMovement]) -> list[MovementOut]:
+    """Name the product, branch and person each entry refers to, in one pass.
+
+    A ledger of identifiers is not a ledger anybody can read, and a client
+    cannot resolve them itself without holding the whole catalogue — which
+    is how a long history ends up labelling everything past its first page
+    "Product".
+    """
+    if not rows:
+        return []
+
+    variants = {
+        row.id: (f"{row.product_name} — {row.variant_name}" if row.variant_name else row.product_name)
+        for row in db.execute(
+            select(
+                ProductVariant.id,
+                ProductVariant.name.label("variant_name"),
+                Product.name.label("product_name"),
+            )
+            .join(Product, Product.id == ProductVariant.product_id)
+            .where(
+                ProductVariant.tenant_id == ctx.tenant_id,
+                ProductVariant.id.in_({m.variant_id for m in rows}),
+            )
+        )
+    }
+    branches = {
+        row.id: row.name
+        for row in db.execute(
+            select(Branch.id, Branch.name).where(
+                Branch.tenant_id == ctx.tenant_id,
+                Branch.id.in_({m.branch_id for m in rows}),
+            )
+        )
+    }
+    actor_ids = {m.created_by_id for m in rows if m.created_by_id}
+    actors = (
+        {
+            row.id: row.full_name or row.email
+            for row in db.execute(
+                select(User.id, User.full_name, User.email).where(User.id.in_(actor_ids))
+            )
+        }
+        if actor_ids
+        else {}
+    )
+
+    out = []
+    for movement in rows:
+        item = MovementOut.model_validate(movement)
+        item.product_name = variants.get(movement.variant_id)
+        item.branch_name = branches.get(movement.branch_id)
+        item.by_name = actors.get(movement.created_by_id)
+        out.append(item)
+    return out
+
+
 @router.get("/movements", response_model=Page[MovementOut])
 def movements(
     ctx: Ctx,
@@ -245,6 +413,9 @@ def movements(
     product_id: uuid.UUID | None = None,
     variant_id: uuid.UUID | None = None,
     branch_id: uuid.UUID | None = None,
+    reason: MovementReason | None = None,
+    since: date | None = Query(None, description="On or after this day, the shop's time."),
+    until: date | None = Query(None, description="On or before this day, the shop's time."),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Page[MovementOut]:
@@ -262,13 +433,27 @@ def movements(
         stmt = stmt.where(StockMovement.product_id == product_id)
     if variant_id is not None:
         stmt = stmt.where(StockMovement.variant_id == variant_id)
+    if reason is not None:
+        stmt = stmt.where(StockMovement.reason == reason)
+    # A day named by the shop is a day in the shop's own time, not UTC's.
+    zone = ZoneInfo(ctx.tenant.timezone or "UTC")
+    if since is not None:
+        start = datetime.combine(since, time.min, tzinfo=zone)
+        stmt = stmt.where(StockMovement.occurred_at >= start)
+    if until is not None:
+        end = datetime.combine(until + timedelta(days=1), time.min, tzinfo=zone)
+        stmt = stmt.where(StockMovement.occurred_at < end)
 
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
-    rows = db.execute(
-        stmt.order_by(StockMovement.occurred_at.desc()).limit(limit).offset(offset)
-    ).scalars()
+    rows = list(
+        db.execute(
+            stmt.order_by(StockMovement.occurred_at.desc(), StockMovement.id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).scalars()
+    )
     return Page(
-        items=[MovementOut.model_validate(m) for m in rows],
+        items=_movements_out(db, ctx, rows),
         total=total,
         limit=limit,
         offset=offset,

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
-import { Alert, Empty, Field, PageHead } from "@/components/ui";
+import { Alert, Empty, Field, PageHead, Pick, PickList } from "@/components/ui";
 import { api, type Customer, type Product, type Variant } from "@/lib/api";
 import { money } from "@/lib/format";
 import { describeError, useSession } from "@/lib/session";
@@ -259,31 +259,21 @@ function NewSale() {
         </Field>
 
         {search && results.length > 0 && (
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                {results.slice(0, 8).map((product) => (
-                  <tr key={product.id}>
-                    <td>
-                      {product.name}
-                      {product.track_stock && (
-                        <span className="muted" style={{ fontSize: "0.82rem" }}>
-                          {" "}
-                          · {product.quantity_on_hand ?? "0"} on hand
-                        </span>
-                      )}
-                    </td>
-                    <td className="num">{money(product.variants[0]?.selling_price, currency)}</td>
-                    <td className="num">
-                      <button type="button" className="secondary" onClick={() => addProduct(product)}>
-                        Add
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <PickList>
+            {results.slice(0, 8).map((product) => (
+              <Pick
+                key={product.id}
+                onPick={() => addProduct(product)}
+                name={product.name}
+                meta={[
+                  money(product.variants[0]?.selling_price, currency),
+                  product.track_stock ? `${product.quantity_on_hand ?? "0"} on hand` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              />
+            ))}
+          </PickList>
         )}
       </div>
 

@@ -501,6 +501,12 @@ tfoot th {
     white-space: normal;
   }
 
+  /* A cell with nothing in it is a label and a blank — worse than silence,
+     because it reads as missing rather than as not applicable. */
+  table[data-stacked] td:empty {
+    display: none;
+  }
+
   table[data-stacked] td[data-label]::before {
     content: attr(data-label);
     display: table-cell;
@@ -1887,4 +1893,165 @@ ul.basket-lines {
   .console-link {
     order: 3;
   }
+}
+
+/* ---------- Narrowing a long list ---------- */
+
+/* Search, filters and order in one row that wraps rather than scrolls: on a
+   phone they stack, and every control stays reachable without a sideways
+   swipe to find the one that matters. */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+}
+
+.filter-bar .field {
+  margin-bottom: 0;
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+/* The search box earns more of the row than a two-word dropdown. */
+.filter-bar .field.wide {
+  flex: 2 1 220px;
+}
+
+.filter-bar > button {
+  flex: 0 0 auto;
+}
+
+/* A heading that reorders the list looks like the heading it replaces, not
+   like a button sitting in the table. */
+th .sort {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+
+th .sort:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+
+th.num .sort {
+  flex-direction: row-reverse;
+}
+
+.arrow {
+  opacity: 0;
+  font-size: 0.85em;
+}
+
+th .sort:hover .arrow,
+.arrow.on {
+  opacity: 1;
+}
+
+.arrow.on {
+  color: var(--brand);
+}
+
+/* The rows under one heading, ruled off from the ones under the last. */
+.group-row th {
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  padding-top: 7px;
+  padding-bottom: 7px;
+  color: var(--text);
+  font-size: 0.74rem;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.pager .muted {
+  font-size: 0.85rem;
+}
+
+/* ---------- Choosing one of a few results ---------- */
+
+.picks {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.picks li + li {
+  border-top: 1px solid var(--border);
+}
+
+/* Name, detail and action in that order and close together, so the eye does
+   not cross an empty screen to reach the thing it came to press.  The whole
+   row is the button, so there is nothing to aim at. */
+.pick {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-weight: 500;
+  text-align: left;
+}
+
+.pick:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.pick-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 400;
+}
+
+.pick-action {
+  flex: 0 0 auto;
+  padding: 1px 10px;
+  border: 1px solid var(--brand);
+  border-radius: 999px;
+  color: var(--brand);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pick:hover .pick-action {
+  background: var(--brand);
+  color: #fff;
 }
