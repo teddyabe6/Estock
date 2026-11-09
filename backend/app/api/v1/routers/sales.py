@@ -6,7 +6,7 @@ import uuid
 from datetime import date
 
 from fastapi import APIRouter, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.api.v1.serializers import sale_out, sale_return_out
 from app.core.clock import day_end, day_start
@@ -14,6 +14,8 @@ from app.core.deps import Ctx, DbSession, WritableCtx
 from app.core.errors import ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
+from app.models.contacts import Customer
+from app.models.organisation import Branch
 from app.models.sales import PaymentMethod, Sale, SaleStatus
 from app.schemas.common import Page
 from app.schemas.operations import (
@@ -89,12 +91,32 @@ def list_sales(
     db: DbSession,
     branch_id: uuid.UUID | None = None,
     customer_id: uuid.UUID | None = None,
+    q: str | None = Query(None, description="A sale number, or part of a customer's name."),
     date_from: date | None = None,
     date_to: date | None = None,
-    include_voided: bool = False,
+    status_is: str | None = Query(
+        None, alias="status", pattern="^(completed|voided|all)$"
+    ),
+    include_voided: bool = Query(
+        False,
+        description="The older spelling of status=all; status wins where both are sent.",
+    ),
+    sort: str = Query("when", pattern="^(when|total|branch)$"),
+    direction: str | None = Query(
+        None,
+        pattern="^(asc|desc)$",
+        description="Defaults to whichever way round the column is usually read.",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Page[SaleOut]:
+    """The sales ledger, narrowed and ordered as the reader asked (PRD 10).
+
+    The order is the grouping: ask for it by branch and a branch's sales
+    arrive together, so a heading can be drawn as the list is read and a
+    branch that runs past the end of a page carries on at the top of the
+    next.
+    """
     ctx.require(Permission.SALE_VIEW)
     allowed = ctx.visible_branch_ids(db)
     if branch_id is not None:
@@ -102,10 +124,27 @@ def list_sales(
         allowed = [branch_id]
 
     stmt = tenant_query(Sale, ctx.tenant_id).where(Sale.branch_id.in_(allowed))
-    if not include_voided:
+
+    # A voided sale is kept, not deleted, so it has to be findable — but it
+    # is not what somebody opening the list is usually looking for.
+    wanted = status_is or ("all" if include_voided else "completed")
+    if wanted == "completed":
         stmt = stmt.where(Sale.status == SaleStatus.COMPLETED)
+    elif wanted == "voided":
+        stmt = stmt.where(Sale.status == SaleStatus.VOIDED)
+
     if customer_id is not None:
         stmt = stmt.where(Sale.customer_id == customer_id)
+    if q and q.strip():
+        # Both halves of what is written on the receipt: its number, and
+        # whose it was.
+        needle = f"%{q.strip().lower()}%"
+        stmt = stmt.outerjoin(Customer, Customer.id == Sale.customer_id).where(
+            or_(
+                func.lower(Sale.number).like(needle),
+                func.lower(Customer.name).like(needle),
+            )
+        )
     # Day boundaries follow the business's clock, not the server's.
     if date_from is not None:
         stmt = stmt.where(Sale.sold_at >= day_start(date_from, ctx.tenant.timezone))
@@ -113,8 +152,23 @@ def list_sales(
         stmt = stmt.where(Sale.sold_at <= day_end(date_to, ctx.tenant.timezone))
 
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+
+    if sort == "branch":
+        stmt = stmt.join(Branch, Branch.id == Sale.branch_id)
+    leading = {
+        "when": Sale.sold_at,
+        "total": Sale.total_amount,
+        "branch": Branch.name if sort == "branch" else Sale.sold_at,
+    }[sort]
+    # Money and time read newest and biggest first; a heading reads A to Z.
+    facing = direction or ("asc" if sort == "branch" else "desc")
+    order = leading.desc() if facing == "desc" else leading.asc()
     rows = db.execute(
-        stmt.order_by(Sale.sold_at.desc()).limit(limit).offset(offset)
+        # Newest first within whatever the heading is, and a stable tie-break
+        # so a row never appears on two pages.
+        stmt.order_by(order, Sale.sold_at.desc(), Sale.id.desc())
+        .limit(limit)
+        .offset(offset)
     ).scalars()
     return Page(
         items=[sale_out(ctx, sale) for sale in rows],

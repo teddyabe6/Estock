@@ -594,9 +594,11 @@ export type StockOverview = {
   offset: number;
 };
 
-/** What a stock list can be ordered by — and so, grouped by. */
+/** What a list can be ordered by — and so, grouped by. */
 export type StockSort = "product" | "branch" | "category" | "quantity" | "status";
 export type OverviewSort = "product" | "category" | "total";
+export type SaleSort = "when" | "total" | "branch";
+export type CreditSort = "due" | "outstanding" | "issued" | "name";
 
 export type StockLocation = {
   id: string;
@@ -1173,8 +1175,22 @@ export const api = {
   // Sales
   createSale: (body: Record<string, unknown>) =>
     request<SaleResponse>("/sales", { method: "POST", body }),
-  sales: (params: { limit?: number; offset?: number; customer_id?: string; include_voided?: boolean } = {}) =>
-    request<Page<Sale>>(`/sales${toQuery(params)}`),
+  sales: (
+    params: {
+      branch_id?: string;
+      customer_id?: string;
+      /** A sale number, or part of a customer's name. */
+      q?: string;
+      date_from?: string;
+      date_to?: string;
+      status?: "completed" | "voided" | "all";
+      /** The order, which is also the grouping. */
+      sort?: SaleSort;
+      direction?: "asc" | "desc";
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => request<Page<Sale>>(`/sales${toQuery(params)}`),
   sale: (id: string) => request<Sale>(`/sales/${id}`),
   receipt: (id: string) => request<Receipt>(`/sales/${id}/receipt`),
   voidSale: (id: string, reason: string) =>
@@ -1198,8 +1214,19 @@ export const api = {
   // Credit
   creditSummary: (kind: "receivable" | "payable") =>
     request<CreditSummary>(`/credit/summary?kind=${kind}`),
-  creditTransactions: (params: { kind?: string; view?: string; limit?: number } = {}) =>
-    request<Page<CreditTransaction>>(`/credit/transactions${toQuery(params)}`),
+  creditTransactions: (
+    params: {
+      kind?: string;
+      view?: string;
+      branch_id?: string;
+      /** A reference, or part of the other party's name. */
+      q?: string;
+      sort?: CreditSort;
+      direction?: "asc" | "desc";
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => request<Page<CreditTransaction>>(`/credit/transactions${toQuery(params)}`),
   creditTransaction: (id: string) => request<CreditTransaction>(`/credit/transactions/${id}`),
   creditPayments: (id: string) => request<Payment[]>(`/credit/transactions/${id}/payments`),
   creditActivities: (id: string) => request<FollowUp[]>(`/credit/transactions/${id}/activities`),
@@ -1216,8 +1243,11 @@ export const api = {
     request<CreditTransaction>(`/credit/transactions/${id}/cancel`, { method: "POST", body: { reason } }),
   addFollowUp: (id: string, body: Record<string, unknown>) =>
     request<FollowUp>(`/credit/transactions/${id}/activities`, { method: "POST", body }),
-  exportCredit: (kind: string, view: string) =>
-    download(`/credit/transactions/export?kind=${kind}&view=${view}`, `estock-${kind}s.csv`),
+  exportCredit: (kind: string, view: string, q?: string) =>
+    download(
+      `/credit/transactions/export${toQuery({ kind, view, q })}`,
+      `estock-${kind}s.csv`,
+    ),
 
   // Online shop
   store: () => request<Store>("/shop/settings"),

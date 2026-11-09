@@ -6,9 +6,11 @@ import csv
 import io
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Query, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 
 from app.api.v1.serializers import credit_out
 from app.core.clock import local_today
@@ -57,6 +59,42 @@ def _counterparty_name(db, transaction: CreditTransaction) -> str | None:
     return None
 
 
+def _counterparty_names(db, rows: list[CreditTransaction]) -> dict[uuid.UUID, str]:
+    """Who each balance is with, in one query per kind rather than one per row.
+
+    The name is needed for every row anyway — to show it, to search it and
+    to order by it — so it is worth fetching once instead of a round trip
+    for each line of the page.
+    """
+    names: dict[uuid.UUID, str] = {}
+    for model, ids in (
+        (Customer, {t.customer_id for t in rows if t.customer_id}),
+        (Supplier, {t.supplier_id for t in rows if t.supplier_id}),
+    ):
+        if not ids:
+            continue
+        for row in db.execute(select(model.id, model.name).where(model.id.in_(ids))):
+            names[row.id] = row.name
+    return names
+
+
+def _outstanding(transaction: CreditTransaction) -> Decimal:
+    return Decimal(transaction.original_amount) - Decimal(transaction.amount_paid)
+
+
+#: What a list of balances can be ordered by — and so, grouped by.  Each is
+#: the one column the order is really about; the tie-break stays the
+#: reference, so rows under a heading never shuffle between requests.
+_CREDIT_KEYS = {
+    # A balance with no due date is not urgent, so it sorts after the ones
+    # that are rather than ahead of them.
+    "due": lambda t, name: (t.due_date is None, t.due_date or date.max),
+    "outstanding": lambda t, name: _outstanding(t),
+    "issued": lambda t, name: t.issued_on,
+    "name": lambda t, name: (name or "\uffff").lower(),
+}
+
+
 def _load(db, ctx, transaction_id: uuid.UUID) -> CreditTransaction:
     """One transaction the caller may see: their tenant, their branch, and
     purchasing data only with purchase:view."""
@@ -97,9 +135,23 @@ def list_transactions(
     customer_id: uuid.UUID | None = None,
     supplier_id: uuid.UUID | None = None,
     branch_id: uuid.UUID | None = None,
+    q: str | None = Query(None, description="A reference, or part of the other party's name."),
+    sort: str = Query("due", pattern="^(due|outstanding|issued|name)$"),
+    direction: str | None = Query(
+        None,
+        pattern="^(asc|desc)$",
+        description="Defaults to whichever way round the column is usually read.",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Page[CreditTransactionOut]:
+    """Who owes what, narrowed and ordered as the reader asked (PRD 11.5).
+
+    Filtered and ordered here rather than in SQL because what a view means —
+    overdue, due soon, part paid — is worked out from three columns against
+    the shop's own today, and a list that sorts by one rule in the database
+    and another in the application is a list nobody can predict.
+    """
     ctx.require(Permission.CREDIT_VIEW)
     if kind == CreditKind.PAYABLE:
         ctx.require(Permission.PURCHASE_VIEW)
@@ -120,13 +172,33 @@ def list_transactions(
 
     today = local_today(ctx.tenant.timezone)
     rows = db.execute(stmt.order_by(CreditTransaction.issued_on.desc())).scalars().all()
+    names = _counterparty_names(db, rows)
+
+    def name_of(t: CreditTransaction) -> str | None:
+        return names.get(t.customer_id or t.supplier_id)
+
     filtered = [t for t in rows if _matches_view(t, view, today)]
+    if q and q.strip():
+        needle = q.strip().lower()
+        filtered = [
+            t
+            for t in filtered
+            if needle in t.reference.lower() or needle in (name_of(t) or "").lower()
+        ]
+
+    # Reference first so ties are settled the same way every time, then the
+    # chosen column; Python's sort is stable, so only that column reverses.
+    filtered.sort(key=lambda t: t.reference)
+    key = _CREDIT_KEYS[sort]
+    # Soonest due, biggest debt, newest first, names A to Z: each column has
+    # a way round it is usually read, and that is what asking for it gives.
+    facing = direction or ("desc" if sort in ("outstanding", "issued") else "asc")
+    filtered.sort(key=lambda t: key(t, name_of(t)), reverse=facing == "desc")
 
     page = filtered[offset : offset + limit]
     return Page(
         items=[
-            credit_out(t, counterparty_name=_counterparty_name(db, t), today=today)
-            for t in page
+            credit_out(t, counterparty_name=name_of(t), today=today) for t in page
         ],
         total=len(filtered),
         limit=limit,
@@ -140,18 +212,30 @@ def export_transactions(
     db: DbSession,
     kind: CreditKind = CreditKind.RECEIVABLE,
     view: str = Query("outstanding", pattern="^(all|due_today|due_soon|overdue|outstanding|partially_paid|paid)$"),
+    q: str | None = Query(None, description="A reference, or part of the other party's name."),
 ) -> StreamingResponse:
-    """The same list as a spreadsheet, with formula characters neutralised (PRD 15, 20)."""
+    """The same list as a spreadsheet, with formula characters neutralised (PRD 15, 20).
+
+    The same list: whatever is narrowing the screen narrows the file too, or
+    the export quietly answers a different question from the one on screen.
+    """
     ctx.require(Permission.CREDIT_VIEW, Permission.REPORT_CREDIT)
     if kind == CreditKind.PAYABLE:
         ctx.require(Permission.PURCHASE_VIEW)
     allowed = ctx.visible_branch_ids(db)
     today = local_today(ctx.tenant.timezone)
-    rows = db.execute(
-        tenant_query(CreditTransaction, ctx.tenant_id)
-        .where(CreditTransaction.kind == kind, in_branches(CreditTransaction.branch_id, allowed))
-        .order_by(CreditTransaction.issued_on.desc())
-    ).scalars()
+    rows = list(
+        db.execute(
+            tenant_query(CreditTransaction, ctx.tenant_id)
+            .where(
+                CreditTransaction.kind == kind,
+                in_branches(CreditTransaction.branch_id, allowed),
+            )
+            .order_by(CreditTransaction.issued_on.desc())
+        ).scalars()
+    )
+    names = _counterparty_names(db, rows)
+    needle = q.strip().lower() if q and q.strip() else None
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -161,7 +245,10 @@ def export_transactions(
     for t in rows:
         if not _matches_view(t, view, today):
             continue
-        payload = credit_out(t, counterparty_name=_counterparty_name(db, t), today=today)
+        name = names.get(t.customer_id or t.supplier_id)
+        if needle and needle not in t.reference.lower() and needle not in (name or "").lower():
+            continue
+        payload = credit_out(t, counterparty_name=name, today=today)
         writer.writerow(
             [
                 escape_for_spreadsheet(t.reference),

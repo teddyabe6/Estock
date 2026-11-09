@@ -1,15 +1,31 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
-import { Alert, Badge, Drawer, Empty, Field, PageHead, Stat, Tabs } from "@/components/ui";
+import {
+  Alert,
+  Badge,
+  Drawer,
+  Empty,
+  Field,
+  FilterBar,
+  GroupRow,
+  PageHead,
+  Pager,
+  Picker,
+  SortableHead,
+  Stat,
+  Tabs,
+} from "@/components/ui";
 import {
   api,
+  type CreditSort,
   type CreditSummary,
   type CreditTransaction,
   type FollowUp,
+  type Page,
   type Payment,
 } from "@/lib/api";
 import { amount, dateTime, dueLabel, money, shortDate } from "@/lib/format";
@@ -27,6 +43,27 @@ const VIEWS = [
 
 type View = (typeof VIEWS)[number]["value"];
 type Kind = "receivable" | "payable";
+
+const PAGE = 50;
+
+/**
+ * An order as one choice rather than a column and a direction to assemble.
+ * By name is an order too: ask for it that way and everything one customer
+ * owes arrives together, which is all grouping is.
+ */
+const ORDERS = [
+  { value: "due", label: "Due soonest", sort: "due", direction: "asc" },
+  { value: "latest", label: "Due latest", sort: "due", direction: "desc" },
+  { value: "most", label: "Most outstanding", sort: "outstanding", direction: "desc" },
+  { value: "least", label: "Least outstanding", sort: "outstanding", direction: "asc" },
+  { value: "newest", label: "Newest first", sort: "issued", direction: "desc" },
+  { value: "name", label: "By name", sort: "name", direction: "asc" },
+] as const satisfies ReadonlyArray<{
+  value: string;
+  label: string;
+  sort: CreditSort;
+  direction: "asc" | "desc";
+}>;
 
 const PAYMENT_METHODS = [
   ["cash", "Cash"],
@@ -58,32 +95,62 @@ function Credit() {
     params.get("kind") === "payable" && canSeePayables ? "payable" : "receivable",
   );
   const [view, setView] = useState<View>("outstanding");
+  const [search, setSearch] = useState("");
+  const [branchId, setBranchId] = useState("");
+  const [order, setOrder] = useState("due");
+  const [offset, setOffset] = useState(0);
   const [summary, setSummary] = useState<CreditSummary | null>(null);
-  const [items, setItems] = useState<CreditTransaction[]>([]);
+  const [page, setPage] = useState<Page<CreditTransaction> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(params.get("open"));
 
+  const chosen = ORDERS.find((o) => o.value === order) ?? ORDERS[0];
+  const branches = session?.branches ?? [];
+  const items = page?.items ?? [];
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [summaryResult, page] = await Promise.all([
+      const [summaryResult, result] = await Promise.all([
         api.creditSummary(kind),
-        api.creditTransactions({ kind, view, limit: 200 }),
+        api.creditTransactions({
+          kind,
+          view,
+          branch_id: branchId || undefined,
+          q: search || undefined,
+          sort: chosen.sort,
+          direction: chosen.direction,
+          limit: PAGE,
+          offset,
+        }),
       ]);
       setSummary(summaryResult);
-      setItems(page.items);
+      setPage(result);
       setError(null);
     } catch (cause) {
       setError(describeError(cause, "Could not load credit"));
     } finally {
       setLoading(false);
     }
-  }, [kind, view]);
+  }, [kind, view, branchId, search, chosen.sort, chosen.direction, offset]);
 
   useEffect(() => {
-    void load();
+    const timer = setTimeout(() => void load(), 200);
+    return () => clearTimeout(timer);
   }, [load]);
+
+  // Narrowing the list invalidates where you were in it: page three of what
+  // everybody owes is not page three of what one customer owes.
+  useEffect(() => {
+    setOffset(0);
+  }, [kind, view, branchId, search, order]);
+
+  function headSort(by: CreditSort) {
+    const flipped = chosen.sort === by && chosen.direction === "asc" ? "desc" : "asc";
+    const match = ORDERS.find((o) => o.sort === by && o.direction === flipped);
+    setOrder((match ?? ORDERS.find((o) => o.sort === by) ?? chosen).value);
+  }
 
   return (
     <>
@@ -106,7 +173,11 @@ function Credit() {
               <button
                 type="button"
                 className="secondary"
-                onClick={() => api.exportCredit(kind, view).catch((c) => setError(describeError(c)))}
+                onClick={() =>
+                  api
+                    .exportCredit(kind, view, search || undefined)
+                    .catch((c) => setError(describeError(c)))
+                }
               >
                 Export CSV
               </button>
@@ -150,9 +221,34 @@ function Credit() {
       <div className="card" style={{ marginTop: 14 }}>
         <Tabs value={view} options={VIEWS} onChange={setView} />
 
+        <FilterBar>
+          <label className="field filter wide">
+            <span>
+              Search <em className="hint">reference or name</em>
+            </span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={kind === "receivable" ? "A customer, or CR-…" : "A supplier, or CR-…"}
+            />
+          </label>
+          {branches.length > 1 && (
+            <Picker
+              label="Branch"
+              value={branchId}
+              onChange={setBranchId}
+              options={[
+                { value: "", label: "All branches" },
+                ...branches.map((branch) => ({ value: branch.id, label: branch.name })),
+              ]}
+            />
+          )}
+          <Picker label="Order" value={order} onChange={setOrder} options={ORDERS} />
+        </FilterBar>
+
         {items.length === 0 && !loading ? (
-          <Empty title="Nothing here">
-            <p>No balances match this view.</p>
+          <Empty title={search ? "Nothing matches that" : "Nothing here"}>
+            <p>{search ? "Try part of the name, or the reference." : "No balances match this view."}</p>
           </Empty>
         ) : (
           <div className="table-wrap">
@@ -160,39 +256,87 @@ function Credit() {
               <thead>
                 <tr>
                   <th>Reference</th>
-                  <th>{kind === "receivable" ? "Customer" : "Supplier"}</th>
-                  <th>Due</th>
+                  <SortableHead
+                    label={kind === "receivable" ? "Customer" : "Supplier"}
+                    by="name"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
+                  <SortableHead
+                    label="Due"
+                    by="due"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
                   <th className="num">Total ({currency})</th>
                   <th className="num">Paid</th>
-                  <th className="num">Balance</th>
+                  <SortableHead
+                    label="Balance"
+                    by="outstanding"
+                    className="num"
+                    sort={chosen.sort}
+                    direction={chosen.direction}
+                    onSort={headSort}
+                  />
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((row) => (
-                  <tr key={row.id}>
-                    <td className="nowrap">
-                      <button type="button" className="link" onClick={() => setOpenId(row.id)}>
-                        {row.reference}
-                      </button>
-                    </td>
-                    <td>{row.counterparty_name ?? <span className="muted">Not named</span>}</td>
-                    <td className={row.is_overdue ? "nowrap" : "muted nowrap"}>
-                      {dueLabel(row.due_date, row.is_overdue, row.days_overdue)}
-                    </td>
-                    <td className="num">{amount(row.original_amount)}</td>
-                    <td className="num muted">{amount(row.amount_paid)}</td>
-                    <td className="num">
-                      <strong>{amount(row.balance)}</strong>
-                    </td>
-                    <td className="nowrap">
-                      <Badge status={row.status} />
-                    </td>
-                  </tr>
-                ))}
+                {items.map((row, index) => {
+                  const heading =
+                    chosen.sort === "name" &&
+                    (index === 0 ||
+                      items[index - 1].counterparty_name !== row.counterparty_name)
+                      ? (row.counterparty_name ?? "Not named")
+                      : null;
+                  return (
+                    <Fragment key={row.id}>
+                      {heading && <GroupRow label={heading} span={7} />}
+                      <tr>
+                        <td className="nowrap">
+                          <button type="button" className="link" onClick={() => setOpenId(row.id)}>
+                            {row.reference}
+                          </button>
+                        </td>
+                        {/* Under its own heading the name would be on every
+                            row of the group, saying nothing new each time. */}
+                        <td>
+                          {chosen.sort === "name" ? (
+                            ""
+                          ) : (
+                            (row.counterparty_name ?? <span className="muted">Not named</span>)
+                          )}
+                        </td>
+                        <td className={row.is_overdue ? "nowrap" : "muted nowrap"}>
+                          {dueLabel(row.due_date, row.is_overdue, row.days_overdue)}
+                        </td>
+                        <td className="num">{amount(row.original_amount)}</td>
+                        <td className="num muted">{amount(row.amount_paid)}</td>
+                        <td className="num">
+                          <strong>{amount(row.balance)}</strong>
+                        </td>
+                        <td className="nowrap">
+                          <Badge status={row.status} />
+                        </td>
+                      </tr>
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+        )}
+
+        {page && (
+          <Pager
+            total={page.total}
+            limit={PAGE}
+            offset={offset}
+            onOffset={setOffset}
+            noun="balances"
+          />
         )}
       </div>
 
