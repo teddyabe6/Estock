@@ -414,6 +414,9 @@ class SaleOut(Schema):
     number: str
     branch_id: uuid.UUID
     customer_id: uuid.UUID | None = None
+    #: Whose sale it was, so a list can be read without opening every row.
+    #: A number and a time are not what anybody remembers a sale by.
+    customer_name: str | None = None
     salesperson_id: uuid.UUID | None = None
     status: str
     sold_at: datetime

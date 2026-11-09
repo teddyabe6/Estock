@@ -217,14 +217,43 @@ void main() {
     expect(service.isOnline, isFalse);
     final callsAfterProbe = calls;
 
-    final response = await service.submit(
+    final result = await service.submit(
       path: '/sales',
       body: {'lines': []},
       summary: 'Sale · 100.00 ETB',
     );
 
-    expect(response, isNull, reason: 'queued, not posted');
+    expect(result.isQueued, isTrue, reason: 'queued, not posted');
     expect(calls, callsAfterProbe, reason: 'no request while known to be offline');
     expect(service.pendingCount, 2);
+  });
+
+  test('a refusal is told apart from a queue', () async {
+    // Both leave the caller without a document number, and they could not
+    // mean more different things to somebody standing at a counter.
+    final service = serviceWith(MockClient((request) async => http.Response(
+          jsonEncode({
+            'code': 'overpayment',
+            'message': 'Payments of 1000.00 exceed the sale total of 720.00',
+          }),
+          422,
+          headers: {'content-type': 'application/json'},
+        )));
+
+    final result = await service.submit(
+      path: '/sales',
+      body: {'lines': []},
+      summary: 'Sale · 720.00 ETB',
+    );
+
+    expect(result.isRefused, isTrue);
+    expect(result.isQueued, isFalse);
+    expect(result.reason, contains('exceed the sale total'));
+    expect(result.entryId, isNotNull);
+
+    // And the caller can throw the refused copy away, having the work in
+    // front of them still.
+    await service.dismissRejected(result.entryId!);
+    expect(await outbox.all(), isEmpty);
   });
 }

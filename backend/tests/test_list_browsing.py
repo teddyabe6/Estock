@@ -47,6 +47,30 @@ def test_a_sale_is_found_by_its_number_or_by_who_bought(client, business):
     assert numbers(by_number) == [second.number]
 
 
+def test_a_sale_says_whose_it_was(client, business):
+    """You can search by customer; the rows have to say which one you found.
+
+    A list of numbers and times identifies a sale only to somebody who
+    already knows which one they are looking for.
+    """
+    selam = business.add_customer("Selam Construction")
+    cement = business.add_product("Cement", opening_stock="100")
+    business.sell(cement, customer_id=selam.id)
+    business.sell(cement)
+
+    listed = client.get("/api/v1/sales", headers=business.headers()).json()
+    names = {row["customer_name"] for row in listed["items"]}
+
+    assert names == {"Selam Construction", None}
+
+    # And on one sale read by itself, not only in the list.
+    one = next(r for r in listed["items"] if r["customer_name"])
+    alone = client.get(
+        f"/api/v1/sales/{one['id']}", headers=business.headers()
+    ).json()
+    assert alone["customer_name"] == "Selam Construction"
+
+
 def test_a_voided_sale_is_kept_out_of_the_way_but_not_out_of_reach(
     client, business, db
 ):

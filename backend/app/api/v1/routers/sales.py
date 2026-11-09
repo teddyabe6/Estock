@@ -77,12 +77,40 @@ def record_sale(payload: SaleIn, ctx: WritableCtx, db: DbSession) -> SaleRespons
         ),
     )
     return SaleResponse(
-        sale=sale_out(ctx, result.sale),
+        sale=_named(db, ctx, result.sale),
         credit_transaction_id=(
             result.credit_transaction.id if result.credit_transaction else None
         ),
         warnings=result.warnings,
     )
+
+
+def _customer_names(
+    db: DbSession, ctx: Ctx, sales: list[Sale]
+) -> dict[uuid.UUID, str]:
+    """Whose each of these sales was, in one query rather than per row.
+
+    Resolved here rather than through a relationship on the model, so that
+    loading a sale to write to it does not quietly fetch a customer nobody
+    asked for.
+    """
+    wanted = {sale.customer_id for sale in sales if sale.customer_id is not None}
+    if not wanted:
+        return {}
+    return {
+        row.id: row.name
+        for row in db.execute(
+            select(Customer.id, Customer.name).where(
+                Customer.tenant_id == ctx.tenant_id, Customer.id.in_(wanted)
+            )
+        )
+    }
+
+
+def _named(db: DbSession, ctx: Ctx, sale: Sale) -> SaleOut:
+    """One sale, with whose it was."""
+    names = _customer_names(db, ctx, [sale])
+    return sale_out(ctx, sale, customer_name=names.get(sale.customer_id))
 
 
 @router.get("", response_model=Page[SaleOut])
@@ -170,8 +198,13 @@ def list_sales(
         .limit(limit)
         .offset(offset)
     ).scalars()
+    sales = list(rows)
+    names = _customer_names(db, ctx, sales)
     return Page(
-        items=[sale_out(ctx, sale) for sale in rows],
+        items=[
+            sale_out(ctx, sale, customer_name=names.get(sale.customer_id))
+            for sale in sales
+        ],
         total=total,
         limit=limit,
         offset=offset,
@@ -183,7 +216,7 @@ def get_sale(sale_id: uuid.UUID, ctx: Ctx, db: DbSession) -> SaleOut:
     ctx.require(Permission.SALE_VIEW)
     sale = get_tenant_object(db, Sale, sale_id, ctx.tenant_id, label="Sale")
     ctx.require_branch(sale.branch_id)
-    return sale_out(ctx, sale)
+    return _named(db, ctx, sale)
 
 
 @router.get("/{sale_id}/returnable")
@@ -309,4 +342,4 @@ def receipt(sale_id: uuid.UUID, ctx: Ctx, db: DbSession) -> dict:
 def void(sale_id: uuid.UUID, payload: VoidSaleIn, ctx: WritableCtx, db: DbSession) -> SaleOut:
     """Reverse a sale with compensating stock movements.  Nothing is deleted."""
     sale = void_sale(db, ctx, sale_id, reason=payload.reason)
-    return sale_out(ctx, sale)
+    return _named(db, ctx, sale)

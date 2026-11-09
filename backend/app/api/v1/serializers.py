@@ -152,13 +152,16 @@ def sale_return_out(ctx: AuthContext, sale_return: SaleReturn) -> SaleReturnOut:
     )
 
 
-def sale_out(ctx: AuthContext, sale: Sale) -> SaleOut:
+def sale_out(
+    ctx: AuthContext, sale: Sale, *, customer_name: str | None = None
+) -> SaleOut:
     show_cost = ctx.has(Permission.COST_VIEW)
     return SaleOut(
         id=sale.id,
         number=sale.number,
         branch_id=sale.branch_id,
         customer_id=sale.customer_id,
+        customer_name=customer_name,
         salesperson_id=sale.salesperson_id,
         status=str(sale.status),
         sold_at=sale.sold_at,

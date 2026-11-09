@@ -101,6 +101,7 @@ class Sale {
     required this.currency,
     this.branchId,
     this.customerId,
+    this.customerName,
     this.soldAt,
     this.subtotal = 0,
     this.discountTotal = 0,
@@ -123,6 +124,11 @@ class Sale {
   final String currency;
   final String? branchId;
   final String? customerId;
+
+  /// Whose sale it was.  A list of numbers and times is not something
+  /// anybody can read their own day out of.
+  final String? customerName;
+
   final DateTime? soldAt;
   final double subtotal;
   final double discountTotal;
@@ -153,6 +159,7 @@ class Sale {
         currency: json['currency'] as String? ?? 'ETB',
         branchId: json['branch_id'] as String?,
         customerId: json['customer_id'] as String?,
+        customerName: json['customer_name'] as String?,
         soldAt: DateTime.tryParse('${json['sold_at']}'),
         subtotal: double.tryParse('${json['subtotal']}') ?? 0,
         discountTotal: double.tryParse('${json['discount_total']}') ?? 0,

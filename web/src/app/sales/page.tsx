@@ -213,6 +213,7 @@ function Sales() {
               <thead>
                 <tr>
                   <th>Number</th>
+                  <th>Customer</th>
                   <SortableHead
                     label="When"
                     by="when"
@@ -242,10 +243,17 @@ function Sales() {
                       : null;
                   return (
                     <Fragment key={sale.id}>
-                      {heading && <GroupRow label={heading} span={6} />}
+                      {heading && <GroupRow label={heading} span={7} />}
                       <tr>
                         <td className="nowrap">
                           <Link href={`/sales/${sale.id}`}>{sale.number}</Link>
+                        </td>
+                        {/* You can search by customer; without the column
+                            the results do not say which one you found. */}
+                        <td>
+                          {sale.customer_name ?? (
+                            <span className="muted">Walk-in</span>
+                          )}
                         </td>
                         <td className="muted nowrap">{dateTime(sale.sold_at)}</td>
                         <td className="num">{amount(sale.total_amount)}</td>

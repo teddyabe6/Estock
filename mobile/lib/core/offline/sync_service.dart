@@ -6,6 +6,45 @@ import 'package:flutter/foundation.dart';
 import '../api_client.dart';
 import 'outbox.dart';
 
+/// What became of something handed to the server while somebody watched.
+enum Submitted {
+  /// The server took it.
+  done,
+
+  /// There was no connection, so it is waiting on this phone.
+  queued,
+
+  /// The server refused it, and said why.
+  refused,
+}
+
+/// The outcome of one submission, and what to tell the person who made it.
+///
+/// Kept apart from "queued" deliberately.  A refusal and a lost connection
+/// both leave the caller without a document number, and telling somebody
+/// standing at a counter that their sale is "saved on this phone" when the
+/// server has in fact thrown it out is the worst of both: they walk away,
+/// the goods go with the customer, and the sale never existed.
+class SubmitResult {
+  const SubmitResult(this.outcome, {this.body, this.reason, this.entryId});
+
+  final Submitted outcome;
+
+  /// What the server sent back, when it took it.
+  final Map<String, dynamic>? body;
+
+  /// Why it was refused, in the server's own words.
+  final String? reason;
+
+  /// The outbox entry, so a caller that still has the work on screen can
+  /// throw the rejected copy away rather than leave a scary banner behind.
+  final String? entryId;
+
+  bool get isDone => outcome == Submitted.done;
+  bool get isQueued => outcome == Submitted.queued;
+  bool get isRefused => outcome == Submitted.refused;
+}
+
 /// Result of one drain of the outbox.
 class SyncResult {
   const SyncResult({this.synced = 0, this.rejected = 0, this.stillPending = 0});
@@ -103,7 +142,7 @@ class SyncService extends ChangeNotifier {
   ///
   /// Returns the server's response when it went straight through, and `null`
   /// when it was queued.
-  Future<Map<String, dynamic>?> submit({
+  Future<SubmitResult> submit({
     required String path,
     required Map<String, dynamic> body,
     required String summary,
@@ -111,11 +150,23 @@ class SyncService extends ChangeNotifier {
     final entry = await _outbox.add(path: path, body: body, summary: summary);
     await refreshCounts();
 
-    if (!_online) return null;
+    if (!_online) {
+      return SubmitResult(Submitted.queued, entryId: entry.id);
+    }
 
     final response = await _attempt(entry);
     await refreshCounts();
-    return response;
+    if (entry.status == OutboxStatus.rejected) {
+      return SubmitResult(
+        Submitted.refused,
+        reason: entry.lastError,
+        entryId: entry.id,
+      );
+    }
+    if (response == null) {
+      return SubmitResult(Submitted.queued, entryId: entry.id);
+    }
+    return SubmitResult(Submitted.done, body: response, entryId: entry.id);
   }
 
   /// Drain the outbox, oldest first.

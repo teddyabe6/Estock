@@ -393,6 +393,8 @@ export type Sale = {
   number: string;
   branch_id: string;
   customer_id: string | null;
+  /** Whose sale it was; absent for a walk-in. */
+  customer_name: string | null;
   salesperson_id: string | null;
   sold_at: string;
   status: string;

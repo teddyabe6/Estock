@@ -92,6 +92,21 @@ class _SaleReturnScreenState extends State<SaleReturnScreen> {
 
   bool get _ready => _coming.isNotEmpty && _reason.text.trim().length >= 3;
 
+  /// What the goods coming back are worth.
+  ///
+  /// The one figure both sides of the counter care about, and the one this
+  /// screen never said until it was over: a customer handing back two of
+  /// something wants to hear the number before anybody agrees to it.
+  double get _worth {
+    final coming = _coming;
+    var total = 0.0;
+    for (final line in _lines) {
+      final quantity = coming[line.saleLineId];
+      if (quantity != null) total += quantity * line.unitPrice;
+    }
+    return total;
+  }
+
   /// True where somebody typed more than the line can give back.
   bool _overTyped(ReturnableLine line) {
     final typed = double.tryParse(_quantities[line.saleLineId]?.text.trim() ?? '');
@@ -150,6 +165,7 @@ class _SaleReturnScreenState extends State<SaleReturnScreen> {
   @override
   Widget build(BuildContext context) {
     final coming = _coming.length;
+    final currency = AppScope.of(context).session?.currency ?? 'ETB';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Take goods back')),
@@ -239,8 +255,9 @@ class _SaleReturnScreenState extends State<SaleReturnScreen> {
                                           ? 'Type what is coming back'
                                           : _reason.text.trim().length < 3
                                               ? 'Say why it is coming back'
-                                              : 'Take back $coming '
-                                                  'line${coming == 1 ? '' : 's'}',
+                                              : 'Take back '
+                                                  '${Money.format(_worth, currency: currency)}'
+                                                  ' of goods',
                                 ),
                               ),
                             ),

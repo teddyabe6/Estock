@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
@@ -40,6 +42,8 @@ enum _Period {
 const _pageSize = 100;
 
 class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
+  final _search = TextEditingController();
+
   List<Sale> _sales = const [];
   _Period _period = _Period.today;
   String? _branchId;
@@ -48,6 +52,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   bool _loading = true;
   bool _offline = false;
   String? _error;
+  Timer? _typing;
 
   @override
   void initState() {
@@ -55,16 +60,37 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
+  @override
+  void dispose() {
+    _typing?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Search once somebody stops typing, not once per letter.
+  void _searchLater() {
+    _typing?.cancel();
+    _typing = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _load();
+    });
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
     final state = AppScope.of(context);
     final days = _period.daysBack;
     try {
+      final needle = _search.text.trim();
       final dynamic page = await state.api.get('/sales', query: {
         'limit': '$_pageSize',
         if (_includeVoided) 'include_voided': 'true',
         if (_branchId != null) 'branch_id': _branchId!,
-        if (days != null) 'date_from': _isoDate(days),
+        // A name or a number is the whole search somebody can do from
+        // memory, and it is worth more than the window it happened in:
+        // "Selam, some time last month" beats scrolling through thirty
+        // days of receipts.
+        if (needle.isNotEmpty) 'q': needle,
+        if (days != null && needle.isEmpty) 'date_from': _isoDate(days),
       });
       if (!mounted) return;
       final payload = Map<String, dynamic>.from(page as Map);
@@ -107,6 +133,32 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: TextField(
+                controller: _search,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: 'Customer or sale number',
+                  prefixIcon: const Icon(Icons.search),
+                  isDense: true,
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () {
+                            _search.clear();
+                            _load();
+                          },
+                        ),
+                ),
+                onChanged: (_) {
+                  setState(() {});
+                  _searchLater();
+                },
+                onSubmitted: (_) => _load(),
+              ),
+            ),
             SizedBox(
               // Tall enough for a chip's 48-pixel tap target.
               height: 52,
@@ -154,11 +206,18 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                 child: Text(
                   // The figure is the sum of what is on screen, said plainly,
                   // rather than a total the page cannot actually see.
-                  _total > _sales.length
-                      ? 'First ${_sales.length} of $_total · '
-                          '${Money.format(shown, currency: currency)} shown'
-                      : '${_sales.length} sale${_sales.length == 1 ? '' : 's'} · '
-                          '${Money.format(shown, currency: currency)}',
+                  [
+                    _total > _sales.length
+                        ? 'First ${_sales.length} of $_total · '
+                            '${Money.format(shown, currency: currency)} shown'
+                        : '${_sales.length} sale'
+                            '${_sales.length == 1 ? '' : 's'} · '
+                            '${Money.format(shown, currency: currency)}',
+                    // A search looks everywhere, so the period chips are
+                    // not what is on screen and must not look as if they
+                    // were.
+                    if (_search.text.trim().isNotEmpty) 'any date',
+                  ].join(' · '),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -225,17 +284,37 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     );
   }
 
+  /// What was in it, short enough to read at a glance.
+  String? _what(Sale sale) {
+    if (sale.lines.isEmpty) return null;
+    final first = sale.lines.first.description;
+    final rest = sale.lines.length - 1;
+    return rest == 0 ? first : '$first + $rest more';
+  }
+
   Widget _row(Sale sale, String currency) {
     final theme = Theme.of(context);
+    // Lead with whatever tells one sale from another: whose it was, or
+    // failing that what was in it.  A number and a time identify a sale
+    // only to somebody who already knows which one they want, and a
+    // column of "Walk-in customer" tells them nothing at all.
+    final what = _what(sale);
+    final headline = sale.customerName ?? what ?? sale.number;
     final notes = [
+      sale.number,
       Money.dateTime(sale.soldAt),
+      if (what != null && headline != what) what,
       if (sale.balanceDue > 0) '${Money.amount(sale.balanceDue)} on credit',
       if (sale.returnedTotal > 0) '${Money.amount(sale.returnedTotal)} returned',
     ];
 
     return ListTile(
-      title: Text(sale.number),
-      subtitle: Text(notes.join(' · ')),
+      title: Text(headline, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        notes.join(' · '),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
       trailing: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.end,

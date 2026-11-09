@@ -22,6 +22,7 @@ Map<String, dynamic> _sale({
   String total = '1750.00',
   String paid = '1000.00',
   String balance = '750.00',
+  String? customerName = 'Selam Construction PLC',
   List<Map<String, dynamic>>? returns,
   String? profit,
 }) =>
@@ -29,6 +30,7 @@ Map<String, dynamic> _sale({
       'id': id,
       'number': number,
       'branch_id': 'b1',
+      'customer_name': customerName,
       'status': status,
       'sold_at': '2026-10-31T11:32:00Z',
       'subtotal': '1800.00',
@@ -109,6 +111,9 @@ final _returnable = [
   },
 ];
 
+/// Every query the sales list has sent, so a search can be checked.
+final asked = <Map<String, String>>[];
+
 /// A signed-in device, recording what it is asked to post.
 Future<(AppState, List<(String, Object?)>)> signedIn({
   List<String> permissions = const ['sale:view', 'sale:create'],
@@ -120,6 +125,7 @@ Future<(AppState, List<(String, Object?)>)> signedIn({
   final prefs = await SharedPreferences.getInstance();
   final posted = <(String, Object?)>[];
   final rows = sales ?? [_sale()];
+  asked.clear();
   final client = MockClient((request) async {
     final path = request.url.path;
     dynamic body;
@@ -153,7 +159,16 @@ Future<(AppState, List<(String, Object?)>)> signedIn({
     } else if (path.contains('/sales/')) {
       body = rows.first;
     } else if (path.endsWith('/sales')) {
-      body = {'items': rows, 'total': rows.length, 'limit': 100, 'offset': 0};
+      asked.add(request.url.queryParameters);
+      final needle = request.url.queryParameters['q']?.toLowerCase();
+      final found = needle == null
+          ? rows
+          : rows
+              .where((row) =>
+                  '${row['number']}'.toLowerCase().contains(needle) ||
+                  '${row['customer_name']}'.toLowerCase().contains(needle))
+              .toList();
+      body = {'items': found, 'total': found.length, 'limit': 100, 'offset': 0};
     } else {
       throw http.ClientException('not mocked: $path');
     }
@@ -245,10 +260,59 @@ void main() {
       final (state, _) = await signedIn();
       await open(tester, state, const SalesHistoryScreen());
 
-      expect(find.text('S-2026-000012'), findsOneWidget);
+      expect(find.textContaining('S-2026-000012'), findsOneWidget);
       expect(find.text('1,750.00 ETB'), findsOneWidget);
       expect(find.textContaining('750.00 on credit'), findsOneWidget);
       expect(find.textContaining('1 sale'), findsOneWidget);
+    });
+
+    testWidgets('a row says whose it was and what was in it', (tester) async {
+      // A number and a time identify a sale only to somebody who already
+      // knows which one they want.  What a person remembers is the
+      // customer and the goods.
+      final (state, _) = await signedIn();
+      await open(tester, state, const SalesHistoryScreen());
+
+      expect(find.text('Selam Construction PLC'), findsOneWidget);
+      expect(find.textContaining('Cement bag 50kg'), findsOneWidget);
+    });
+
+    testWidgets('a walk-in sale is known by what was in it', (tester) async {
+      final (state, _) = await signedIn(sales: [_sale(customerName: null)]);
+      await open(tester, state, const SalesHistoryScreen());
+
+      // Nothing to name it by but the goods, so the goods lead.
+      expect(find.text('Cement bag 50kg'), findsOneWidget);
+      expect(find.textContaining('S-2026-000012'), findsOneWidget);
+    });
+
+    testWidgets('it can be searched by name, across every date',
+        (tester) async {
+      final (state, _) = await signedIn(sales: [
+        _sale(),
+        _sale(
+          id: 's2',
+          number: 'S-2026-000013',
+          customerName: 'Abebe Kebede',
+          balance: '0.00',
+          paid: '1750.00',
+        ),
+      ]);
+      await open(tester, state, const SalesHistoryScreen());
+      expect(find.text('Abebe Kebede'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).first, 'selam');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(find.text('Selam Construction PLC'), findsOneWidget);
+      expect(find.text('Abebe Kebede'), findsNothing);
+
+      // Searching looks everywhere, so the window is not what is on
+      // screen and the screen must not pretend otherwise.
+      expect(asked.last['q'], 'selam');
+      expect(asked.last.containsKey('date_from'), isFalse);
+      expect(find.textContaining('any date'), findsOneWidget);
     });
 
     testWidgets('a voided sale is struck through, not hidden from itself',
@@ -365,9 +429,11 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextField, 'Why it is coming back'), 'Wrong size');
       await tester.pump();
-      expect(find.text('Take back 1 line'), findsOneWidget);
+      // Two bags at 900 each: the number both sides of the counter are
+      // waiting on, said before anybody agrees to it.
+      expect(find.text('Take back 1,800.00 ETB of goods'), findsOneWidget);
 
-      await tester.tap(find.text('Take back 1 line'));
+      await tester.tap(find.text('Take back 1,800.00 ETB of goods'));
       await tester.pumpAndSettle();
 
       final body = posted.single.$2! as Map;
@@ -392,7 +458,7 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextField, 'Why it is coming back'), 'Wrong size');
       await tester.pump();
-      await tester.tap(find.text('Take back 1 line'));
+      await tester.tap(find.text('Take back 1,800.00 ETB of goods'));
       await tester.pumpAndSettle();
 
       // Clamped on the way out, not merely complained about.
@@ -416,7 +482,7 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextField, 'Why it is coming back'), 'Broken');
       await tester.pump();
-      await tester.tap(find.text('Take back 1 line'));
+      await tester.tap(find.text('Take back 1,800.00 ETB of goods'));
       await tester.pumpAndSettle();
 
       expect(((posted.single.$2! as Map)['lines'] as List).single['restock'],

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
+import '../core/theme.dart';
 import '../core/offline/outbox.dart';
 import '../models/customer.dart';
 import '../models/product.dart';
@@ -97,8 +98,38 @@ class _SaleScreenState extends State<SaleScreen> {
   }
 
   double get _total => _lines.fold(0, (sum, line) => sum + line.total);
-  double get _paidAmount => double.tryParse(_paid.text.trim()) ?? 0;
+
+  /// What was handed over, which is not the same as what the sale is worth.
+  double get _received => double.tryParse(_paid.text.trim()) ?? 0;
+
+  /// What goes in the books: a sale is worth what it is worth, however big
+  /// the note was.  Recording the note itself would overstate the day's
+  /// takings by the change, and the server refuses it outright.
+  double get _paidAmount => _received > _total ? _total : _received;
+
+  /// What to hand back across the counter.  The one number a till is for
+  /// and the one this screen never showed: typing what the customer
+  /// actually gave you used to fail the sale with "could not be saved".
+  double get _change => (_received - _total).clamp(0, double.infinity);
+
   double get _balance => (_total - _paidAmount).clamp(0, double.infinity);
+
+  /// Round amounts somebody is likely to be handed, just above the total.
+  ///
+  /// A counter deals in notes, not in exact change: for 2,160 the customer
+  /// holds out 2,200 or 3,000, and typing it should be one tap rather than
+  /// a sum done in the head while they wait.
+  List<double> get _notes {
+    if (_total <= 0) return const [];
+    final steps = [50, 100, 500, 1000, 5000];
+    final seen = <double>{};
+    for (final step in steps) {
+      final up = (_total / step).ceil() * step.toDouble();
+      if (up > _total) seen.add(up);
+    }
+    final sorted = seen.toList()..sort();
+    return sorted.take(3).toList();
+  }
 
   void _add(Product product) {
     final variant = product.defaultVariant;
@@ -156,25 +187,39 @@ class _SaleScreenState extends State<SaleScreen> {
         'idempotency_key': _idempotencyKey,
       };
 
-      final response = await state.sync.submit(
+      final result = await state.sync.submit(
         path: '/sales',
         body: body,
         summary: 'Sale · ${Money.format(_total, currency: state.session?.currency ?? 'ETB')}',
       );
 
       if (!mounted) return;
-      final queued = response == null;
-      final number = queued
-          ? null
-          : ((response['sale'] as Map?)?['number'] as String?);
 
-      final saleId = queued
-          ? null
-          : ((response['sale'] as Map?)?['id'] as String?);
+      // A sale the server threw out is not a sale waiting to sync.  The
+      // basket stays exactly as it was, so whatever was wrong can be put
+      // right and the customer is not asked to start again; and the
+      // rejected copy goes, because the work is still here on the screen.
+      if (result.isRefused) {
+        await state.sync.dismissRejected(result.entryId!);
+        if (!mounted) return;
+        setState(() {});
+        messenger.showSnackBar(SnackBar(
+          duration: const Duration(seconds: 8),
+          content: Text(result.reason ?? 'The sale was not accepted.'),
+        ));
+        return;
+      }
+
+      final change = _change;
+      final number = (result.body?['sale'] as Map?)?['number'] as String?;
+      final saleId = (result.body?['sale'] as Map?)?['id'] as String?;
       messenger.showSnackBar(SnackBar(
-        content: Text(queued
+        content: Text(result.isQueued
             ? 'Saved on this phone. It will sync when you are back online.'
-            : 'Sale $number recorded.'),
+            : change > 0
+                ? 'Sale $number recorded. '
+                    'Change ${Money.format(change, currency: state.session?.currency ?? 'ETB')}.'
+                : 'Sale $number recorded.'),
         // The customer standing there usually wants the receipt, and this is
         // the one moment the app knows exactly which sale they mean.
         action: saleId == null || !(state.session?.can('sale:view') ?? false)
@@ -283,55 +328,109 @@ class _SaleScreenState extends State<SaleScreen> {
                 )
               : ListView.builder(
                   itemCount: _lines.length,
-                  itemBuilder: (context, index) {
-                    final line = _lines[index];
-                    final short = line.available != null &&
-                        line.quantity > line.available!;
-                    return ListTile(
-                      title: Text(line.name),
-                      subtitle: Row(
-                        children: [
-                          Text(Money.format(line.unitPrice, currency: currency)),
-                          if (short) ...[
-                            const SizedBox(width: 8),
-                            StatusChip(
-                              status: 'warning',
-                              label: 'only ${Money.quantity(line.available)} known',
-                            ),
-                          ],
-                        ],
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.remove_circle_outline),
-                            onPressed: () => setState(() {
-                              if (line.quantity <= 1) {
-                                _lines.removeAt(index);
-                              } else {
-                                line.quantity -= 1;
-                              }
-                              _paid.text = _total.toStringAsFixed(2);
-                            }),
-                          ),
-                          Text(Money.quantity(line.quantity)),
-                          IconButton(
-                            icon: const Icon(Icons.add_circle_outline),
-                            onPressed: () => setState(() {
-                              line.quantity += 1;
-                              _paid.text = _total.toStringAsFixed(2);
-                            }),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                  itemBuilder: (context, index) =>
+                      _basketLine(context, index, currency),
                 ),
         ),
         if (_lines.isNotEmpty) _paymentPanel(context, currency),
       ],
     );
+  }
+
+  /// One thing in the basket, with its sum shown.
+  ///
+  /// The price alone was all this said, so three coffees read "720.00" and
+  /// the customer querying the total had nothing to check it against — the
+  /// printed receipt did the arithmetic and the screen in front of them
+  /// did not.
+  Widget _basketLine(BuildContext context, int index, String currency) {
+    final line = _lines[index];
+    final short = line.available != null && line.quantity > line.available!;
+    final many = line.quantity != 1;
+
+    return ListTile(
+      title: Text(line.name),
+      subtitle: Row(
+        children: [
+          Flexible(
+            child: Text(
+              many
+                  ? '${Money.quantity(line.quantity)} × '
+                      '${Money.amount(line.unitPrice)} = '
+                      '${Money.format(line.total, currency: currency)}'
+                  : Money.format(line.unitPrice, currency: currency),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (short) ...[
+            const SizedBox(width: 8),
+            StatusChip(
+              status: 'warning',
+              label: 'only ${Money.quantity(line.available)} known',
+            ),
+          ],
+        ],
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.remove_circle_outline),
+            onPressed: () => setState(() {
+              if (line.quantity <= 1) {
+                _lines.removeAt(index);
+              } else {
+                line.quantity -= 1;
+              }
+              _paid.text = _total.toStringAsFixed(2);
+            }),
+          ),
+          // Twelve sacks used to be eleven taps.  The figure is the way in
+          // to typing one, so it is drawn as something you can press.
+          InkWell(
+            onTap: () => _askQuantity(line),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 36),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: Theme.of(context).dividerColor),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                Money.quantity(line.quantity),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline),
+            onPressed: () => setState(() {
+              line.quantity += 1;
+              _paid.text = _total.toStringAsFixed(2);
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Type a quantity rather than tapping up to it.
+  Future<void> _askQuantity(_CartLine line) async {
+    final typed = await showDialog<double>(
+      context: context,
+      builder: (_) => _QuantityDialog(line: line),
+    );
+    if (!mounted || typed == null) return;
+    setState(() {
+      if (typed <= 0) {
+        _lines.remove(line);
+      } else {
+        line.quantity = typed;
+      }
+      _paid.text = _total.toStringAsFixed(2);
+    });
   }
 
   Widget _paymentPanel(BuildContext context, String currency) {
@@ -382,6 +481,23 @@ class _SaleScreenState extends State<SaleScreen> {
                   ),
                 ],
               ),
+              // The notes somebody is actually holding out, so the amount
+              // received is one tap rather than a sum done in the head.
+              if (_notes.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final note in _notes)
+                      ActionChip(
+                        label: Text(Money.amount(note)),
+                        onPressed: () => setState(
+                          () => _paid.text = note.toStringAsFixed(2),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 8),
               ListTile(
                 key: const Key('customerRow'),
@@ -438,6 +554,23 @@ class _SaleScreenState extends State<SaleScreen> {
                   ),
                 ],
               ),
+              // The number the counter is waiting on, said as plainly as
+              // the total and in the same place every time.
+              if (_change > 0)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Change', style: theme.textTheme.titleMedium),
+                    Text(
+                      Money.format(_change, currency: currency),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: EstockTheme.statusColour(
+                            'ok', theme.colorScheme),
+                      ),
+                    ),
+                  ],
+                ),
               if (_balance > 0)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -458,7 +591,11 @@ class _SaleScreenState extends State<SaleScreen> {
                 onPressed: _busy ? null : _complete,
                 child: Text(_busy
                     ? 'Saving…'
-                    : 'Complete sale · ${Money.format(_total, currency: currency)}'),
+                    : _change > 0
+                        ? 'Complete sale · '
+                            '${Money.format(_change, currency: currency)} change'
+                        : 'Complete sale · '
+                            '${Money.format(_total, currency: currency)}'),
               ),
             ],
           ),
@@ -468,6 +605,62 @@ class _SaleScreenState extends State<SaleScreen> {
   }
 }
 
+
+/// Ask how many of one thing, for a quantity nobody wants to tap up to.
+///
+/// It owns its own field, and so its own controller: disposing one the
+/// moment `showDialog` returns throws, because the dialog is still on
+/// screen animating away and rebuilding the field as it goes.
+class _QuantityDialog extends StatefulWidget {
+  const _QuantityDialog({required this.line});
+
+  final _CartLine line;
+
+  @override
+  State<_QuantityDialog> createState() => _QuantityDialogState();
+}
+
+class _QuantityDialogState extends State<_QuantityDialog> {
+  late final TextEditingController _field =
+      TextEditingController(text: Money.plain(widget.line.quantity));
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
+
+  void _done() =>
+      Navigator.of(context).pop(double.tryParse(_field.text.trim()));
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.line.name),
+      content: TextField(
+        key: const Key('howMany'),
+        controller: _field,
+        autofocus: true,
+        textAlign: TextAlign.right,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: const InputDecoration(labelText: 'How many?'),
+        onSubmitted: (_) => _done(),
+      ),
+      actions: [
+        DialogActions(
+          back: OutlinedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          confirm: FilledButton(
+            onPressed: _done,
+            child: const Text('Set'),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 /// Pick a customer from the list held on the device, or add one.
 ///
