@@ -585,6 +585,12 @@ export type StockOverview = {
     reorder_level: string | null;
     /** Keyed by branch id; every branch in `branches` has an entry. */
     quantities: Record<string, string>;
+    /**
+     * The branches that have ever carried this line. A branch outside it
+     * holds none because it does not stock the thing, not because it has
+     * run out — which the zero in `quantities` cannot say on its own.
+     */
+    stocked_at: string[];
     total: string;
     status: string;
   }>;

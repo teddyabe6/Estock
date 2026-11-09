@@ -4,6 +4,7 @@ import '../core/app_state.dart';
 import '../core/money.dart';
 import '../models/product.dart';
 import '../models/session.dart';
+import '../models/stock.dart';
 import '../widgets/common.dart';
 
 /// What is on the shelves, branch by branch.
@@ -480,13 +481,14 @@ class _StockScreenState extends State<StockScreen> {
     final theme = Theme.of(context);
     final (here, elsewhere) = _held(state, product);
     final status = _status(state, product);
+    final short = _short(state, product);
 
     return ListTile(
       onTap: state.branchStock.isEmpty
           ? null
           : () => _showSpread(context, state, product),
       title: Text(product.name),
-      subtitle: _subtitle(product, elsewhere),
+      subtitle: _subtitle(state, product, elsewhere),
       trailing: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -507,22 +509,57 @@ class _StockScreenState extends State<StockScreen> {
               ],
             ),
           ),
-          if (status != 'ok') StatusChip(status: status),
+          // Beside the figure, the chip has to be about the same thing the
+          // figure is about.  With every branch in view the figure is the
+          // business's own total, and "164 bag — out of stock" beside it
+          // reads as a broken app rather than as four empty shelves; so
+          // there the chip counts the shelves instead.
+          if (status != 'ok')
+            StatusChip(
+              status: status,
+              label: short.isEmpty
+                  ? null
+                  : short.length == 1
+                      ? '1 branch short'
+                      : '${short.length} branches short',
+            ),
         ],
       ),
     );
   }
 
-  /// What is worth saying under the name: which branch has the rest of it,
-  /// or failing that what kind of thing it is.
+  /// The branches short of this product, worst first — empty unless the
+  /// list is showing all of them, and unless there is more than one.
+  List<ShortBranch> _short(AppState state, Product product) =>
+      _branchId == null && state.branchStock.branches.length > 1
+          ? state.branchStock.shortBranches(product.id)
+          : const [];
+
+  /// What is worth saying under the name: the emptiest shelf and how
+  /// little is on it, which branch has the rest of it, or failing those
+  /// what kind of thing it is.
+  ///
+  /// With every branch in view a figure can be healthy and a shelf still
+  /// empty, so the shop to go and look at is the useful thing to say — a
+  /// total of 91 across five branches is no help to the one with seven.
+  /// The count of the others is on the chip, so it is not repeated here:
+  /// one line, naming one shop, is what somebody acts on.
   ///
   /// The category is left out when it is already the answer to the question
   /// — under its own heading, or with the list filtered to it — where it
   /// would be the same word on every row.
-  Widget? _subtitle(Product product, double elsewhere) {
+  Widget? _subtitle(AppState state, Product product, double elsewhere) {
     final saidAlready = _category != null || _order == _Order.category;
+    final worst = _short(state, product).firstOrNull;
     final parts = [
-      if (elsewhere > 0) '${Money.quantity(elsewhere)} at other branches',
+      if (worst != null)
+        worst.isEmpty
+            ? 'None left at ${worst.name}'
+            : 'Down to ${Money.quantity(worst.quantity)} '
+                '${product.unitOfMeasure} at ${worst.name}',
+      if (elsewhere > 0)
+        '${Money.quantity(elsewhere)} ${product.unitOfMeasure} '
+            'at other branches',
       if (!saidAlready && product.categoryName != null) product.categoryName!,
     ];
     if (parts.isEmpty) return null;
@@ -562,23 +599,11 @@ class _StockScreenState extends State<StockScreen> {
                 ],
               ),
             ),
+            // The row says the figure; the chip beside it says whether that
+            // figure is a problem, which is the reason somebody opened this
+            // sheet after reading "Low at Merkato Main" on the list.
             for (final branch in state.branchStock.branches)
-              ListTile(
-                dense: true,
-                title: Text(
-                  branch.name,
-                  style: branch.id == _branchId
-                      ? const TextStyle(fontWeight: FontWeight.w700)
-                      : null,
-                ),
-                trailing: Text(
-                  Money.quantity(spread.at(branch.id)),
-                  style: Theme.of(sheet)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
+              _spreadRow(sheet, state, product, branch, spread),
             if (mayAsk)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
@@ -600,6 +625,53 @@ class _StockScreenState extends State<StockScreen> {
     );
   }
 
+  /// One branch's line in the spread sheet.
+  ///
+  /// The figure alone does not say whether it is a problem, and that is the
+  /// reason somebody opened this sheet after reading "Down to 7 kg at
+  /// Merkato Main" on the list, so the chip comes with it.  A branch that
+  /// does not sell the thing at all says so in words instead of showing a
+  /// nought that looks like an empty shelf.
+  Widget _spreadRow(
+    BuildContext sheet,
+    AppState state,
+    Product product,
+    StockBranch branch,
+    StockSpread spread,
+  ) {
+    final theme = Theme.of(sheet);
+    final carried = spread.carriedAt(branch.id);
+    final here = state.branchStock.statusFor(product.id, branch.id);
+    final atHand = branch.id == _branchId;
+    return ListTile(
+      dense: true,
+      title: Text(
+        atHand ? '${branch.name} (here)' : branch.name,
+        style: atHand ? const TextStyle(fontWeight: FontWeight.w700) : null,
+      ),
+      trailing: !carried
+          ? Text(
+              'does not stock it',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (here != 'ok') ...[
+                  StatusChip(status: here),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  Money.quantity(spread.at(branch.id)),
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+    );
+  }
+
   Widget _empty(AppState state) {
     if (_category != null) {
       return EmptyState(
@@ -611,10 +683,15 @@ class _StockScreenState extends State<StockScreen> {
       );
     }
     if (_lowOnly) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.inventory_2_outlined,
         title: 'Nothing needs restocking',
-        message: 'Every tracked product is above its reorder level here.',
+        // "Here" is only true when a branch is in view; with all of them
+        // showing, there is no here.
+        message: _branchId == null
+            ? 'Every tracked product is above its reorder level at every '
+                'branch.'
+            : 'Every tracked product is above its reorder level here.',
       );
     }
     if (_search.text.trim().isNotEmpty) {

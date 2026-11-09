@@ -313,6 +313,7 @@ def overview(
                 min_stock=row.min_stock,
                 reorder_level=row.reorder_level,
                 quantities=row.quantities,
+                stocked_at=sorted(row.stocked_at),
                 total=row.total,
                 status=row.status,
             )

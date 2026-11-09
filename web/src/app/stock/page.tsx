@@ -45,7 +45,7 @@ import {
   type Transfer,
   type TransferBranch,
 } from "@/lib/api";
-import { dateTime, money, quantity } from "@/lib/format";
+import { dateTime, money, quantity, worstBranchStatus } from "@/lib/format";
 import { describeError, useSession } from "@/lib/session";
 
 const TABS = [
@@ -480,12 +480,20 @@ function Overview() {
                       </td>
                       {shown.map((branch) => {
                         const held = row.quantities[branch.branch_id] ?? "0";
+                        // A branch that has never carried the line reads as
+                        // a dash, not a nought: "we do not sell it" and "we
+                        // have run out" are opposite things to act on, and
+                        // only one of them is somebody's job today.
+                        const carries =
+                          !row.stocked_at?.length ||
+                          row.stocked_at.includes(branch.branch_id);
                         return (
                           <td
                             key={branch.branch_id}
                             className={Number(held) === 0 ? "num muted" : "num"}
+                            title={carries ? undefined : "Not stocked here"}
                           >
-                            {quantity(held)}
+                            {carries ? quantity(held) : "—"}
                           </td>
                         );
                       })}
@@ -493,7 +501,11 @@ function Overview() {
                         <strong>{quantity(row.total)}</strong>
                       </td>
                       <td className="nowrap">
-                        <Badge status={row.status} />
+                        {/* The worst shelf, not the business's total: the
+                            row above already says how much there is in all,
+                            and "ok" beside a column reading 6 is the sort
+                            of thing that teaches people to ignore it. */}
+                        <Badge status={worstBranchStatus(row)} />
                       </td>
                     </tr>
                   </Fragment>

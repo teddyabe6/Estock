@@ -32,6 +32,7 @@ Map<String, dynamic> _overview() => {
           'min_stock': '5',
           'reorder_level': '20',
           'quantities': {_main: '100.000', _bole: '4.000'},
+          'stocked_at': [_main, _bole],
           'total': '104.000',
           'status': 'ok',
         },
@@ -42,7 +43,9 @@ Map<String, dynamic> _overview() => {
           'unit': 'bag',
           'min_stock': null,
           'reorder_level': null,
+          // Bole has had some and sold out; the nought is real news.
           'quantities': {_main: '12.000', _bole: '0.000'},
+          'stocked_at': [_main, _bole],
           'total': '12.000',
           'status': 'ok',
         },
@@ -54,6 +57,7 @@ Map<String, dynamic> _overview() => {
           'min_stock': null,
           'reorder_level': null,
           'quantities': {_main: '8.000', _bole: '0.000'},
+          'stocked_at': [_main, _bole],
           'total': '8.000',
           'status': 'ok',
         },
@@ -74,6 +78,18 @@ final _products = [
     'stock_status': 'ok',
     'variants': [
       {'id': 'v-cement', 'name': null, 'selling_price': '900'}
+    ],
+  },
+  {
+    'id': 'p-sugar',
+    'name': 'Sugar 50kg',
+    'unit_of_measure': 'bag',
+    'track_stock': true,
+    'quantity_on_hand': '20.000',
+    'stock_status': 'ok',
+    'variants': [
+      {'id': 'v-sugar-a', 'name': 'white', 'selling_price': '3200'},
+      {'id': 'v-sugar-b', 'name': 'brown', 'selling_price': '3100'},
     ],
   },
 ];
@@ -147,13 +163,14 @@ Future<AppState> signedIn({
     Branch(id: _bole, name: 'Bole Branch'),
   ],
   List<Map<String, dynamic>>? products,
+  Map<String, dynamic>? overview,
 }) async {
   final prefs = await SharedPreferences.getInstance();
   final client = MockClient((request) async {
     final path = request.url.path;
     dynamic body;
     if (path.endsWith('/stock/overview')) {
-      body = _overview();
+      body = overview ?? _overview();
     } else if (path.endsWith('/stock/setup')) {
       body = <dynamic>[];
     } else if (path.endsWith('/stock/transfers')) {
@@ -185,9 +202,9 @@ Future<AppState> signedIn({
   state.products = (products ?? _products)
       .map((p) => Product.fromJson(Map<String, dynamic>.from(p)))
       .toList();
-  if (products == null) {
+  if (products == null || overview != null) {
     state.branchStock =
-        StockByBranch.fromJson(Map<String, dynamic>.from(_overview()));
+        StockByBranch.fromJson(Map<String, dynamic>.from(overview ?? _overview()));
   }
   return state;
 }
@@ -241,9 +258,144 @@ void main() {
 
     test('short here is short, however much the business holds', () {
       // 104 bags across the business, 4 of them here and the minimum is 5.
-      expect(stock.statusFor('p-cement', null), 'ok');
       expect(stock.statusFor('p-cement', _bole), 'critical');
       expect(stock.statusFor('p-sugar', _bole), 'out_of_stock');
+    });
+
+    test('short at one branch is short for the business too', () {
+      // The old answer here was 'ok', because 104 bags clears a minimum of
+      // five — and that is how a shelf with four bags on it stayed hidden
+      // from the owner looking at all her branches at once.  With nothing
+      // narrowed down, the branch in the worst state is the answer.
+      expect(stock.statusFor('p-cement', null), 'critical');
+      expect(stock.statusFor('p-sugar', null), 'out_of_stock');
+    });
+
+    test('and it names the branch to go and look at', () {
+      expect(stock.shortBranches('p-cement').map((b) => b.name),
+          ['Bole Branch']);
+      expect(stock.shortBranches('p-sugar').map((b) => b.name),
+          ['Bole Branch']);
+
+      // And how little is left there, so the row can say it.
+      expect(stock.shortBranches('p-cement').single.quantity, 4);
+      expect(stock.shortBranches('p-cement').single.isEmpty, isFalse);
+      expect(stock.shortBranches('p-sugar').single.isEmpty, isTrue);
+    });
+
+    test('a product that is fine everywhere names nobody', () {
+      final plenty = StockByBranch.fromJson(Map<String, dynamic>.from({
+        ..._overview(),
+        'rows': [
+          {
+            'product_id': 'p-cement',
+            'variant_id': 'v-cement',
+            'name': 'Cement bag 50kg',
+            'unit': 'bag',
+            'min_stock': '5',
+            'reorder_level': '20',
+            'quantities': {_main: '100.000', _bole: '40.000'},
+            'total': '140.000',
+            'status': 'ok',
+          },
+        ],
+      }));
+      expect(plenty.statusFor('p-cement', null), 'ok');
+      expect(plenty.shortBranches('p-cement'), isEmpty);
+    });
+
+    test('the worst branch wins, and is named first', () {
+      final three = StockByBranch.fromJson(Map<String, dynamic>.from({
+        'branches': [
+          {'branch_id': _main, 'name': 'Merkato Main', 'is_default': true,
+            'total': '100.000'},
+          {'branch_id': _bole, 'name': 'Bole Branch', 'is_default': false,
+            'total': '10.000'},
+          {'branch_id': 'b-kality', 'name': 'Kality', 'is_default': false,
+            'total': '0.000'},
+        ],
+        'rows': [
+          {
+            'product_id': 'p-cement',
+            'variant_id': 'v-cement',
+            'name': 'Cement bag 50kg',
+            'unit': 'bag',
+            'min_stock': '5',
+            'reorder_level': '20',
+            // Plenty here, under the reorder level there, none at all at
+            // the third.
+            'quantities': {_main: '100.000', _bole: '10.000',
+              'b-kality': '0.000'},
+            'total': '110.000',
+            'status': 'ok',
+          },
+        ],
+        'grand_total': '110.000',
+        'total': 1,
+        'limit': 200,
+        'offset': 0,
+      }));
+      expect(three.statusFor('p-cement', null), 'out_of_stock');
+      expect(three.shortBranches('p-cement').map((b) => b.name),
+          ['Kality', 'Bole Branch']);
+    });
+
+    test('a branch that does not sell it is not short of it', () {
+      // Teff is a main-branch line.  Bole's nought against it says the
+      // shop does not sell teff, which is not a reason to send anybody
+      // out for a sack of it.
+      final narrow = StockByBranch.fromJson(Map<String, dynamic>.from({
+        ..._overview(),
+        'rows': [
+          {
+            'product_id': 'p-teff',
+            'variant_id': 'v-teff',
+            'name': 'Teff flour 25kg',
+            'unit': 'sack',
+            'min_stock': '10',
+            'reorder_level': '20',
+            'quantities': {_main: '60.000', _bole: '0.000'},
+            'stocked_at': [_main],
+            'total': '60.000',
+            'status': 'ok',
+          },
+        ],
+      }));
+
+      expect(narrow.statusFor('p-teff', null), 'ok');
+      expect(narrow.shortBranches('p-teff'), isEmpty);
+      expect(narrow.forProduct('p-teff')!.carriedAt(_bole), isFalse);
+      expect(narrow.forProduct('p-teff')!.carriedAt(_main), isTrue);
+
+      // Asked about Bole directly, the honest answer is still nought —
+      // somebody standing there with the shelf in front of them is not
+      // being told a different story about it.
+      expect(narrow.statusFor('p-teff', _bole), 'out_of_stock');
+    });
+
+    test('a server that does not say falls back to judging every branch', () {
+      // An older server, or a copy cached before this was recorded, must
+      // not quietly empty the restocking list.
+      final silent = StockByBranch.fromJson(Map<String, dynamic>.from({
+        ..._overview(),
+        'rows': [
+          {
+            'product_id': 'p-teff',
+            'variant_id': 'v-teff',
+            'name': 'Teff flour 25kg',
+            'unit': 'sack',
+            'min_stock': '10',
+            'reorder_level': '20',
+            'quantities': {_main: '60.000', _bole: '0.000'},
+            'total': '60.000',
+            'status': 'ok',
+          },
+        ],
+      }));
+
+      expect(silent.statusFor('p-teff', null), 'out_of_stock');
+      expect(silent.shortBranches('p-teff').map((b) => b.name),
+          ['Bole Branch']);
     });
 
     test('it survives the round trip through the device', () {
@@ -253,6 +405,9 @@ void main() {
       expect(again.branches.map((b) => b.name), ['Merkato Main', 'Bole Branch']);
       expect(again.forProduct('p-cement')!.at(_bole), 4);
       expect(again.statusFor('p-cement', _bole), 'critical');
+      // Including which branches sell it, or every cached copy would
+      // read as four empty shelves the moment it is loaded again.
+      expect(again.forProduct('p-cement')!.stockedAt, {_main, _bole});
     });
   });
 
@@ -328,22 +483,88 @@ void main() {
       // Bole's own four, and where the rest of it is.
       expect(find.text('4 bag', findRichText: true), findsOneWidget);
       expect(find.text('104 bag', findRichText: true), findsNothing);
-      expect(find.textContaining('100 at other branches'), findsOneWidget);
+      expect(find.textContaining('100 bag at other branches'), findsOneWidget);
     });
 
-    testWidgets('short at this branch shows up under the filter', (tester) async {
+    testWidgets('short at one branch shows up under the filter',
+        (tester) async {
       final state = await signedIn();
       await openStock(tester, state);
 
-      // Across the business there is plenty, so nothing is flagged.
+      // With every branch in view the four bags at Bole are still four
+      // bags, so the filter has to surface them — and say where they are,
+      // or there is nothing to act on.
       await tester.tap(find.text('Needs restocking'));
       await tester.pump();
-      expect(find.text('Cement bag 50kg'), findsNothing);
+      expect(find.text('Cement bag 50kg'), findsOneWidget);
+      expect(find.textContaining('Down to 4 bag at Bole Branch'),
+          findsOneWidget);
 
-      // At Bole there are four bags and the minimum is five.
+      // At Bole itself the branch is already the answer, so it is not
+      // repeated under the name.
       await pickBranch(tester, 'Bole Branch');
       expect(find.text('Cement bag 50kg'), findsOneWidget);
       expect(find.text('critical'), findsOneWidget);
+      expect(find.textContaining('at Bole Branch'), findsNothing);
+    });
+
+    testWidgets('an empty shelf is named as empty, not as a small number',
+        (tester) async {
+      await openStock(tester, await signedIn());
+
+      // Sugar: twelve and eight at the main branch, none at all at Bole.
+      expect(find.textContaining('None left at Bole Branch'), findsOneWidget);
+    });
+
+    testWidgets('the chip beside a business total counts shelves, not stock',
+        (tester) async {
+      // "104 bag" and "critical" side by side reads as a broken app.  With
+      // every branch in view the figure is the whole business's, so the
+      // chip has to be about branches too — but only when there is more
+      // than one of them to count.
+      final state = await signedIn();
+      await openStock(tester, state);
+
+      // Bole is short of both, and it is the only one, so each row counts
+      // one branch and names it underneath.
+      expect(find.text('critical'), findsNothing);
+      expect(find.text('out of stock'), findsNothing);
+      expect(find.text('1 branch short'), findsNWidgets(2));
+      expect(find.textContaining('Down to 4 bag at Bole Branch'),
+          findsOneWidget);
+
+      await pickBranch(tester, 'Bole Branch');
+
+      // Narrowed to one branch, the figure is that branch's own and the
+      // plain word is the honest label for it.
+      expect(find.text('critical'), findsOneWidget);
+      expect(find.text('out of stock'), findsOneWidget);
+    });
+
+    testWidgets('nothing short says so without claiming a branch',
+        (tester) async {
+      // Every product fine at both branches: the empty state must not say
+      // "here" when there is no here.
+      final state = await signedIn(products: [
+        {
+          'id': 'p-teff',
+          'name': 'Teff flour 25kg',
+          'unit_of_measure': 'sack',
+          'track_stock': true,
+          'quantity_on_hand': '60.000',
+          'stock_status': 'ok',
+          'variants': [
+            {'id': 'v-teff', 'name': null, 'selling_price': '2800'}
+          ],
+        },
+      ]);
+      await openStock(tester, state);
+
+      await tester.tap(find.text('Needs restocking'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Nothing needs restocking'), findsOneWidget);
+      expect(find.textContaining('at every branch'), findsOneWidget);
     });
 
     testWidgets('tapping a product says where the rest of it is',
@@ -356,6 +577,76 @@ void main() {
       expect(find.textContaining('104 bag across 2 branches'), findsOneWidget);
       expect(find.text('Merkato Main'), findsWidgets);
       expect(find.text('Ask another branch for some'), findsOneWidget);
+    });
+
+    testWidgets('and says plainly when a branch does not sell the thing',
+        (tester) async {
+      // Four satellite branches that each carry two lines would otherwise
+      // show a nought against everything else, which reads as an empty
+      // shelf and sends somebody out shopping for nothing.
+      final state = await signedIn(
+        products: [
+          {
+            'id': 'p-teff',
+            'name': 'Teff flour 25kg',
+            'unit_of_measure': 'sack',
+            'track_stock': true,
+            'quantity_on_hand': '60.000',
+            'stock_status': 'ok',
+            'variants': [
+              {'id': 'v-teff', 'name': null, 'selling_price': '2800'}
+            ],
+          },
+        ],
+        overview: {
+          ..._overview(),
+          'rows': [
+            {
+              'product_id': 'p-teff',
+              'variant_id': 'v-teff',
+              'name': 'Teff flour 25kg',
+              'unit': 'sack',
+              'min_stock': '10',
+              'reorder_level': '20',
+              'quantities': {_main: '60.000', _bole: '0.000'},
+              'stocked_at': [_main],
+              'total': '60.000',
+              'status': 'ok',
+            },
+          ],
+        },
+      );
+      await openStock(tester, state);
+
+      // Nothing on the row says it is short.
+      expect(find.text('1 branch short'), findsNothing);
+
+      await tester.tap(find.text('Teff flour 25kg'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('does not stock it'), findsOneWidget);
+      expect(find.text('60'), findsOneWidget);
+    });
+
+    testWidgets('and marks the shop you are standing in, and the short one',
+        (tester) async {
+      await openStock(tester, await signedIn());
+      await pickBranch(tester, 'Bole Branch');
+
+      await tester.tap(find.text('Cement bag 50kg'));
+      await tester.pumpAndSettle();
+
+      // Four bags against a minimum of five, and this is the branch in
+      // hand — both worth saying on the row itself.
+      expect(find.text('Bole Branch (here)'), findsOneWidget);
+      expect(find.text('Merkato Main'), findsWidgets);
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('critical'),
+        ),
+        findsOneWidget,
+      );
     });
   });
 

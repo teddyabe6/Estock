@@ -144,6 +144,10 @@ class StockOverviewRow(BaseModel):
     reorder_level: Decimal | None = None
     #: One entry per branch in ``StockOverviewOut.branches``, zeroes included.
     quantities: dict[uuid.UUID, Decimal]
+    #: The branches that have ever carried this variant.  A branch outside
+    #: this list holds none of it because it does not stock it, not because
+    #: it has run out — a distinction the zero in ``quantities`` loses.
+    stocked_at: list[uuid.UUID] = Field(default_factory=list)
     total: Decimal
     #: Judged on the combined total: an item is only short when no branch has
     #: enough to send.

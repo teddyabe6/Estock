@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
+import '../core/theme.dart';
 import '../models/session.dart';
 import '../widgets/common.dart';
 
@@ -126,10 +127,104 @@ class _StockCountScreenState extends State<StockCountScreen> {
     return changed;
   }
 
+  /// Each change as a sentence, for the summary before it is written.
+  List<String> get _changeLines {
+    final lines = <String>[];
+    for (final row in _rows) {
+      final variantId = row['variant_id'] as String;
+      final text = _changes[variantId];
+      if (text == null) continue;
+      final was = _recorded[variantId] ?? 0;
+      final now = double.tryParse(text) ?? 0;
+      final by = now - was;
+      lines.add(
+        '${row['name']}   ${Money.quantity(was)} → ${Money.quantity(now)}'
+        '   ${by > 0 ? '+' : '−'}${Money.quantity(by.abs())}',
+      );
+    }
+    return lines;
+  }
+
+  /// What is about to be written, before it is written.
+  ///
+  /// A count goes straight to a ledger that is never edited — a wrong
+  /// figure is corrected by another count, not taken back — and this screen
+  /// is reached with a phone in one hand halfway down a shelf.  Reading the
+  /// changes back is the difference between saving a count and saving a
+  /// typing mistake.
+  Future<bool> _confirm() async {
+    final lines = _changeLines;
+    final theme = Theme.of(context);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(sheet).size.height * 0.75,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lines.length == 1
+                          ? 'One quantity to change'
+                          : '${lines.length} quantities to change',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                    Text(
+                      'At $_branchName. The difference goes on the ledger; '
+                      'nothing already there is removed.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final line in lines)
+                      ListTile(dense: true, title: Text(line)),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: DialogActions(
+                  back: OutlinedButton(
+                    onPressed: () => Navigator.of(sheet).pop(false),
+                    child: const Text('Keep counting'),
+                  ),
+                  confirm: FilledButton(
+                    onPressed: () => Navigator.of(sheet).pop(true),
+                    child: const Text('Save the count'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return ok ?? false;
+  }
+
   Future<void> _save() async {
     final branchId = _branchId;
     final changes = _changes;
     if (branchId == null || changes.isEmpty) return;
+    if (!await _confirm()) return;
+    if (!mounted) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -222,10 +317,8 @@ class _StockCountScreenState extends State<StockCountScreen> {
             if (_locationName.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                // Progress only: the branch is named in the box above it, and
-                // saying so twice costs a line of shelf.
                 child: Text(
-                  '$_counted of $_total counted',
+                  _progress(changes),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -261,6 +354,24 @@ class _StockCountScreenState extends State<StockCountScreen> {
         ),
       ),
     );
+  }
+
+  /// How far through the walk somebody is, in their own terms.
+  ///
+  /// It used to read "12 of 12 counted", which is the server's sentence:
+  /// twelve products carry a quantity here, from any source, sales
+  /// included.  Standing in front of a shelf with every box still empty,
+  /// that reads as "finished" — the one thing it does not mean.  What the
+  /// counter wants to know is how much of their own walk is done.
+  String _progress(int written) {
+    if (_counted == 0) {
+      return 'Nothing recorded here yet · $_total to count';
+    }
+    if (written == 0) {
+      return '$_total products on this shelf list';
+    }
+    if (written == _total) return 'All $_total written down';
+    return '$written of $_total written down';
   }
 
   String _branchLabel(AppState state, Branch branch) {
@@ -299,14 +410,42 @@ class _StockCountScreenState extends State<StockCountScreen> {
         final field = _fields.putIfAbsent(variantId, TextEditingController.new);
         final onRecord = Money.parse(row['quantity']) ?? 0;
         final unit = '${row['unit'] ?? ''}';
+        final typed = double.tryParse(field.text.trim());
+        final difference = typed == null ? null : typed - onRecord;
+        final theme = Theme.of(context);
+
         return ListTile(
           title: Text(row['name'] as String? ?? ''),
           // A branch nobody has counted shows "0" against every line, which
           // reads as twelve facts when it is really one: nothing is recorded
           // yet.  There, the unit is the useful thing to say.
-          subtitle: Text(
-            onRecord > 0 ? 'On record: ${Money.quantity(onRecord)} $unit' : unit,
-          ),
+          //
+          // Once something is typed the difference takes over, because that
+          // is the figure that matters and the one that catches a slip: a
+          // missing nought reads as "−540" long before it reaches the
+          // ledger.
+          subtitle: difference == null
+              ? Text(
+                  onRecord > 0
+                      ? 'On record: ${Money.quantity(onRecord)} $unit'
+                      : unit,
+                )
+              : Text(
+                  difference == 0
+                      ? 'Same as the record'
+                      : '${difference > 0 ? '+' : '−'}'
+                          '${Money.quantity(difference.abs())} $unit '
+                          'on ${Money.quantity(onRecord)}',
+                  style: TextStyle(
+                    fontWeight:
+                        difference == 0 ? FontWeight.w400 : FontWeight.w600,
+                    color: difference == 0
+                        ? theme.colorScheme.onSurfaceVariant
+                        : difference > 0
+                            ? EstockTheme.statusColour('ok', theme.colorScheme)
+                            : theme.colorScheme.error,
+                  ),
+                ),
           trailing: SizedBox(
             width: 96,
             child: TextField(

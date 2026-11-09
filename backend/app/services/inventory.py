@@ -1553,6 +1553,11 @@ class OverviewRow:
     reorder_level: Decimal | None
     #: Quantity at each branch in the overview, including the zeroes.
     quantities: dict[uuid.UUID, Decimal]
+    #: The branches that have ever carried this variant, which is not the
+    #: same set as the ones holding some of it now.  A branch with no
+    #: balance row has never had any through its door; a branch with a
+    #: balance row at zero has sold out.  Only the second is news.
+    stocked_at: set[uuid.UUID]
     total: Decimal
     status: str
 
@@ -1707,6 +1712,14 @@ def stock_overview(
             column.branch_id: cells.get((row.id, column.branch_id), ZERO)
             for column in columns.values()
         }
+        # A missing cell and a cell at zero look alike once they are both
+        # drawn as "0", and they mean opposite things to whoever has to act
+        # on them, so which is which is carried out of here separately.
+        stocked_at = {
+            column.branch_id
+            for column in columns.values()
+            if (row.id, column.branch_id) in cells
+        }
         total = sum(quantities.values(), ZERO)
         min_stock = Decimal(row.min_stock) if row.min_stock is not None else None
         reorder = Decimal(row.reorder_level) if row.reorder_level is not None else None
@@ -1721,6 +1734,7 @@ def stock_overview(
                 min_stock=min_stock,
                 reorder_level=reorder,
                 quantities=quantities,
+                stocked_at=stocked_at,
                 total=total,
                 # Against the whole business: an item is only really short when
                 # no branch has any to send.

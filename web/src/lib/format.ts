@@ -77,6 +77,48 @@ export function dueLabel(dueDate: string | null, isOverdue: boolean, daysOverdue
   return `Due in ${days} days`;
 }
 
+/**
+ * The worst shelf of a cross-branch row, rather than the business's total.
+ *
+ * The server judges a product against everything the business holds, which
+ * is the right answer to "can we still sell this?" and the wrong one to
+ * "does anybody need to go shopping?" — five branches holding 164 bags
+ * between them reads as healthy while one of them is down to six.
+ *
+ * A branch that has never carried the line is left out: its nought means
+ * "we do not sell it", not "we have run out", and counting it would turn
+ * every satellite branch's catalogue into an emergency.
+ */
+export function worstBranchStatus(row: {
+  quantities: Record<string, string>;
+  stocked_at?: string[];
+  min_stock: string | null;
+  reorder_level: string | null;
+}): string {
+  const min = row.min_stock === null ? null : Number(row.min_stock);
+  const reorder = row.reorder_level === null ? null : Number(row.reorder_level);
+  const judge = (held: number) => {
+    if (held <= 0) return "out_of_stock";
+    if (min !== null && held <= min) return "critical";
+    if (reorder !== null && held <= reorder) return "warning";
+    return "ok";
+  };
+  const rank: Record<string, number> = {
+    out_of_stock: 0,
+    critical: 1,
+    warning: 2,
+    ok: 3,
+  };
+  const carried = row.stocked_at ?? [];
+  let worst = "ok";
+  for (const [branchId, held] of Object.entries(row.quantities)) {
+    if (carried.length && !carried.includes(branchId)) continue;
+    const here = judge(Number(held));
+    if ((rank[here] ?? 3) < (rank[worst] ?? 3)) worst = here;
+  }
+  return worst;
+}
+
 export function statusTone(status: string): "ok" | "warn" | "danger" | "muted" {
   switch (status) {
     case "paid":

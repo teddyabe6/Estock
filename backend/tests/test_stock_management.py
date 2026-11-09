@@ -56,6 +56,46 @@ def test_overview_gives_every_branch_a_column_and_the_business_a_total(business)
     assert row.variant_id == product.default_variant.id
 
 
+def test_overview_says_which_branches_have_ever_carried_a_product(business):
+    """A nought that means "we do not sell it" is not a nought to act on.
+
+    Both branches below show "0" against Oil until the warehouse records
+    some, and the two noughts mean opposite things: one branch has run out
+    and the other has never stocked it.  Drawn alike, the second kind
+    drowns the first — a satellite branch carrying two lines turns every
+    other product in the catalogue into an empty shelf.
+    """
+    from app.services.inventory import adjust_stock
+
+    _, warehouse = business.add_branch("Warehouse")
+    oil = business.add_product("Oil", opening_stock=None)
+    adjust_stock(
+        business.db,
+        business.ctx,
+        variant_id=oil.default_variant.id,
+        location_id=warehouse.id,
+        quantity=Decimal("12"),
+        reason=MovementReason.OPENING,
+        note="Counted on arrival",
+    )
+    # Sold out at the warehouse, never carried at the main branch.
+    adjust_stock(
+        business.db,
+        business.ctx,
+        variant_id=oil.default_variant.id,
+        location_id=warehouse.id,
+        quantity=Decimal("-12"),
+        reason=MovementReason.ADJUSTMENT,
+        note="All of it went",
+    )
+
+    row = next(r for r in stock_overview(business.db, business.ctx).rows)
+
+    assert row.quantities[warehouse.branch_id] == Decimal("0.000")
+    assert row.quantities[business.branch.id] == Decimal("0.000")
+    assert row.stocked_at == {warehouse.branch_id}
+
+
 def test_overview_totals_each_branch_separately(business):
     _, warehouse = business.add_branch("Warehouse")
     business.add_product("Sugar", opening_stock="10")
@@ -784,6 +824,8 @@ def test_overview_endpoint_returns_a_column_per_branch(client, business):
     assert [b["name"] for b in body["branches"]] == ["Main Branch", "Kality"]
     assert body["rows"][0]["quantities"][str(business.branch.id)] == "10.000"
     assert body["rows"][0]["quantities"][str(kality.id)] == "0.000"
+    # Kality's nought is "we have never had any", not "we have run out".
+    assert body["rows"][0]["stocked_at"] == [str(business.branch.id)]
     assert body["grand_total"] == "10.000"
     assert body["total"] == 1
 
