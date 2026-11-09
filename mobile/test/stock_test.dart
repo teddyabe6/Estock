@@ -95,12 +95,58 @@ UserSession _session(List<Branch> branches) => UserSession(
       branches: branches,
     );
 
+/// A catalogue with categories and quantities worth ordering by, for the
+/// tests about ordering and filtering rather than about branches.
+final _shelf = [
+  {
+    'id': 'p-teff',
+    'name': 'Teff flour 25kg',
+    'category_name': 'Grains',
+    'unit_of_measure': 'sack',
+    'track_stock': true,
+    'quantity_on_hand': '60.000',
+    'stock_status': 'ok',
+    'variants': [
+      {'id': 'v-teff', 'name': null, 'selling_price': '2800'}
+    ],
+  },
+  {
+    'id': 'p-sunflower',
+    'name': 'Sunflower oil 5L',
+    'category_name': 'Cooking',
+    'unit_of_measure': 'tin',
+    'track_stock': true,
+    'quantity_on_hand': '3.000',
+    'stock_status': 'critical',
+    'variants': [
+      {'id': 'v-sunflower', 'name': null, 'selling_price': '950'}
+    ],
+  },
+  {
+    'id': 'p-berbere',
+    'name': 'Berbere 1kg',
+    'category_name': 'Spices',
+    'unit_of_measure': 'kg',
+    'track_stock': true,
+    'quantity_on_hand': '18.000',
+    'stock_status': 'warning',
+    'variants': [
+      {'id': 'v-berbere', 'name': null, 'selling_price': '450'}
+    ],
+  },
+];
+
 /// A signed-in device whose server answers with the overview above.
+///
+/// [products] replaces the catalogue for tests that care about ordering;
+/// with it the branch picture is left empty, so the figures and statuses
+/// come from the catalogue itself, as they do before the first sync.
 Future<AppState> signedIn({
   List<Branch> branches = const [
     Branch(id: _main, name: 'Merkato Main', isDefault: true),
     Branch(id: _bole, name: 'Bole Branch'),
   ],
+  List<Map<String, dynamic>>? products,
 }) async {
   final prefs = await SharedPreferences.getInstance();
   final client = MockClient((request) async {
@@ -113,7 +159,13 @@ Future<AppState> signedIn({
     } else if (path.endsWith('/stock/transfers')) {
       body = <dynamic>[];
     } else if (path.endsWith('/products')) {
-      body = {'items': _products, 'total': 1, 'limit': 200, 'offset': 0};
+      final catalogue = products ?? _products;
+      body = {
+        'items': catalogue,
+        'total': catalogue.length,
+        'limit': 200,
+        'offset': 0,
+      };
     } else if (path.endsWith('/notifications')) {
       body = {'items': <dynamic>[], 'total': 0, 'unread': 0};
     } else {
@@ -130,10 +182,13 @@ Future<AppState> signedIn({
   );
   state.loading = false;
   state.session = _session(branches);
-  state.products =
-      _products.map((p) => Product.fromJson(Map<String, dynamic>.from(p))).toList();
-  state.branchStock =
-      StockByBranch.fromJson(Map<String, dynamic>.from(_overview()));
+  state.products = (products ?? _products)
+      .map((p) => Product.fromJson(Map<String, dynamic>.from(p)))
+      .toList();
+  if (products == null) {
+    state.branchStock =
+        StockByBranch.fromJson(Map<String, dynamic>.from(_overview()));
+  }
   return state;
 }
 
@@ -301,6 +356,134 @@ void main() {
       expect(find.textContaining('104 bag across 2 branches'), findsOneWidget);
       expect(find.text('Merkato Main'), findsWidgets);
       expect(find.text('Ask another branch for some'), findsOneWidget);
+    });
+  });
+
+  // ---------------------------------------------------------------------- //
+  // Finding one thing among many
+  // ---------------------------------------------------------------------- //
+
+  group('ordering and filtering', () {
+    /// The names on the list, top to bottom.
+    List<String> listed(WidgetTester tester) => tester
+        .widgetList<ListTile>(find.byType(ListTile))
+        .map((tile) => (tile.title! as Text).data!)
+        .toList();
+
+    Future<void> openSheet(WidgetTester tester) async {
+      await tester.tap(find.byTooltip('Sort and filter'));
+      await tester.pumpAndSettle();
+    }
+
+    /// Pick an option in the sheet, by name.
+    ///
+    /// Scoped to the sheet, because a category's name is also printed under
+    /// every product of it and a finder that does not say which one it
+    /// means will find the wrong one; and scrolled to, because the sheet
+    /// builds only the options on screen, as it does on a phone.
+    Future<void> choose(WidgetTester tester, String label) async {
+      Finder inSheet(String text) => find.descendant(
+            of: find.byType(BottomSheet),
+            matching: find.text(text),
+          );
+      final option = inSheet(label);
+      if (option.evaluate().isEmpty) {
+        await tester.scrollUntilVisible(
+          option,
+          80,
+          scrollable: find
+              .descendant(
+                of: find.byType(BottomSheet),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+      }
+      await tester.ensureVisible(option);
+      await tester.pumpAndSettle();
+      await tester.tap(option);
+      await tester.pumpAndSettle();
+      await tester.tap(inSheet('Done'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('it starts alphabetical', (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      expect(listed(tester),
+          ['Berbere 1kg', 'Sunflower oil 5L', 'Teff flour 25kg']);
+    });
+
+    testWidgets('most urgent first is by urgency, not by the alphabet',
+        (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      await openSheet(tester);
+      await choose(tester, 'Most urgent');
+
+      // Critical, then warning, then the one that is fine.
+      expect(listed(tester),
+          ['Sunflower oil 5L', 'Berbere 1kg', 'Teff flour 25kg']);
+    });
+
+    testWidgets('fewest and most here are opposite ends of one list',
+        (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      await openSheet(tester);
+      await choose(tester, 'Fewest here');
+      expect(listed(tester).first, 'Sunflower oil 5L');
+
+      await openSheet(tester);
+      await choose(tester, 'Most here');
+      expect(listed(tester).first, 'Teff flour 25kg');
+    });
+
+    testWidgets('by category puts a heading over each run', (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      await openSheet(tester);
+      await choose(tester, 'By category');
+
+      expect(find.text('COOKING'), findsOneWidget);
+      expect(find.text('GRAINS'), findsOneWidget);
+      expect(find.text('SPICES'), findsOneWidget);
+      expect(listed(tester),
+          ['Sunflower oil 5L', 'Teff flour 25kg', 'Berbere 1kg']);
+    });
+
+    testWidgets('one category narrows the list to it', (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      await openSheet(tester);
+      await choose(tester, 'Spices');
+
+      expect(listed(tester), ['Berbere 1kg']);
+    });
+
+    testWidgets('a narrowed list says which filter emptied it',
+        (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      await openSheet(tester);
+      await choose(tester, 'Grains');
+      await tester.tap(find.text('Needs restocking'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Nothing in Grains'), findsOneWidget);
+    });
+
+    testWidgets('the button says when the list is not as it was left',
+        (tester) async {
+      await openStock(tester, await signedIn(products: _shelf));
+
+      // Plain order, plain icon.
+      expect(find.byType(Badge), findsNothing);
+
+      await openSheet(tester);
+      await choose(tester, 'Most urgent');
+
+      expect(find.byType(Badge), findsOneWidget);
     });
   });
 }

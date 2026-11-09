@@ -46,6 +46,27 @@ List<Widget> stockTabActions(BuildContext context, AppState state) {
   ];
 }
 
+/// The orders a stock list can be put in.
+///
+/// Column and direction as one choice, not two: "fewest here" is a thing
+/// somebody wants, where "quantity, ascending" is two things they have to
+/// assemble.  By category is an order too — ask for the rows that way and a
+/// category's products arrive together, which is all grouping is.
+enum _Order {
+  name('A–Z'),
+  urgent('Most urgent'),
+  fewest('Fewest here'),
+  most('Most here'),
+  category('By category');
+
+  const _Order(this.label);
+  final String label;
+}
+
+/// How much each status is worth worrying about, so "most urgent" is one
+/// obvious order rather than the alphabet's opinion of the words.
+const _urgency = {'out_of_stock': 0, 'critical': 1, 'warning': 2, 'ok': 3};
+
 class StockScreen extends StatefulWidget {
   const StockScreen({super.key});
 
@@ -56,6 +77,11 @@ class StockScreen extends StatefulWidget {
 class _StockScreenState extends State<StockScreen> {
   final _search = TextEditingController();
   bool _lowOnly = false;
+  _Order _order = _Order.name;
+
+  /// Null means every category.  Held by name: the catalogue on the device
+  /// knows a product's category by name and nothing here needs its id.
+  String? _category;
 
   /// Null means every branch together.  A user assigned to one branch starts
   /// on it: that is the shelf they are standing in front of.
@@ -81,19 +107,27 @@ class _StockScreenState extends State<StockScreen> {
     }
 
     final products = _visible(state);
+    final rows = _rows(products);
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: TextField(
-            controller: _search,
-            textInputAction: TextInputAction.search,
-            decoration: const InputDecoration(
-              hintText: 'Search stock',
-              prefixIcon: Icon(Icons.search),
-            ),
-            onChanged: (_) => setState(() {}),
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _search,
+                  textInputAction: TextInputAction.search,
+                  decoration: const InputDecoration(
+                    hintText: 'Search stock',
+                    prefixIcon: Icon(Icons.search),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              _sortAndFilter(context),
+            ],
           ),
         ),
         _filters(context, branches, many),
@@ -104,12 +138,16 @@ class _StockScreenState extends State<StockScreen> {
               : RefreshIndicator(
                   onRefresh: state.refresh,
                   child: ListView.builder(
-                    // One past the products: the last row says how fresh the
-                    // figures above it are, which matters most offline.
-                    itemCount: products.length + 1,
-                    itemBuilder: (context, index) => index == products.length
-                        ? _freshness(context, state)
-                        : _row(context, state, products[index]),
+                    // One past the rows: the last says how fresh the figures
+                    // above it are, which matters most offline.
+                    itemCount: rows.length + 1,
+                    itemBuilder: (context, index) {
+                      if (index == rows.length) return _freshness(context, state);
+                      final row = rows[index];
+                      return row is Product
+                          ? _row(context, state, row)
+                          : _heading(context, row as String);
+                    },
                   ),
                 ),
         ),
@@ -117,15 +155,66 @@ class _StockScreenState extends State<StockScreen> {
     );
   }
 
-  /// Products matching the search and the low-stock filter, in name order.
+  /// Products matching the search and the filters, in the chosen order.
   List<Product> _visible(AppState state) {
     var products =
         state.search(_search.text).where((product) => product.trackStock).toList();
     if (_lowOnly) {
       products = products.where((product) => _status(state, product) != 'ok').toList();
     }
-    products.sort((a, b) => a.name.compareTo(b.name));
+    if (_category != null) {
+      products =
+          products.where((product) => product.categoryName == _category).toList();
+    }
+    // Alphabetical first, then stable-sorted by the chosen column, so the
+    // products under one heading never read backwards.
+    products.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    switch (_order) {
+      case _Order.name:
+        break;
+      case _Order.urgent:
+        products = _stableBy(products, (p) => _urgency[_status(state, p)] ?? 9);
+      case _Order.fewest:
+        products = _stableBy(products, (p) => _held(state, p).$1 ?? 0);
+      case _Order.most:
+        products = _stableBy(products, (p) => -(_held(state, p).$1 ?? 0));
+      case _Order.category:
+        // Uncategorised last: not a heading anybody wants at the top.
+        products = _stableBy(products, (p) => p.categoryName?.toLowerCase() ?? '\uffff');
+    }
     return products;
+  }
+
+  /// Sorted by one key, keeping the order of anything that ties.
+  List<T> _stableBy<T, K extends Comparable<Object>>(
+    List<T> items,
+    K Function(T) key,
+  ) {
+    final keyed = [
+      for (var i = 0; i < items.length; i++) (key(items[i]), i, items[i]),
+    ];
+    keyed.sort((a, b) {
+      final by = a.$1.compareTo(b.$1);
+      return by != 0 ? by : a.$2.compareTo(b.$2);
+    });
+    return [for (final entry in keyed) entry.$3];
+  }
+
+  /// The list as it is drawn: a heading before each run of one category,
+  /// and nothing extra in any other order.
+  List<Object> _rows(List<Product> products) {
+    if (_order != _Order.category) return products;
+    final rows = <Object>[];
+    String? last;
+    for (final product in products) {
+      final heading = product.categoryName ?? 'No category';
+      if (heading != last) {
+        rows.add(heading);
+        last = heading;
+      }
+      rows.add(product);
+    }
+    return rows;
   }
 
   /// What this product is worth worrying about, at the branch in view.
@@ -168,6 +257,144 @@ class _StockScreenState extends State<StockScreen> {
               _branchChip(label: branch.name, id: branch.id),
           ],
         ],
+      ),
+    );
+  }
+
+  /// Every category the catalogue actually uses, in order.
+  List<String> _categories(BuildContext context) {
+    final seen = <String>{};
+    for (final product in AppScope.of(context).products) {
+      final name = product.categoryName;
+      if (product.trackStock && name != null && name.isNotEmpty) seen.add(name);
+    }
+    final all = seen.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return all;
+  }
+
+  /// A heading over the products that share a category.
+  Widget _heading(BuildContext context, String label) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      color: theme.colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: theme.textTheme.labelSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  /// One button for the order and the category, beside the search box.
+  ///
+  /// Not another chip: the branch chips are the most used control on this
+  /// screen and anything placed ahead of them pushes them off the edge of a
+  /// phone.  A dot says the list is not in its plain order, so a filter left
+  /// on yesterday cannot quietly explain a figure today.
+  Widget _sortAndFilter(BuildContext context) {
+    final touched = _order != _Order.name || _category != null;
+    return IconButton(
+      tooltip: 'Sort and filter',
+      icon: touched
+          ? Badge(
+              smallSize: 8,
+              child: const Icon(Icons.tune),
+            )
+          : const Icon(Icons.tune),
+      onPressed: () => _openSortAndFilter(context),
+    );
+  }
+
+  void _openSortAndFilter(BuildContext context) {
+    final categories = _categories(context);
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheet, redrawSheet) {
+          void change(void Function() apply) {
+            redrawSheet(apply);
+            setState(apply);
+          }
+
+          return SafeArea(
+            child: ConstrainedBox(
+              // Never more than most of the screen, so the list behind it is
+              // still there to come back to.
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(sheet).size.height * 0.8,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // The choices scroll; the way out does not go with them.
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        _sheetHeading(sheet, 'Order'),
+                        for (final order in _Order.values)
+                          RadioListTile<_Order>(
+                            value: order,
+                            groupValue: _order,
+                            dense: true,
+                            title: Text(order.label),
+                            onChanged: (picked) =>
+                                change(() => _order = picked ?? _order),
+                          ),
+                        if (categories.isNotEmpty) ...[
+                          const Divider(height: 1),
+                          _sheetHeading(sheet, 'Category'),
+                          for (final name in <String?>[null, ...categories])
+                            RadioListTile<String?>(
+                              value: name,
+                              groupValue: _category,
+                              dense: true,
+                              title: Text(name ?? 'Any category'),
+                              onChanged: (picked) =>
+                                  change(() => _category = picked),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(sheet).pop(),
+                        child: const Text('Done'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _sheetHeading(BuildContext context, String label) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+      child: Text(
+        label.toUpperCase(),
+        style: theme.textTheme.labelSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -288,10 +515,15 @@ class _StockScreenState extends State<StockScreen> {
 
   /// What is worth saying under the name: which branch has the rest of it,
   /// or failing that what kind of thing it is.
+  ///
+  /// The category is left out when it is already the answer to the question
+  /// — under its own heading, or with the list filtered to it — where it
+  /// would be the same word on every row.
   Widget? _subtitle(Product product, double elsewhere) {
+    final saidAlready = _category != null || _order == _Order.category;
     final parts = [
       if (elsewhere > 0) '${Money.quantity(elsewhere)} at other branches',
-      if (product.categoryName != null) product.categoryName!,
+      if (!saidAlready && product.categoryName != null) product.categoryName!,
     ];
     if (parts.isEmpty) return null;
     return Text(parts.join(' · '));
@@ -369,6 +601,15 @@ class _StockScreenState extends State<StockScreen> {
   }
 
   Widget _empty(AppState state) {
+    if (_category != null) {
+      return EmptyState(
+        icon: Icons.sell_outlined,
+        title: 'Nothing in $_category',
+        message: _lowOnly
+            ? 'Nothing in this category needs restocking here.'
+            : 'Pick another category, or clear the filter.',
+      );
+    }
     if (_lowOnly) {
       return const EmptyState(
         icon: Icons.inventory_2_outlined,
