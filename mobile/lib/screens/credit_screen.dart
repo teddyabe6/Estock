@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
 import '../widgets/common.dart';
+import 'credit_detail_screen.dart';
 
 /// Receivables: who owes what, and what is overdue.
 ///
@@ -18,11 +21,29 @@ class CreditScreen extends StatefulWidget {
 }
 
 class _CreditScreenState extends State<CreditScreen> {
+  final _search = TextEditingController();
+
   Map<String, dynamic>? _summary;
   List<Map<String, dynamic>> _items = const [];
   String _view = 'outstanding';
   bool _loading = true;
   bool _offline = false;
+  Timer? _typing;
+
+  @override
+  void dispose() {
+    _typing?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Search once somebody stops typing, not once per letter.
+  void _searchLater() {
+    _typing?.cancel();
+    _typing = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _load();
+    });
+  }
 
   static const _views = <(String, String)>[
     ('outstanding', 'Outstanding'),
@@ -43,9 +64,18 @@ class _CreditScreenState extends State<CreditScreen> {
     try {
       final dynamic summary =
           await state.api.get('/credit/summary', query: {'kind': 'receivable'});
+      final needle = _search.text.trim();
       final dynamic page = await state.api.get(
         '/credit/transactions',
-        query: {'kind': 'receivable', 'view': _view, 'limit': '100'},
+        query: {
+          'kind': 'receivable',
+          // A name is worth more than the view it happens to sit in:
+          // somebody looking up "Yonas" does not know, or care, whether
+          // he is overdue or merely outstanding.
+          'view': needle.isEmpty ? _view : 'all',
+          if (needle.isNotEmpty) 'q': needle,
+          'limit': '100',
+        },
       );
       if (!mounted) return;
       setState(() {
@@ -63,6 +93,66 @@ class _CreditScreenState extends State<CreditScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// How many people owe it, in words rather than in "balance(s)".
+  static String _owing(Object? count) {
+    final many = (count as num?)?.toInt() ?? 0;
+    return many == 1 ? 'from 1 customer' : 'from $many customers';
+  }
+
+  /// One debt, and the way in to doing something about it.
+  Widget _row(
+    BuildContext context,
+    Map<String, dynamic> row,
+    String currency,
+  ) {
+    final overdue = row['is_overdue'] as bool? ?? false;
+    final status = row['status'] as String? ?? '';
+    final settled = status == 'paid';
+
+    return ListTile(
+      title: Text(row['counterparty_name'] as String? ?? 'Not named'),
+      subtitle: Text(
+        '${row['reference']} · '
+        '${Money.dueLabel(row['due_date'] as String?, overdue, row['days_overdue'] as int?)}',
+      ),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            Money.format(row['balance'], currency: currency),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          // Late is the thing worth colouring.  The chip used to carry
+          // the bookkeeping word, so the one row that needed chasing —
+          // twenty-two days overdue — wore the calmest grey on screen.
+          StatusChip(
+            status: settled
+                ? 'ok'
+                : overdue
+                    ? 'critical'
+                    : 'warning',
+            label: settled
+                ? 'paid'
+                : overdue
+                    ? 'overdue'
+                    : status.replaceAll('_', ' '),
+          ),
+        ],
+      ),
+      onTap: () async {
+        await Navigator.of(context).push<void>(MaterialPageRoute(
+          builder: (_) => CreditDetailScreen(
+            transactionId: row['id'] as String,
+          ),
+        ));
+        // Taking a payment changes the row that was tapped, and the
+        // figures above it.
+        if (mounted) await _load();
+      },
+    );
   }
 
   @override
@@ -86,7 +176,7 @@ class _CreditScreenState extends State<CreditScreen> {
                         label: 'Owed to you',
                         value: Money.format(_summary!['total_outstanding'],
                             currency: currency),
-                        note: '${_summary!['transaction_count']} balance(s)',
+                        note: _owing(_summary!['transaction_count']),
                       ),
                     ),
                     Expanded(
@@ -102,6 +192,32 @@ class _CreditScreenState extends State<CreditScreen> {
                   ],
                 ),
               ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: TextField(
+                controller: _search,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: 'Who are you looking for?',
+                  prefixIcon: const Icon(Icons.search),
+                  isDense: true,
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () {
+                            _search.clear();
+                            _load();
+                          },
+                        ),
+                ),
+                onChanged: (_) {
+                  setState(() {});
+                  _searchLater();
+                },
+                onSubmitted: (_) => _load(),
+              ),
+            ),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -111,9 +227,13 @@ class _CreditScreenState extends State<CreditScreen> {
                           padding: const EdgeInsets.only(right: 8),
                           child: ChoiceChip(
                             label: Text(entry.$2),
-                            selected: _view == entry.$1,
+                            selected: _search.text.trim().isEmpty &&
+                                _view == entry.$1,
                             onSelected: (_) {
-                              setState(() => _view = entry.$1);
+                              setState(() {
+                                _view = entry.$1;
+                                _search.clear();
+                              });
                               _load();
                             },
                           ),
@@ -141,26 +261,7 @@ class _CreditScreenState extends State<CreditScreen> {
                 message: 'No balances match this view.',
               )
             else
-              ..._items.map((row) => ListTile(
-                    title: Text(
-                      row['counterparty_name'] as String? ?? 'Not named',
-                    ),
-                    subtitle: Text(
-                      '${row['reference']} · '
-                      '${Money.dueLabel(row['due_date'] as String?, row['is_overdue'] as bool? ?? false, row['days_overdue'] as int?)}',
-                    ),
-                    trailing: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          Money.format(row['balance'], currency: currency),
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        StatusChip(status: row['status'] as String? ?? ''),
-                      ],
-                    ),
-                  )),
+              ..._items.map((row) => _row(context, row, currency)),
           ],
         ),
       ),
