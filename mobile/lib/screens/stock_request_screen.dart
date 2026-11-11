@@ -22,10 +22,16 @@ import '../widgets/common.dart';
 /// to ask for are both already known.  So the figures are shown when they
 /// are in hand, and simply left out when they are not.
 class StockRequestScreen extends StatefulWidget {
-  const StockRequestScreen({super.key, this.productId});
+  const StockRequestScreen({super.key, this.productId, this.sending = false});
 
   /// Opened from a product, so that product starts in the basket.
   final String? productId;
+
+  /// Sending what this branch has to spare, rather than asking for what it
+  /// lacks.  The same form the other way round: it leaves at once instead
+  /// of waiting to be allowed, because whoever is loading the lorry is the
+  /// one with the say over that shelf.
+  final bool sending;
 
   @override
   State<StockRequestScreen> createState() => _StockRequestScreenState();
@@ -87,11 +93,18 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
           .toList();
       setState(() {
         _branches = branches;
-        _toBranchId = branches
+        final mine = branches
             .where((branch) => branch.isMine)
             .map((branch) => branch.branchId)
-            .firstOrNull;
-        _fromBranchId = _bestSource(null);
+            .toList();
+        if (widget.sending) {
+          // Both ends have to be yours to send between them.
+          _fromBranchId = mine.firstOrNull;
+          _toBranchId = mine.where((id) => id != _fromBranchId).firstOrNull;
+        } else {
+          _toBranchId = mine.firstOrNull;
+          _fromBranchId = _bestSource(null);
+        }
         _offline = false;
         _loading = false;
       });
@@ -103,7 +116,9 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
           _add(product);
           // Now that there is something to ask for, ask the branch with
           // the most of it rather than whichever is first in the list.
-          setState(() => _fromBranchId = _bestSource(productId));
+          if (!widget.sending) {
+            setState(() => _fromBranchId = _bestSource(productId));
+          }
         }
       }
     } on ApiException catch (exception) {
@@ -173,15 +188,35 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
     final target = spread?.reorderLevel ?? spread?.minStock;
     if (spread == null || target == null) return '1';
     final gap = target - spread.at(_toBranchId);
-    return gap <= 0 ? '1' : Money.plain(gap.ceilToDouble());
+    if (gap <= 0) return '1';
+    // Sending cannot be more than is on the shelf it leaves from.
+    final there = widget.sending ? _held(productId, _fromBranchId) : null;
+    final most = there != null && there > 0 && there < gap ? there : gap;
+    return Money.plain(most.ceilToDouble());
   }
+
+  /// True where a line asks to send more than the shelf it leaves holds.
+  bool _tooMany(_RequestLine line) {
+    if (!widget.sending) return false;
+    final there = _held(line.productId, _fromBranchId);
+    final typed = double.tryParse(line.quantity.text.trim()) ?? 0;
+    return there != null && typed > there;
+  }
+
+  String _name(String? branchId) => _branches
+      .where((branch) => branch.branchId == branchId)
+      .map((branch) => branch.branchName)
+      .firstOrNull ??
+      'the other branch';
 
   bool get _ready =>
       _lines.isNotEmpty &&
       _fromBranchId != null &&
       _toBranchId != null &&
       _fromBranchId != _toBranchId &&
-      _lines.every((line) => (double.tryParse(line.quantity.text.trim()) ?? 0) > 0);
+      _lines.every((line) =>
+          (double.tryParse(line.quantity.text.trim()) ?? 0) > 0 &&
+          !_tooMany(line));
 
   Future<void> _send() async {
     if (!_ready) return;
@@ -192,15 +227,25 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
     final state = AppScope.of(context);
     final navigator = Navigator.of(context);
     try {
-      await state.api.post('/stock/requests', body: {
-        'from_location_id': _location(_fromBranchId),
-        'to_location_id': _location(_toBranchId),
-        'lines': [
-          for (final line in _lines)
-            {'variant_id': line.variantId, 'quantity': line.quantity.text.trim()}
-        ],
-        if (_note.text.trim().isNotEmpty) 'note': _note.text.trim(),
-      });
+      await state.api.post(
+        widget.sending ? '/stock/transfers' : '/stock/requests',
+        body: {
+          'from_location_id': _location(_fromBranchId),
+          'to_location_id': _location(_toBranchId),
+          'lines': [
+            for (final line in _lines)
+              {
+                'variant_id': line.variantId,
+                'quantity': line.quantity.text.trim(),
+              }
+          ],
+          if (_note.text.trim().isNotEmpty) 'note': _note.text.trim(),
+          // Written down and sent as one thing, so a shelf too empty to
+          // send from refuses both rather than leaving half of it behind.
+          if (widget.sending) 'dispatch_now': true,
+        },
+      );
+      if (widget.sending) await state.refresh();
       navigator.pop(true);
     } on ApiException catch (exception) {
       if (!mounted) return;
@@ -237,9 +282,19 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(line.name),
-                if (have != null)
+                if (_tooMany(line))
                   Text(
-                    'You have ${Money.quantity(have)} ${line.unit} here',
+                    'Only ${Money.quantity(_held(line.productId, _fromBranchId))} '
+                    '${line.unit} at ${_name(_fromBranchId)}',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.error),
+                  )
+                else if (have != null)
+                  Text(
+                    widget.sending
+                        ? '${_name(_toBranchId)} has '
+                            '${Money.quantity(have)} ${line.unit}'
+                        : 'You have ${Money.quantity(have)} ${line.unit} here',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
@@ -285,14 +340,20 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     final mine = _branches.where((branch) => branch.isMine).toList();
-    final sources =
-        _branches.where((branch) => branch.branchId != _toBranchId).toList();
+    final sending = widget.sending;
+    // Asking can be of any branch; sending is from one of your own.
+    final sources = sending
+        ? mine
+        : _branches.where((branch) => branch.branchId != _toBranchId).toList();
+    final destinations = sending
+        ? mine.where((branch) => branch.branchId != _fromBranchId).toList()
+        : mine;
     final results = _search.text.trim().isEmpty
         ? const <Product>[]
         : state.search(_search.text).where((product) => product.trackStock).take(6).toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Ask for stock')),
+      appBar: AppBar(title: Text(sending ? 'Send stock' : 'Ask for stock')),
       body: SafeArea(
         child: _loading
             ? const Center(child: CircularProgressIndicator())
@@ -304,13 +365,17 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                         'A request has to reach the branch you are asking, so '
                         'it cannot wait in the outbox.',
                   )
-                : mine.isEmpty || _branches.length < 2
-                    ? const EmptyState(
+                : mine.isEmpty ||
+                        _branches.length < 2 ||
+                        (sending && mine.length < 2)
+                    ? EmptyState(
                         icon: Icons.store_outlined,
                         title: 'Only one branch',
-                        message:
-                            'A request needs another branch to ask. Add one '
-                            'under Settings on the web first.',
+                        message: sending
+                            ? 'Sending needs two branches you work at. Ask '
+                                'the other branch for stock instead.'
+                            : 'A request needs another branch to ask. Add '
+                                'one under Settings on the web first.',
                       )
                     : ListView(
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -319,9 +384,11 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                             value: sources.any((b) => b.branchId == _fromBranchId)
                                 ? _fromBranchId
                                 : null,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: 'From',
-                              helperText: 'The branch you are asking',
+                              helperText: sending
+                                  ? 'Where it is leaving'
+                                  : 'The branch you are asking',
                             ),
                             items: [
                               for (final branch in sources)
@@ -330,18 +397,25 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                                   child: Text(_sourceLabel(branch)),
                                 ),
                             ],
-                            onChanged: (value) =>
-                                setState(() => _fromBranchId = value),
+                            onChanged: (value) => setState(() {
+                              _fromBranchId = value;
+                              if (_toBranchId == value) _toBranchId = null;
+                            }),
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
-                            value: _toBranchId,
-                            decoration: const InputDecoration(
+                            value: destinations
+                                    .any((b) => b.branchId == _toBranchId)
+                                ? _toBranchId
+                                : null,
+                            decoration: InputDecoration(
                               labelText: 'To',
-                              helperText: 'Where you need it',
+                              helperText: sending
+                                  ? 'Where it is going'
+                                  : 'Where you need it',
                             ),
                             items: [
-                              for (final branch in mine)
+                              for (final branch in destinations)
                                 DropdownMenuItem(
                                   value: branch.branchId,
                                   child: Text(branch.branchName),
@@ -385,9 +459,12 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                           const SizedBox(height: 8),
                           TextField(
                             controller: _note,
-                            decoration: const InputDecoration(
-                              labelText: 'Why you need it',
-                              hintText: 'e.g. sold out before lunch',
+                            decoration: InputDecoration(
+                              labelText:
+                                  sending ? 'Note' : 'Why you need it',
+                              hintText: sending
+                                  ? 'optional — for whoever unloads it'
+                                  : 'e.g. sold out before lunch',
                             ),
                           ),
                           if (_error != null) ...[
@@ -408,12 +485,21 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                                   ? 'Sending…'
                                   : _lines.isEmpty
                                       ? 'Add a product first'
-                                      : 'Send the request',
+                                      : _lines.any(_tooMany)
+                                          ? 'That is more than is there'
+                                          : sending
+                                              ? 'Send it now'
+                                              : 'Send the request',
                             ),
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Nothing moves until it is allowed and you take it up.',
+                            sending
+                                ? 'It leaves ${_name(_fromBranchId)} now, and goes '
+                                    'on the shelves at ${_name(_toBranchId)} when '
+                                    'somebody there says it arrived.'
+                                : 'Nothing moves until it is allowed and you '
+                                    'take it up.',
                             textAlign: TextAlign.center,
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                   color: Theme.of(context)

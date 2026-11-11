@@ -958,6 +958,81 @@ def test_a_rejection_over_http_needs_a_reason(client, business):
     assert given.json()["decision_note"] == "Needed here"
 
 
+def test_stock_can_be_sent_in_the_same_breath_as_it_is_written_down(client, business):
+    """Loading a lorry is one act, so it is one request.
+
+    It leaves the sending branch at once, shows as on its way, and arrives
+    when the other end says so.
+    """
+    product = business.add_product("Cement", opening_stock="100")
+    _, location = business.add_branch("Kality")
+    headers = business.headers()
+    branches = {
+        b["branch_name"]: b
+        for b in client.get("/api/v1/stock/branches", headers=headers).json()
+    }
+
+    sent = client.post(
+        "/api/v1/stock/transfers",
+        headers=headers,
+        json={
+            "from_location_id": branches["Main Branch"]["location_id"],
+            "to_location_id": branches["Kality"]["location_id"],
+            "lines": [{"variant_id": str(product.default_variant.id), "quantity": "30"}],
+            "dispatch_now": True,
+        },
+    )
+    assert sent.status_code == 201, sent.text
+    assert sent.json()["status"] == "dispatched"
+
+    overview = client.get("/api/v1/stock/overview", headers=headers).json()
+    row = overview["rows"][0]
+    assert row["quantities"][str(business.branch.id)] == "70.000"
+    assert row["quantities"][branches["Kality"]["branch_id"]] == "0.000"
+
+    arrived = client.post(
+        f"/api/v1/stock/transfers/{sent.json()['id']}/receive",
+        headers=headers,
+        json={"received": {}},
+    )
+    assert arrived.status_code == 200, arrived.text
+    assert arrived.json()["status"] == "received"
+    overview = client.get("/api/v1/stock/overview", headers=headers).json()
+    assert overview["rows"][0]["quantities"][branches["Kality"]["branch_id"]] == "30.000"
+
+
+def test_sending_more_than_there_is_leaves_nothing_behind(client, business):
+    """Both halves happen or neither does.
+
+    Done as two calls from a phone, a refused dispatch would strand the
+    draft: a transfer nobody sent, sitting in the list looking like stock
+    on its way.
+    """
+    product = business.add_product("Cement", opening_stock="10")
+    business.add_branch("Kality")
+    headers = business.headers()
+    branches = {
+        b["branch_name"]: b
+        for b in client.get("/api/v1/stock/branches", headers=headers).json()
+    }
+
+    refused = client.post(
+        "/api/v1/stock/transfers",
+        headers=headers,
+        json={
+            "from_location_id": branches["Main Branch"]["location_id"],
+            "to_location_id": branches["Kality"]["location_id"],
+            "lines": [{"variant_id": str(product.default_variant.id), "quantity": "30"}],
+            "dispatch_now": True,
+        },
+    )
+
+    assert refused.status_code >= 400
+    assert client.get("/api/v1/stock/transfers", headers=headers).json() == []
+    overview = client.get("/api/v1/stock/overview", headers=headers).json()
+    assert overview["rows"][0]["quantities"][str(business.branch.id)] == "10.000"
+
+
 def test_the_transfer_list_can_be_narrowed_to_what_is_waiting(client, business):
     product = business.add_product("Cement", opening_stock="10")
     _, location = business.add_branch("Kality")

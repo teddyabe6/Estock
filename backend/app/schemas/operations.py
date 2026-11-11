@@ -175,6 +175,12 @@ class TransferIn(BaseModel):
     to_location_id: uuid.UUID
     lines: list[TransferLineIn] = Field(min_length=1)
     note: str | None = Field(None, max_length=2000)
+    #: Send it in the same breath as writing it down.  Somebody loading a
+    #: lorry is doing one thing, not two, and a client that made it two
+    #: calls would leave a draft behind every time the second one failed —
+    #: a transfer nobody sent, sitting in the list looking like stock on
+    #: its way.  Here both happen or neither does.
+    dispatch_now: bool = False
 
 
 class TransferBranchOut(BaseModel):

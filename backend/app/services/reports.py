@@ -597,6 +597,10 @@ class CreditSummary:
     overdue: Decimal
     no_due_date: Decimal
     transaction_count: int
+    #: How many different customers (or suppliers) those balances belong
+    #: to.  Three unpaid sales to one customer are one person to chase, and
+    #: a card that counts balances cannot say "from 5 customers" honestly.
+    party_count: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -608,6 +612,7 @@ class CreditSummary:
             "overdue": str(self.overdue),
             "no_due_date": str(self.no_due_date),
             "transaction_count": self.transaction_count,
+            "party_count": self.party_count,
         }
 
 
@@ -640,11 +645,19 @@ def credit_summary(
     total = due_today = due_soon = overdue = no_due = ZERO
     horizon = today + timedelta(days=7)
     count = 0
+    parties: set[uuid.UUID] = set()
     for transaction in rows:
         balance = transaction.balance
         if balance <= ZERO:
             continue
         count += 1
+        party = (
+            transaction.customer_id
+            if kind == CreditKind.RECEIVABLE
+            else transaction.supplier_id
+        )
+        if party is not None:
+            parties.add(party)
         total += balance
         if transaction.due_date is None:
             no_due += balance
@@ -665,6 +678,7 @@ def credit_summary(
         overdue=overdue,
         no_due_date=no_due,
         transaction_count=count,
+        party_count=len(parties),
     )
 
 

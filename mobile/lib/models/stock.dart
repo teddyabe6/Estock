@@ -344,6 +344,10 @@ class StockTransfer {
   bool get awaitsDecision => status == 'requested';
   bool get awaitsAcceptance => status == 'approved';
 
+  /// Sent by the other branch and not yet said to have arrived.  The stock
+  /// has already left one shelf and is on nobody's until this is answered.
+  bool get awaitsReceipt => status == 'dispatched';
+
   /// Whether this is the signed-in user's move to make.
   ///
   /// Deciding is for whoever runs the branch being asked; accepting is for
@@ -355,13 +359,22 @@ class StockTransfer {
           fromBranchId != null &&
           myBranchIds.contains(fromBranchId);
     }
-    if (awaitsAcceptance) {
+    if (awaitsAcceptance || awaitsReceipt) {
       return user.can('stock:transfer') &&
           toBranchId != null &&
           myBranchIds.contains(toBranchId);
     }
     return false;
   }
+
+  /// The status as somebody would say it.  "Dispatched" is the ledger's
+  /// word; what the branch waiting for it wants to hear is that it is on
+  /// its way.
+  String get statusLabel => switch (status) {
+        'dispatched' => 'on its way',
+        'draft' => 'not sent yet',
+        _ => status.replaceAll('_', ' '),
+      };
 
   String get route =>
       '${fromBranchName ?? '…'} → ${toBranchName ?? '…'}';

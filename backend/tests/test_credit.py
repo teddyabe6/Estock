@@ -651,6 +651,33 @@ def test_a_balance_with_no_branch_still_counts_in_the_summary(business, today):
     assert summary.transaction_count == 1
 
 
+def test_the_summary_counts_people_as_well_as_balances(business, today):
+    """Three unpaid sales to one customer are one person to chase.
+
+    A card that only knows the number of balances cannot say "from two
+    customers" without being wrong the moment somebody buys on credit twice.
+    """
+    from app.services.reports import credit_summary
+
+    selam = business.add_customer("Selam Construction")
+    yonas = business.add_customer("Yonas Alemu")
+    for customer, amount in ((selam, "500.00"), (selam, "250.00"), (yonas, "100.00")):
+        create_credit_transaction(
+            business.db,
+            business.ctx,
+            kind=CreditKind.RECEIVABLE,
+            amount=Decimal(amount),
+            branch_id=None,
+            customer_id=customer.id,
+        )
+
+    summary = credit_summary(business.db, business.ctx, CreditKind.RECEIVABLE, today=today)
+
+    assert summary.transaction_count == 3
+    assert summary.party_count == 2
+    assert summary.as_dict()["party_count"] == 2
+
+
 def test_the_due_date_of_a_cancelled_balance_cannot_be_changed(business, credit_sale, today):
     transaction = credit_sale.credit_transaction
     cancel_transaction(business.db, business.ctx, transaction.id, reason="Written off")

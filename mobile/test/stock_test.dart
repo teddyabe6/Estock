@@ -8,6 +8,7 @@ import 'package:estock_mobile/main.dart';
 import 'package:estock_mobile/models/product.dart';
 import 'package:estock_mobile/models/session.dart';
 import 'package:estock_mobile/models/stock.dart';
+import 'package:estock_mobile/screens/stock_product_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -171,6 +172,34 @@ Future<AppState> signedIn({
     dynamic body;
     if (path.endsWith('/stock/overview')) {
       body = overview ?? _overview();
+    } else if (path.endsWith('/stock/movements')) {
+      body = {
+        'items': [
+          {
+            'id': 'm2',
+            'quantity': '-3.000',
+            'balance_after': '4.000',
+            'reason': 'damage',
+            'note': 'Dropped the pallet',
+            'occurred_at': '2026-11-10T09:00:00Z',
+            'branch_name': 'Bole Branch',
+            'by_name': 'Tigist Bekele',
+          },
+          {
+            'id': 'm1',
+            'quantity': '30.000',
+            'balance_after': '7.000',
+            'reason': 'purchase',
+            'note': 'Purchase P-2026-000001',
+            'occurred_at': '2026-11-09T09:00:00Z',
+            'branch_name': 'Bole Branch',
+            'by_name': 'Tigist Bekele',
+          },
+        ],
+        'total': 2,
+        'limit': 20,
+        'offset': 0,
+      };
     } else if (path.endsWith('/stock/setup')) {
       body = <dynamic>[];
     } else if (path.endsWith('/stock/transfers')) {
@@ -574,9 +603,42 @@ void main() {
       await tester.tap(find.text('Cement bag 50kg'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('104 bag across 2 branches'), findsOneWidget);
+      expect(find.byType(StockProductScreen), findsOneWidget);
+      expect(find.text('bag across 2 branches'), findsOneWidget);
       expect(find.text('Merkato Main'), findsWidgets);
-      expect(find.text('Ask another branch for some'), findsOneWidget);
+      expect(find.text('Ask a branch'), findsOneWidget);
+    });
+
+    testWidgets('and what has happened to it, in a shopkeeper\'s words',
+        (tester) async {
+      // "Why does it say four when I counted seven?" is the question a
+      // wrong figure raises, and the ledger has always known the answer.
+      await openStock(tester, await signedIn());
+
+      await tester.tap(find.text('Cement bag 50kg'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('What happened to it'), findsOneWidget);
+      // The ledger says "purchase" and "damage"; nobody at a counter does.
+      expect(find.text('Delivery'), findsWidgets);
+      expect(find.text('Broke or went off'), findsOneWidget);
+      expect(find.text('+30'), findsOneWidget);
+      expect(find.text('−3'), findsOneWidget);
+      expect(find.text('4 left'), findsOneWidget);
+      // A person's note is worth showing; the system's own is not.
+      expect(find.textContaining('Dropped the pallet'), findsOneWidget);
+      expect(find.textContaining('Purchase P-2026'), findsNothing);
+    });
+
+    testWidgets('the things you do to a product start from the product',
+        (tester) async {
+      await openStock(tester, await signedIn());
+
+      await tester.tap(find.text('Cement bag 50kg'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Broke or missing'), findsOneWidget);
+      expect(find.text('Ask a branch'), findsOneWidget);
     });
 
     testWidgets('and says plainly when a branch does not sell the thing',
@@ -625,7 +687,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('does not stock it'), findsOneWidget);
-      expect(find.text('60'), findsOneWidget);
+      // Sixty in all, and all sixty of them at the main branch.
+      expect(find.text('60'), findsNWidgets(2));
     });
 
     testWidgets('and marks the shop you are standing in, and the short one',
@@ -642,7 +705,7 @@ void main() {
       expect(find.text('Merkato Main'), findsWidgets);
       expect(
         find.descendant(
-          of: find.byType(BottomSheet),
+          of: find.byType(StockProductScreen),
           matching: find.text('critical'),
         ),
         findsOneWidget,

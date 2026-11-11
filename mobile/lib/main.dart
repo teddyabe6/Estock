@@ -8,8 +8,11 @@ import 'screens/notifications_screen.dart';
 import 'screens/pending_screen.dart';
 import 'screens/shell_screen.dart';
 import 'screens/sign_in_screen.dart';
+import 'screens/stock_adjust_screen.dart';
 import 'screens/stock_count_screen.dart';
+import 'screens/stock_receive_screen.dart';
 import 'screens/stock_request_screen.dart';
+import 'screens/stock_screen.dart';
 import 'screens/stock_transfers_screen.dart';
 
 /// Where the API lives. Set at build time:
@@ -55,6 +58,14 @@ class EstockApp extends StatelessWidget {
           '/stock/ask': (context) => StockRequestScreen(
                 productId:
                     ModalRoute.of(context)?.settings.arguments as String?,
+              ),
+          '/stock/receive': (_) => const StockReceiveScreen(),
+          '/stock/adjust': (_) => const StockAdjustScreen(),
+          // The stock list on its own, already narrowed to what is short:
+          // where "see all" on the home screen leads.
+          '/stock/low': (context) => Scaffold(
+                appBar: AppBar(title: const Text('Needs restocking')),
+                body: const SafeArea(child: StockScreen(lowOnly: true)),
               ),
         },
         home: const _Root(),

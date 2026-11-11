@@ -6,6 +6,7 @@ import '../models/product.dart';
 import '../models/session.dart';
 import '../models/stock.dart';
 import '../widgets/common.dart';
+import 'stock_product_screen.dart';
 
 /// What is on the shelves, branch by branch.
 ///
@@ -19,32 +20,131 @@ import '../widgets/common.dart';
 /// all: 114 across the business is no comfort to the branch holding none of
 /// them.  The chips pick the branch; tapping a product says where the rest
 /// of it is.
-/// The two jobs on this tab that are not looking something up: answering a
-/// request, and counting a branch.  They sit in the app bar rather than above
-/// the list, because the list is what the tab is for and every row of chrome
-/// above it is a row of stock somebody cannot see.
+/// Everything on this tab that changes stock, behind one button with a
+/// word on it.
+///
+/// There used to be two icons here — a lorry and a checklist — which told
+/// somebody who had never seen the app nothing at all, and there was no way
+/// in to the two commonest things that happen to a shelf: a delivery
+/// arriving, and something breaking.  One labelled button costs no more
+/// room than the icons did, and what it opens says each job in the words
+/// somebody would use for it.
 List<Widget> stockTabActions(BuildContext context, AppState state) {
   final session = state.session;
   if (session == null) return const [];
+  if (_stockJobs(state).isEmpty) return const [];
   return [
-    if (session.can('stock:transfer') && state.branches.length > 1)
-      IconButton(
-        tooltip: 'Between branches',
-        icon: state.transfersNeedingMe > 0
-            ? Badge.count(
-                count: state.transfersNeedingMe,
-                child: const Icon(Icons.local_shipping_outlined),
-              )
-            : const Icon(Icons.local_shipping_outlined),
-        onPressed: () => Navigator.of(context).pushNamed('/stock/transfers'),
+    Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: TextButton.icon(
+        key: const Key('updateStock'),
+        onPressed: () => showStockJobs(context, state),
+        // No badge: what is waiting is said as a sentence above the list,
+        // and a number on a plus sign says nothing the sentence does not.
+        icon: const Icon(Icons.add_circle_outline),
+        label: const Text('Update stock'),
+      ),
+    ),
+  ];
+}
+
+/// One thing that can happen to stock, as the menu offers it.
+class _StockJob {
+  const _StockJob(this.icon, this.title, this.explain, this.route, {this.badge = 0});
+
+  final IconData icon;
+  final String title;
+  final String explain;
+  final String route;
+  final int badge;
+}
+
+/// The jobs this user may do, in the order they tend to happen.
+List<_StockJob> _stockJobs(AppState state) {
+  final session = state.session;
+  if (session == null) return const [];
+  final many = state.branches.length > 1;
+  return [
+    if (session.can('purchase:create') && session.can('stock:receive'))
+      const _StockJob(
+        Icons.inventory_outlined,
+        'A delivery arrived',
+        'Add what came in, and what it cost',
+        '/stock/receive',
       ),
     if (session.can('stock:adjust'))
-      IconButton(
-        tooltip: 'Count stock',
-        icon: const Icon(Icons.fact_check_outlined),
-        onPressed: () => Navigator.of(context).pushNamed('/stock/count'),
+      const _StockJob(
+        Icons.fact_check_outlined,
+        'Count a shelf',
+        'Write down what is really there',
+        '/stock/count',
+      ),
+    if (session.can('stock:adjust'))
+      const _StockJob(
+        Icons.report_gmailerrorred_outlined,
+        'Something broke or went missing',
+        'Take it off the books, with a reason',
+        '/stock/adjust',
+      ),
+    if (session.can('stock:transfer') && many)
+      _StockJob(
+        Icons.local_shipping_outlined,
+        'Move between branches',
+        'Ask another branch, or take up what is waiting',
+        '/stock/transfers',
+        badge: state.transfersNeedingMe,
       ),
   ];
+}
+
+/// The menu itself: what happened, in words.
+Future<void> showStockJobs(BuildContext context, AppState state) {
+  final jobs = _stockJobs(state);
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheet) {
+      final theme = Theme.of(sheet);
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('What happened?', style: theme.textTheme.titleMedium),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final job in jobs)
+                    ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: theme.colorScheme.secondaryContainer,
+                        foregroundColor:
+                            theme.colorScheme.onSecondaryContainer,
+                        child: Icon(job.icon),
+                      ),
+                      title: Text(job.title),
+                      subtitle: Text(job.explain),
+                      trailing: job.badge > 0
+                          ? Badge.count(count: job.badge)
+                          : const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(sheet).pop();
+                        Navigator.of(context).pushNamed(job.route);
+                      },
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 /// The orders a stock list can be put in.
@@ -69,7 +169,10 @@ enum _Order {
 const _urgency = {'out_of_stock': 0, 'critical': 1, 'warning': 2, 'ok': 3};
 
 class StockScreen extends StatefulWidget {
-  const StockScreen({super.key});
+  const StockScreen({super.key, this.lowOnly = false});
+
+  /// Opened to answer "what needs restocking", so it starts narrowed.
+  final bool lowOnly;
 
   @override
   State<StockScreen> createState() => _StockScreenState();
@@ -77,7 +180,7 @@ class StockScreen extends StatefulWidget {
 
 class _StockScreenState extends State<StockScreen> {
   final _search = TextEditingController();
-  bool _lowOnly = false;
+  late bool _lowOnly = widget.lowOnly;
   _Order _order = _Order.name;
 
   /// Null means every category.  Held by name: the catalogue on the device
@@ -132,6 +235,7 @@ class _StockScreenState extends State<StockScreen> {
           ),
         ),
         _filters(context, branches, many),
+        _transferPrompt(context, state),
         _countPrompt(context, state),
         Expanded(
           child: products.isEmpty
@@ -415,6 +519,52 @@ class _StockScreenState extends State<StockScreen> {
     );
   }
 
+  /// Stock waiting on this user, said as a sentence.
+  ///
+  /// It was a number on a lorry in the corner of the screen, which is a
+  /// badge on a riddle.  Something that needs doing should say what it is.
+  Widget _transferPrompt(BuildContext context, AppState state) {
+    final waiting = state.transfersNeedingMe;
+    if (waiting == 0) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      child: Material(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          key: const Key('transferPrompt'),
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => Navigator.of(context).pushNamed('/stock/transfers'),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Icon(Icons.local_shipping_outlined,
+                    color: theme.colorScheme.onSecondaryContainer),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    waiting == 1
+                        ? 'One move between branches is waiting for you'
+                        : '$waiting moves between branches are waiting '
+                            'for you',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+                Icon(Icons.chevron_right,
+                    color: theme.colorScheme.onSecondaryContainer),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// A branch with nothing recorded is not an empty branch — it is a branch
   /// nobody has counted.  Saying so is the difference between the two.
   Widget _countPrompt(BuildContext context, AppState state) {
@@ -484,9 +634,16 @@ class _StockScreenState extends State<StockScreen> {
     final short = _short(state, product);
 
     return ListTile(
-      onTap: state.branchStock.isEmpty
-          ? null
-          : () => _showSpread(context, state, product),
+      // The product's own page: where it is, what can be done about it,
+      // and what has happened to it.
+      onTap: () => Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => StockProductScreen(
+            productId: product.id,
+            branchId: _branchId,
+          ),
+        ),
+      ),
       title: Text(product.name),
       subtitle: _subtitle(state, product, elsewhere),
       trailing: Column(
@@ -564,112 +721,6 @@ class _StockScreenState extends State<StockScreen> {
     ];
     if (parts.isEmpty) return null;
     return Text(parts.join(' · '));
-  }
-
-  /// Where the rest of it is, and the offer to go and get some.
-  void _showSpread(BuildContext context, AppState state, Product product) {
-    final spread = state.branchStock.forProduct(product.id);
-    if (spread == null) return;
-    final session = state.session;
-    final mayAsk = (session?.can('stock:transfer') ?? false) &&
-        state.branchStock.branches.length > 1;
-
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(product.name,
-                      style: Theme.of(sheet).textTheme.titleMedium),
-                  Text(
-                    '${Money.quantity(spread.total)} ${product.unitOfMeasure} '
-                    'across ${state.branchStock.branches.length} branches',
-                    style: Theme.of(sheet).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(sheet).colorScheme.onSurfaceVariant,
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            // The row says the figure; the chip beside it says whether that
-            // figure is a problem, which is the reason somebody opened this
-            // sheet after reading "Low at Merkato Main" on the list.
-            for (final branch in state.branchStock.branches)
-              _spreadRow(sheet, state, product, branch, spread),
-            if (mayAsk)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: FilledButton.icon(
-                  onPressed: () {
-                    Navigator.of(sheet).pop();
-                    Navigator.of(context).pushNamed(
-                      '/stock/ask',
-                      arguments: product.id,
-                    );
-                  },
-                  icon: const Icon(Icons.swap_horiz),
-                  label: const Text('Ask another branch for some'),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// One branch's line in the spread sheet.
-  ///
-  /// The figure alone does not say whether it is a problem, and that is the
-  /// reason somebody opened this sheet after reading "Down to 7 kg at
-  /// Merkato Main" on the list, so the chip comes with it.  A branch that
-  /// does not sell the thing at all says so in words instead of showing a
-  /// nought that looks like an empty shelf.
-  Widget _spreadRow(
-    BuildContext sheet,
-    AppState state,
-    Product product,
-    StockBranch branch,
-    StockSpread spread,
-  ) {
-    final theme = Theme.of(sheet);
-    final carried = spread.carriedAt(branch.id);
-    final here = state.branchStock.statusFor(product.id, branch.id);
-    final atHand = branch.id == _branchId;
-    return ListTile(
-      dense: true,
-      title: Text(
-        atHand ? '${branch.name} (here)' : branch.name,
-        style: atHand ? const TextStyle(fontWeight: FontWeight.w700) : null,
-      ),
-      trailing: !carried
-          ? Text(
-              'does not stock it',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            )
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (here != 'ok') ...[
-                  StatusChip(status: here),
-                  const SizedBox(width: 8),
-                ],
-                Text(
-                  Money.quantity(spread.at(branch.id)),
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-    );
   }
 
   Widget _empty(AppState state) {

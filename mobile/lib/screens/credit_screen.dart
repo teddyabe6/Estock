@@ -7,6 +7,7 @@ import '../core/app_state.dart';
 import '../core/money.dart';
 import '../widgets/common.dart';
 import 'credit_detail_screen.dart';
+import 'home_screen.dart' show owedBy;
 
 /// Receivables: who owes what, and what is overdue.
 ///
@@ -95,12 +96,6 @@ class _CreditScreenState extends State<CreditScreen> {
     }
   }
 
-  /// How many people owe it, in words rather than in "balance(s)".
-  static String _owing(Object? count) {
-    final many = (count as num?)?.toInt() ?? 0;
-    return many == 1 ? 'from 1 customer' : 'from $many customers';
-  }
-
   /// One debt, and the way in to doing something about it.
   Widget _row(
     BuildContext context,
@@ -176,7 +171,7 @@ class _CreditScreenState extends State<CreditScreen> {
                         label: 'Owed to you',
                         value: Money.format(_summary!['total_outstanding'],
                             currency: currency),
-                        note: _owing(_summary!['transaction_count']),
+                        note: owedBy(_summary!),
                       ),
                     ),
                     Expanded(

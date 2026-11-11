@@ -96,6 +96,14 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
         .where((transfer) =>
             transfer.awaitsAcceptance && mine.contains(transfer.toBranchId))
         .toList();
+    // Sent by the other branch and not yet said to have arrived.  Until
+    // somebody answers, the stock has left one shelf and is on nobody's.
+    final onTheWay = _transfers
+        .where((transfer) =>
+            transfer.awaitsReceipt &&
+            (session?.can('stock:transfer') ?? false) &&
+            mine.contains(transfer.toBranchId))
+        .toList();
 
     return Scaffold(
       // One way in, not two: the button that says what it does is the one
@@ -116,7 +124,7 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView(
-                      padding: const EdgeInsets.only(bottom: 88),
+                      padding: const EdgeInsets.only(bottom: 16),
                       children: [
                         if (_error != null)
                           Padding(
@@ -167,6 +175,26 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
                           for (final transfer in toAccept)
                             _card(context, transfer, _acceptActions(transfer)),
                         ],
+                        if (onTheWay.isNotEmpty) ...[
+                          SectionTitle('On its way to you (${onTheWay.length})'),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                            child: Text(
+                              'It has already left the other branch. Say so '
+                              'when it arrives, and it goes on your shelves.',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                            ),
+                          ),
+                          for (final transfer in onTheWay)
+                            _card(context, transfer, _arrivalActions(transfer)),
+                        ],
                         const SectionTitle('Everything between branches'),
                         if (_transfers.isEmpty)
                           const EmptyState(
@@ -183,20 +211,49 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
                     ),
                   ),
       ),
-      floatingActionButton: mayAsk && !_loading && !_offline
-          ? FloatingActionButton.extended(
-              onPressed: _busy ? null : () => _ask(context),
-              icon: const Icon(Icons.swap_horiz),
-              label: const Text('Ask for stock'),
+      // Two ways to start a move, side by side: send what you have to
+      // spare, or ask for what you have run out of.  Asking was the only
+      // one here, which made loading a lorry for another shop a request
+      // somebody then had to allow and somebody else take up.
+      bottomNavigationBar: mayAsk && !_loading && !_offline
+          ? SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const Key('sendStock'),
+                        onPressed:
+                            _busy ? null : () => _start(context, send: true),
+                        icon: const Icon(Icons.north_east),
+                        label: const Text('Send stock'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.icon(
+                        key: const Key('askForStock'),
+                        onPressed:
+                            _busy ? null : () => _start(context, send: false),
+                        icon: const Icon(Icons.south_west),
+                        label: const Text('Ask for stock'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             )
           : null,
     );
   }
 
-  Future<void> _ask(BuildContext context) async {
+  Future<void> _start(BuildContext context, {required bool send}) async {
     final state = AppScope.of(context);
     final sent = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const StockRequestScreen()),
+      MaterialPageRoute(
+        builder: (_) => StockRequestScreen(sending: send),
+      ),
     );
     if (sent ?? false) {
       await _load();
@@ -280,6 +337,26 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
         ),
       ];
 
+  List<Widget> _arrivalActions(StockTransfer transfer) => [
+        FilledButton(
+          onPressed: _busy
+              ? null
+              : () async {
+                  final api = AppScope.of(context).api;
+                  if (!await _confirmArrival(transfer)) return;
+                  await _act(() async {
+                    // Everything that was sent, unless somebody says less:
+                    // a short delivery is corrected by counting the shelf.
+                    await api.post(
+                      '/stock/transfers/${transfer.id}/receive',
+                      body: {'received': <String, String>{}},
+                    );
+                  });
+                },
+          child: const Text('It arrived'),
+        ),
+      ];
+
   Widget _card(
     BuildContext context,
     StockTransfer transfer,
@@ -304,7 +381,10 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
                         ?.copyWith(fontWeight: FontWeight.w600),
                   ),
                 ),
-                StatusChip(status: transfer.status),
+                StatusChip(
+                  status: transfer.status,
+                  label: transfer.statusLabel,
+                ),
               ],
             ),
             const SizedBox(height: 6),
@@ -378,6 +458,36 @@ class _StockTransfersScreenState extends State<StockTransfersScreen> {
       confirm: confirm,
       minLength: required ? 1 : 0,
     );
+  }
+
+  /// Saying it arrived puts it on the shelves, so it is read back first.
+  Future<bool> _confirmArrival(StockTransfer transfer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Did all of it arrive?'),
+        content: Text(
+          '${transfer.lines.map((line) => '${line.name} × '
+              '${Money.quantity(line.quantity)}').join('\n')}\n\n'
+          'goes on the shelves at '
+          '${transfer.toBranchName ?? 'your branch'} now. If some of it '
+          'is missing, say it arrived and then count the shelf.',
+        ),
+        actions: [
+          DialogActions(
+            back: OutlinedButton(
+              onPressed: () => Navigator.of(dialog).pop(false),
+              child: const Text('Not yet'),
+            ),
+            confirm: FilledButton(
+              onPressed: () => Navigator.of(dialog).pop(true),
+              child: const Text('It arrived'),
+            ),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
   }
 
   /// Taking up a request moves stock, so it is worth one clear sentence first.

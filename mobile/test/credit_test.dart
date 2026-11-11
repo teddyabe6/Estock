@@ -8,6 +8,7 @@ import 'package:estock_mobile/models/customer.dart';
 import 'package:estock_mobile/models/session.dart';
 import 'package:estock_mobile/screens/credit_detail_screen.dart';
 import 'package:estock_mobile/screens/credit_screen.dart';
+import 'package:estock_mobile/screens/home_screen.dart' show owedBy;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -57,6 +58,7 @@ const _summary = {
   'overdue': '8200.00',
   'no_due_date': '0.00',
   'transaction_count': 1,
+  'party_count': 1,
 };
 
 /// Every query the credit list has sent, so a search can be checked.
@@ -67,7 +69,12 @@ Future<(AppState, List<(String, Object?)>)> signedIn({
   List<Map<String, dynamic>>? debts,
   List<Map<String, dynamic>> payments = const [],
   List<Map<String, dynamic>> activities = const [],
-  List<String> permissions = const ['credit:view', 'credit:payment'],
+  List<String> permissions = const [
+    'credit:view',
+    'credit:payment',
+    'credit:followup',
+    'credit:duedate',
+  ],
   String? customerPhone = '+251912000222',
 }) async {
   final prefs = await SharedPreferences.getInstance();
@@ -174,6 +181,18 @@ void main() {
       expect(find.textContaining('balance(s)'), findsNothing);
     });
 
+    test('two unpaid sales to one customer are one person to chase', () {
+      // The count of balances is not the count of people, and saying
+      // "from 2 customers" about one of them is simply untrue.
+      expect(owedBy({'transaction_count': 2, 'party_count': 1}),
+          'from 1 customer');
+      expect(owedBy({'transaction_count': 6, 'party_count': 5}),
+          'from 5 customers');
+      // An older server says only how many balances there are.
+      expect(owedBy({'transaction_count': 3}), '3 unpaid sales');
+      expect(owedBy({'transaction_count': 1}), '1 unpaid sale');
+    });
+
     testWidgets('late is what gets the loud chip', (tester) async {
       // The chip used to carry the bookkeeping word, so the one row that
       // needed chasing wore the calmest grey on the screen.
@@ -256,12 +275,14 @@ void main() {
 
     testWidgets('somebody who may not take money is not offered the button',
         (tester) async {
-      final (state, _) = await signedIn(permissions: const ['credit:view']);
+      final (state, _) = await signedIn(
+        permissions: const ['credit:view', 'credit:followup'],
+      );
       await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
 
       expect(find.text('Take a payment'), findsNothing);
       expect(find.text('Change the date'), findsNothing);
-      // Looking and logging are still fine.
+      // Looking and logging are still fine, for somebody allowed to log.
       expect(find.text('Log a call'), findsOneWidget);
     });
 

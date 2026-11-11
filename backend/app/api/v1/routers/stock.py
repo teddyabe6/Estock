@@ -597,14 +597,24 @@ def list_transfers(
 @router.post("/transfers", response_model=TransferOut, status_code=status.HTTP_201_CREATED)
 def new_transfer(payload: TransferIn, ctx: WritableCtx, db: DbSession) -> TransferOut:
     """Send stock a branch has to spare: it leaves on dispatch, arrives on receipt."""
-    transfer = create_transfer(
-        db,
-        ctx,
-        from_location_id=payload.from_location_id,
-        to_location_id=payload.to_location_id,
-        lines=[(line.variant_id, line.quantity) for line in payload.lines],
-        note=payload.note,
-    )
+    def write_down() -> StockTransfer:
+        return create_transfer(
+            db,
+            ctx,
+            from_location_id=payload.from_location_id,
+            to_location_id=payload.to_location_id,
+            lines=[(line.variant_id, line.quantity) for line in payload.lines],
+            note=payload.note,
+        )
+
+    if not payload.dispatch_now:
+        return _transfer_out(db, ctx, write_down())
+
+    # Both or neither, and said so here rather than left to whoever owns
+    # the session: a shelf too empty to send from takes the draft back
+    # with it instead of leaving a transfer nobody sent.
+    with db.begin_nested():
+        transfer = dispatch_transfer(db, ctx, write_down().id)
     return _transfer_out(db, ctx, transfer)
 
 

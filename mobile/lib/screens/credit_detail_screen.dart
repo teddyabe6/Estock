@@ -309,6 +309,7 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
 
   Widget _body(BuildContext context, String currency, bool mayTake) {
     final theme = Theme.of(context);
+    final session = AppScope.of(context).session;
     final row = _row!;
     final overdue = row['is_overdue'] as bool? ?? false;
     final due = Money.dueLabel(
@@ -414,12 +415,16 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
                     icon: const Icon(Icons.phone_outlined),
                     label: Text(_phone!),
                   ),
-                TextButton.icon(
-                  onPressed: _logFollowUp,
-                  icon: const Icon(Icons.edit_note_outlined),
-                  label: const Text('Log a call'),
-                ),
-                if (!_settled && mayTake)
+                // Each of these is its own permission on the server, so
+                // each is offered on its own: somebody who may log a call
+                // is not thereby somebody who may take the money.
+                if (session?.can('credit:followup') ?? false)
+                  TextButton.icon(
+                    onPressed: _logFollowUp,
+                    icon: const Icon(Icons.edit_note_outlined),
+                    label: const Text('Log a call'),
+                  ),
+                if (!_settled && (session?.can('credit:duedate') ?? false))
                   TextButton.icon(
                     onPressed: _changeDueDate,
                     icon: const Icon(Icons.event_outlined),

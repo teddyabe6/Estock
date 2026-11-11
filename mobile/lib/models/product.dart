@@ -7,6 +7,7 @@ class Variant {
     this.sku,
     this.barcode,
     this.sellingPrice,
+    this.purchasePrice,
     this.quantityOnHand,
   });
 
@@ -15,6 +16,11 @@ class Variant {
   final String? sku;
   final String? barcode;
   final String? sellingPrice;
+
+  /// What it last cost to buy in.  Only present for somebody allowed to see
+  /// cost (PRD 5.1); the server leaves it out for everybody else.
+  final String? purchasePrice;
+
   final String? quantityOnHand;
 
   factory Variant.fromJson(Map<String, dynamic> json) => Variant(
@@ -23,6 +29,7 @@ class Variant {
         sku: json['sku'] as String?,
         barcode: json['barcode'] as String?,
         sellingPrice: json['selling_price']?.toString(),
+        purchasePrice: json['purchase_price']?.toString(),
         quantityOnHand: json['quantity_on_hand']?.toString(),
       );
 
@@ -32,6 +39,7 @@ class Variant {
         'sku': sku,
         'barcode': barcode,
         'selling_price': sellingPrice,
+        'purchase_price': purchasePrice,
         'quantity_on_hand': quantityOnHand,
       };
 }
