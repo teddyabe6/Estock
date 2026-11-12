@@ -77,6 +77,20 @@ class StockSpread {
       stockedAt.isEmpty || stockedAt.contains(branchId);
 }
 
+/// A stock level in a shopkeeper's words.
+///
+/// The levels are named for the code that sorts them — "critical",
+/// "warning" — and that is how the chips used to read: a shelf with three
+/// sacks left called a "warning" says that something is wrong without
+/// saying what.
+String stockLabel(String status) => switch (status) {
+      'out_of_stock' => 'out of stock',
+      'critical' => 'very low',
+      'warning' => 'running low',
+      'ok' => 'enough',
+      final other => other.replaceAll('_', ' '),
+    };
+
 /// A branch that needs restocking, and how little is left there.
 class ShortBranch {
   const ShortBranch({

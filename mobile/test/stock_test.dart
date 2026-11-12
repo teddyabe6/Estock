@@ -533,7 +533,7 @@ void main() {
       // repeated under the name.
       await pickBranch(tester, 'Bole Branch');
       expect(find.text('Cement bag 50kg'), findsOneWidget);
-      expect(find.text('critical'), findsOneWidget);
+      expect(find.text('very low'), findsOneWidget);
       expect(find.textContaining('at Bole Branch'), findsNothing);
     });
 
@@ -556,7 +556,7 @@ void main() {
 
       // Bole is short of both, and it is the only one, so each row counts
       // one branch and names it underneath.
-      expect(find.text('critical'), findsNothing);
+      expect(find.text('very low'), findsNothing);
       expect(find.text('out of stock'), findsNothing);
       expect(find.text('1 branch short'), findsNWidgets(2));
       expect(find.textContaining('Down to 4 bag at Bole Branch'),
@@ -566,7 +566,7 @@ void main() {
 
       // Narrowed to one branch, the figure is that branch's own and the
       // plain word is the honest label for it.
-      expect(find.text('critical'), findsOneWidget);
+      expect(find.text('very low'), findsOneWidget);
       expect(find.text('out of stock'), findsOneWidget);
     });
 
@@ -706,7 +706,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byType(StockProductScreen),
-          matching: find.text('critical'),
+          matching: find.text('very low'),
         ),
         findsOneWidget,
       );

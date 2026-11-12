@@ -675,7 +675,7 @@ class _StockScreenState extends State<StockScreen> {
             StatusChip(
               status: status,
               label: short.isEmpty
-                  ? null
+                  ? stockLabel(status)
                   : short.length == 1
                       ? '1 branch short'
                       : '${short.length} branches short',

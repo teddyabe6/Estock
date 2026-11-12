@@ -105,15 +105,17 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
   /// go wants their whole exposure, but not at the cost of the screen
   /// failing when this one call does.
   Future<void> _loadOthers() async {
-    final customerId = _row?['customer_id'] as String?;
-    if (customerId == null) return;
+    // The same question about a supplier: what else is owed to them.
+    final party = _payable ? 'supplier_id' : 'customer_id';
+    final partyId = _row?[party] as String?;
+    if (partyId == null) return;
     try {
       final dynamic page = await AppScope.of(context).api.get(
         '/credit/transactions',
         query: {
-          'kind': 'receivable',
+          'kind': _payable ? 'payable' : 'receivable',
           'view': 'outstanding',
-          'customer_id': customerId,
+          party: partyId,
           'limit': '50',
         },
       );
@@ -138,8 +140,14 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
   double get _balance => Money.parse(_row?['balance']) ?? 0;
   bool get _settled => _balance <= 0;
 
+  /// Whether this is the shop's own debt — a delivery taken on credit —
+  /// rather than a customer's.  The money goes the other way, and so do
+  /// the words.
+  bool get _payable => _row?['kind'] == 'payable';
+
   /// The customer's number, from the copy already on the device.
   String? get _phone {
+    if (_payable) return null;
     final id = _row?['customer_id'] as String?;
     if (id == null) return null;
     final state = AppScope.of(context);
@@ -160,6 +168,7 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
       builder: (_) => _PaymentSheet(
         balance: _balance,
         currency: AppScope.of(context).session?.currency ?? 'ETB',
+        paying: _payable,
       ),
     );
     if (!mounted || taken == null) return;
@@ -170,7 +179,8 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
         final left = Money.parse(body['balance']) ?? 0;
         return left <= 0
             ? 'Paid in full. Nothing left on this one.'
-            : '${Money.amount(taken['amount'])} taken · '
+            : '${Money.amount(taken['amount'])} '
+                '${_payable ? 'paid' : 'taken'} · '
                 '${Money.amount(left)} still owing';
       },
     );
@@ -372,9 +382,13 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
                 if (_elsewhere > 0) ...[
                   const SizedBox(height: 8),
                   Text(
-                    _alsoOwes.length == 1
-                        ? 'Also owes ${Money.format(_elsewhere, currency: currency)} on one other sale'
-                        : 'Also owes ${Money.format(_elsewhere, currency: currency)} on ${_alsoOwes.length} other sales',
+                    _payable
+                        ? 'You owe them ${Money.format(_elsewhere, currency: currency)} '
+                            'more on '
+                            '${_alsoOwes.length == 1 ? 'one other delivery' : '${_alsoOwes.length} other deliveries'}'
+                        : _alsoOwes.length == 1
+                            ? 'Also owes ${Money.format(_elsewhere, currency: currency)} on one other sale'
+                            : 'Also owes ${Money.format(_elsewhere, currency: currency)} on ${_alsoOwes.length} other sales',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
@@ -399,7 +413,7 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
                 key: const Key('takePayment'),
                 onPressed: _takePayment,
                 icon: const Icon(Icons.payments_outlined),
-                label: const Text('Take a payment'),
+                label: Text(_payable ? 'Pay them' : 'Take a payment'),
               ),
             ),
           Padding(
@@ -418,7 +432,9 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
                 // Each of these is its own permission on the server, so
                 // each is offered on its own: somebody who may log a call
                 // is not thereby somebody who may take the money.
-                if (session?.can('credit:followup') ?? false)
+                // Chasing is for money coming in; nobody logs calls to
+                // remind themselves to pay.
+                if (!_payable && (session?.can('credit:followup') ?? false))
                   TextButton.icon(
                     onPressed: _logFollowUp,
                     icon: const Icon(Icons.edit_note_outlined),
@@ -467,9 +483,13 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
                   ].join(' · '),
                 ),
               ),
-          const Divider(height: 1),
-          _section(context, 'What has been said'),
-          if (_activities.isEmpty)
+          // Calls and promises are how a customer is chased; a debt the
+          // shop owes has none, and an empty heading about them is noise.
+          if (!_payable || _activities.isNotEmpty) ...[
+            const Divider(height: 1),
+            _section(context, 'What has been said'),
+          ],
+          if (_activities.isEmpty && !_payable)
             _muted(context, 'Nothing logged yet.')
           else
             for (final activity in _activities)
@@ -523,10 +543,17 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
 
 /// Money across the counter: how much, and how it came.
 class _PaymentSheet extends StatefulWidget {
-  const _PaymentSheet({required this.balance, required this.currency});
+  const _PaymentSheet({
+    required this.balance,
+    required this.currency,
+    this.paying = false,
+  });
 
   final double balance;
   final String currency;
+
+  /// Money going out to a supplier rather than coming in from a customer.
+  final bool paying;
 
   @override
   State<_PaymentSheet> createState() => _PaymentSheetState();
@@ -584,7 +611,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Take a payment', style: theme.textTheme.titleMedium),
+                    Text(widget.paying ? 'Pay them' : 'Take a payment',
+                        style: theme.textTheme.titleMedium),
                     Text(
                       '${Money.format(widget.balance, currency: widget.currency)} owing',
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -608,7 +636,9 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                   labelText: 'How much',
                   suffixText: widget.currency,
                   errorText: over
-                      ? 'More than is owed. Take the balance, or less.'
+                      ? widget.paying
+                          ? 'More than is owed. Pay the balance, or less.'
+                          : 'More than is owed. Take the balance, or less.'
                       : null,
                 ),
                 onChanged: (_) => setState(() {}),
@@ -637,7 +667,9 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 value: _method,
-                decoration: const InputDecoration(labelText: 'How it came'),
+                decoration: InputDecoration(
+                  labelText: widget.paying ? 'How you paid' : 'How it came',
+                ),
                 items: [
                   for (final entry in _methods)
                     DropdownMenuItem(value: entry.$1, child: Text(entry.$2)),
@@ -666,10 +698,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                         }),
                 child: Text(
                   _typed <= 0
-                      ? 'Type what they handed over'
+                      ? widget.paying
+                          ? 'Type what you paid'
+                          : 'Type what they handed over'
                       : over
                           ? 'That is more than is owed'
-                          : 'Take ${Money.format(_typed, currency: widget.currency)}',
+                          : '${widget.paying ? 'Pay' : 'Take'} '
+                              '${Money.format(_typed, currency: widget.currency)}',
                 ),
               ),
             ],

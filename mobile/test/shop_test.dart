@@ -875,4 +875,40 @@ void main() {
     await settle(tester);
     expect(badge, findsNothing);
   });
+
+  testWidgets('home says what is waiting, and each line opens it',
+      (tester) async {
+    final server = ShopServer(
+      orders: [_order(id: 'q1'), _order(id: 'q2', status: 'sent')],
+      slips: {
+        'q2': [_slip()],
+      },
+      enquiries: [_enquiry()],
+    );
+    final state = await signedIn(server);
+    phone(tester);
+    await tester.pumpWidget(EstockApp(state: state));
+    await settle(tester);
+
+    expect(find.text('Waiting for you'), findsOneWidget);
+    expect(find.text('2 online orders need you'), findsOneWidget);
+    expect(find.text('1 customer says they have paid'), findsOneWidget);
+    expect(find.text('1 question from customers'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('homeOrders')));
+    await settle(tester);
+    expect(find.text('Online shop'), findsOneWidget);
+    expect(find.text('Waiting for you (2)'), findsOneWidget);
+  });
+
+  testWidgets('home says nothing about waiting when nothing waits',
+      (tester) async {
+    final state = await signedIn(ShopServer(orders: [_order(status: 'sent')]));
+    phone(tester);
+    await tester.pumpWidget(EstockApp(state: state));
+    await settle(tester);
+
+    expect(find.byKey(const Key('homeOrders')), findsNothing);
+    expect(find.text('Waiting for you'), findsNothing);
+  });
 }

@@ -52,11 +52,21 @@ class AppState extends ChangeNotifier {
   int transfersNeedingMe = 0;
 
   int _shopNeedsYou = 0;
+  Map<String, int> _shopWaiting = const {};
 
   /// Online orders where the next move is the shop's — one to price and
   /// send, one the customer said yes to, one somebody says they have paid
   /// for — plus questions nobody has opened.  For the badge on the Shop tab.
   int get shopNeedsYou => _shopNeedsYou;
+
+  /// The orders part of that, for Home to say in words.
+  int get shopOrdersWaiting => _shopWaiting['orders'] ?? 0;
+
+  /// Of those, the ones whose customer says they have paid.
+  int get shopSlipsToCheck => _shopWaiting['slips'] ?? 0;
+
+  /// Questions from customers nobody has opened.
+  int get shopQuestions => _shopWaiting['questions'] ?? 0;
 
   DateTime? catalogueFetchedAt;
   bool loading = true;
@@ -156,6 +166,7 @@ class AppState extends ChangeNotifier {
     branchesToCount = const [];
     transfersNeedingMe = 0;
     _shopNeedsYou = 0;
+    _shopWaiting = const {};
     _refreshedAt = null;
     await catalogue.clear();
     // The outbox is deliberately kept: unsynced work is not thrown away
@@ -238,13 +249,23 @@ class AppState extends ChangeNotifier {
       int of(String key) => (map[key] as num?)?.toInt() ?? 0;
       // A server from before it counted these for us says less; what it
       // does say is still better than no badge.
-      final orders = map.containsKey('orders_waiting')
-          ? of('orders_waiting')
-          : of('proforma_requests') + of('slips_to_check');
-      final waiting = (user.can('quotation:view') ? orders : 0) +
-          (user.can('enquiry:view') ? of('new_enquiries') : 0);
-      if (waiting != _shopNeedsYou) {
+      final seesOrders = user.can('quotation:view');
+      final orders = !seesOrders
+          ? 0
+          : map.containsKey('orders_waiting')
+              ? of('orders_waiting')
+              : of('proforma_requests') + of('slips_to_check');
+      final details = {
+        'orders': orders,
+        'slips': seesOrders ? of('slips_to_check') : 0,
+        'questions': user.can('enquiry:view') ? of('new_enquiries') : 0,
+      };
+      final waiting = details['orders']! + details['questions']!;
+      final changed = waiting != _shopNeedsYou ||
+          details.entries.any((entry) => _shopWaiting[entry.key] != entry.value);
+      if (changed) {
         _shopNeedsYou = waiting;
+        _shopWaiting = details;
         notifyListeners();
       }
     } on ApiException catch (exception) {

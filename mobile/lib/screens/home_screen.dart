@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
+import '../models/stock.dart';
 import '../widgets/common.dart';
 import 'sales_history_screen.dart';
 import 'stock_product_screen.dart';
@@ -48,6 +49,74 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// One line for each kind of thing waiting, each opening where it is
+  /// dealt with.  Nothing at all when nothing waits: an empty "to do" is
+  /// one more thing to read.
+  List<Widget> _waiting(BuildContext context, AppState state) {
+    final theme = Theme.of(context);
+    final navigator = Navigator.of(context);
+    final rows = <Widget>[];
+
+    void line(
+      Key key,
+      IconData icon,
+      String title,
+      String? subtitle,
+      String route,
+    ) {
+      rows.add(ListTile(
+        key: key,
+        leading: Icon(icon, color: theme.colorScheme.primary),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: subtitle == null ? null : Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => navigator.pushNamed(route),
+      ));
+    }
+
+    final orders = state.shopOrdersWaiting;
+    final slips = state.shopSlipsToCheck;
+    if (orders > 0) {
+      line(
+        const Key('homeOrders'),
+        Icons.storefront_outlined,
+        '${countOf(orders, 'online order')} ${orders == 1 ? 'needs' : 'need'} you',
+        slips > 0
+            ? '${countOf(slips, 'customer')} ${slips == 1 ? 'says' : 'say'} '
+                'they have paid'
+            : null,
+        '/shop',
+      );
+    }
+    if (state.shopQuestions > 0) {
+      line(
+        const Key('homeQuestions'),
+        Icons.help_outline,
+        '${countOf(state.shopQuestions, 'question')} from customers',
+        null,
+        '/shop',
+      );
+    }
+    if (state.transfersNeedingMe > 0) {
+      line(
+        const Key('homeTransfers'),
+        Icons.move_down_outlined,
+        '${countOf(state.transfersNeedingMe, 'stock transfer')} to answer',
+        null,
+        '/stock/transfers',
+      );
+    }
+    if (rows.isEmpty) return const [];
+    return [
+      const SectionTitle('Waiting for you'),
+      Card(
+        margin: const EdgeInsets.symmetric(horizontal: 12),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: rows),
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
@@ -55,6 +124,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final currency = session?.currency ?? 'ETB';
     final today = _dashboard?['today'] as Map<String, dynamic>?;
     final receivables = _dashboard?['receivables'] as Map<String, dynamic>?;
+    final payables = _dashboard?['payables'] as Map<String, dynamic>?;
+    // Only when there is something owed: a shop that pays on the spot has
+    // no use for a tile saying it owes nothing.
+    final owesSuppliers =
+        payables != null && (Money.parse(payables['total_outstanding']) ?? 0) > 0;
     final lowStock = (_dashboard?['low_stock'] as List<dynamic>?) ?? const [];
     final maySeeSales = session?.can('sale:view') ?? false;
     final maySeeStock = session?.can('stock:view') ?? false;
@@ -85,6 +159,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
+          // What is waiting on whoever holds the phone, before the figures:
+          // the figures say how the day went, this says what to do next.
+          ..._waiting(context, state),
           if (_loading)
             const Padding(
               padding: EdgeInsets.all(32),
@@ -179,6 +256,22 @@ class _HomeScreenState extends State<HomeScreen> {
                             Navigator.of(context).pushNamed('/credit'),
                       ),
                     ),
+                    // The other side of the same book: deliveries taken
+                    // on credit, which the phone can now record and so
+                    // has to be able to show.
+                    if (owesSuppliers)
+                      SizedBox(
+                        width: _tileWidth(context),
+                        child: StatTile(
+                          key: const Key('homePayables'),
+                          label: 'You owe suppliers',
+                          value: Money.format(payables['total_outstanding'],
+                              currency: currency),
+                          note: owedBy(payables, toSuppliers: true),
+                          onTap: () => Navigator.of(context)
+                              .pushNamed('/credit/payables'),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -221,7 +314,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           '${unit ?? ''} left'.replaceAll('  ', ' '),
                     ].join(' · '),
                   ),
-                  trailing: StatusChip(status: row['severity'] as String? ?? ''),
+                  trailing: StatusChip(
+                    status: row['severity'] as String? ?? '',
+                    label: stockLabel(row['severity'] as String? ?? ''),
+                  ),
                   // A short shelf opens the product: where the rest of it
                   // is, and what can be done about it.
                   onTap: productId == null || !maySeeStock
@@ -262,9 +358,15 @@ class _HomeScreenState extends State<HomeScreen> {
 /// It used to read "6 balance(s)": a count of rows, with the plural left
 /// for the reader to work out.  Three unpaid sales to one customer are one
 /// person to chase.
-String owedBy(Map<String, dynamic> summary) {
+String owedBy(Map<String, dynamic> summary, {bool toSuppliers = false}) {
   final people = (summary['party_count'] as num?)?.toInt() ?? 0;
   final sales = (summary['transaction_count'] as num?)?.toInt() ?? 0;
+  if (toSuppliers) {
+    if (people > 0) {
+      return people == 1 ? 'to 1 supplier' : 'to $people suppliers';
+    }
+    return sales == 1 ? '1 unpaid delivery' : '$sales unpaid deliveries';
+  }
   if (people > 0) {
     return people == 1 ? 'from 1 customer' : 'from $people customers';
   }

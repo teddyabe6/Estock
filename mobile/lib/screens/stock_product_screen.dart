@@ -300,7 +300,7 @@ class _StockProductScreenState extends State<StockProductScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (status != 'ok') ...[
-                  StatusChip(status: status),
+                  StatusChip(status: status, label: stockLabel(status)),
                   const SizedBox(width: 8),
                 ],
                 Text(

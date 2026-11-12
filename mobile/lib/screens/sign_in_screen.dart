@@ -15,6 +15,10 @@ class _SignInScreenState extends State<SignInScreen> {
   final _password = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _busy = false;
+
+  /// Whether the password is shown as typed.  Hidden by default, but a
+  /// password typed blind on a phone keyboard is a password typed twice.
+  bool _showPassword = false;
   String? _error;
 
   @override
@@ -95,8 +99,23 @@ class _SignInScreenState extends State<SignInScreen> {
                     TextFormField(
                       key: const Key('password'),
                       controller: _password,
-                      decoration: const InputDecoration(labelText: 'Password'),
-                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        suffixIcon: IconButton(
+                          key: const Key('showPassword'),
+                          tooltip: _showPassword
+                              ? 'Hide the password'
+                              : 'Show the password',
+                          icon: Icon(_showPassword
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined),
+                          onPressed: () =>
+                              setState(() => _showPassword = !_showPassword),
+                        ),
+                      ),
+                      obscureText: !_showPassword,
+                      autocorrect: false,
+                      enableSuggestions: false,
                       onFieldSubmitted: (_) => _submit(),
                       validator: (value) =>
                           (value ?? '').isEmpty ? 'Enter your password' : null,

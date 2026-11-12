@@ -28,11 +28,13 @@ Map<String, dynamic> _debt({
   String? dueDate = '2026-10-18',
   String? customerId = 'cust-1',
   String? note = 'Was due last week; follow up.',
+  String kind = 'receivable',
 }) =>
     {
       'id': id,
       'reference': reference,
-      'kind': 'receivable',
+      'kind': kind,
+      if (kind == 'payable') 'supplier_id': 'sup-1',
       'status': status,
       'branch_id': 'b1',
       'customer_id': customerId,
@@ -499,6 +501,60 @@ void main() {
 
       expect(find.text('Credit needs a connection'), findsOneWidget);
       expect(find.byKey(const Key('takePayment')), findsNothing);
+    });
+  });
+
+  group('what the shop owes', () {
+    Map<String, dynamic> owed() => _debt(
+          kind: 'payable',
+          name: 'Addis Spice Traders',
+          customerId: null,
+          original: '9000.00',
+          balance: '9000.00',
+          overdue: false,
+          daysOverdue: null,
+          dueDate: null,
+          note: null,
+        );
+
+    testWidgets('reads as its own list, about suppliers', (tester) async {
+      final (state, _) = await signedIn(debts: [owed()]);
+      await open(tester, state, const CreditScreen(payables: true));
+
+      expect(find.text('What you owe suppliers'), findsOneWidget);
+      expect(find.text('YOU OWE'), findsOneWidget);
+      expect(find.text('to 1 supplier'), findsOneWidget);
+      expect(find.text('Which supplier?'), findsOneWidget);
+      expect(find.text('Addis Spice Traders'), findsOneWidget);
+      expect(asked.last['kind'], 'payable');
+    });
+
+    test('is counted in suppliers and deliveries', () {
+      expect(owedBy({'party_count': 2}, toSuppliers: true), 'to 2 suppliers');
+      expect(owedBy({'transaction_count': 1}, toSuppliers: true),
+          '1 unpaid delivery');
+    });
+
+    testWidgets('is paid, not taken, and nobody logs a call about it',
+        (tester) async {
+      final (state, posted) = await signedIn(debts: [owed()]);
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+
+      expect(find.text('Pay them'), findsOneWidget);
+      expect(find.text('Take a payment'), findsNothing);
+      expect(find.text('Log a call'), findsNothing);
+      expect(find.text('What has been said'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('takePayment')));
+      await tester.pumpAndSettle();
+      expect(find.text('How you paid'), findsOneWidget);
+      expect(find.text('Pay 9,000.00 ETB'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('confirmPayment')));
+      await tester.pumpAndSettle();
+
+      expect(posted.single.$1, endsWith('/credit/transactions/c1/payments'));
+      expect(find.textContaining('paid · '), findsOneWidget);
     });
   });
 }

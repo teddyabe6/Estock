@@ -9,13 +9,17 @@ import '../widgets/common.dart';
 import 'credit_detail_screen.dart';
 import 'home_screen.dart' show owedBy;
 
-/// Receivables: who owes what, and what is overdue.
+/// Who owes what, and what is overdue — or, with [payables], what the shop
+/// owes its suppliers.
 ///
 /// Credit balances come from the server. They are not cached for offline use:
 /// showing a stale balance while someone is deciding whether to extend more
 /// credit would be worse than showing nothing.
 class CreditScreen extends StatefulWidget {
-  const CreditScreen({super.key});
+  const CreditScreen({super.key, this.payables = false});
+
+  /// The shop's own debts: deliveries taken on credit.
+  final bool payables;
 
   @override
   State<CreditScreen> createState() => _CreditScreenState();
@@ -53,6 +57,8 @@ class _CreditScreenState extends State<CreditScreen> {
     ('paid', 'Paid'),
   ];
 
+  String get _kind => widget.payables ? 'payable' : 'receivable';
+
   @override
   void initState() {
     super.initState();
@@ -64,12 +70,12 @@ class _CreditScreenState extends State<CreditScreen> {
     final state = AppScope.of(context);
     try {
       final dynamic summary =
-          await state.api.get('/credit/summary', query: {'kind': 'receivable'});
+          await state.api.get('/credit/summary', query: {'kind': _kind});
       final needle = _search.text.trim();
       final dynamic page = await state.api.get(
         '/credit/transactions',
         query: {
-          'kind': 'receivable',
+          'kind': _kind,
           // A name is worth more than the view it happens to sit in:
           // somebody looking up "Yonas" does not know, or care, whether
           // he is overdue or merely outstanding.
@@ -107,7 +113,8 @@ class _CreditScreenState extends State<CreditScreen> {
     final settled = status == 'paid';
 
     return ListTile(
-      title: Text(row['counterparty_name'] as String? ?? 'Not named'),
+      title: Text(row['counterparty_name'] as String? ??
+          (widget.payables ? 'No supplier named' : 'Not named')),
       subtitle: Text(
         '${row['reference']} · '
         '${Money.dueLabel(row['due_date'] as String?, overdue, row['days_overdue'] as int?)}',
@@ -156,7 +163,9 @@ class _CreditScreenState extends State<CreditScreen> {
     final currency = state.session?.currency ?? 'ETB';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Credit')),
+      appBar: AppBar(
+        title: Text(widget.payables ? 'What you owe suppliers' : 'Credit'),
+      ),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -168,10 +177,10 @@ class _CreditScreenState extends State<CreditScreen> {
                   children: [
                     Expanded(
                       child: StatTile(
-                        label: 'Owed to you',
+                        label: widget.payables ? 'You owe' : 'Owed to you',
                         value: Money.format(_summary!['total_outstanding'],
                             currency: currency),
-                        note: owedBy(_summary!),
+                        note: owedBy(_summary!, toSuppliers: widget.payables),
                       ),
                     ),
                     Expanded(
@@ -193,7 +202,9 @@ class _CreditScreenState extends State<CreditScreen> {
                 controller: _search,
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText: 'Who are you looking for?',
+                  hintText: widget.payables
+                      ? 'Which supplier?'
+                      : 'Who are you looking for?',
                   prefixIcon: const Icon(Icons.search),
                   isDense: true,
                   suffixIcon: _search.text.isEmpty

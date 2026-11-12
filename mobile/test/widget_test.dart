@@ -89,4 +89,28 @@ void main() {
       reason: 'a shop owner should know a first sign-in needs a connection',
     );
   });
+
+  testWidgets('the password can be shown while it is typed', (tester) async {
+    final state = await buildState();
+    state.loading = false;
+
+    await tester.pumpWidget(EstockApp(state: state));
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('password')), 'secret123');
+
+    bool hidden() => tester
+        .widget<EditableText>(find.descendant(
+          of: find.byKey(const Key('password')),
+          matching: find.byType(EditableText),
+        ))
+        .obscureText;
+
+    expect(hidden(), isTrue, reason: 'hidden until asked');
+    await tester.tap(find.byKey(const Key('showPassword')));
+    await tester.pump();
+    expect(hidden(), isFalse);
+    await tester.tap(find.byKey(const Key('showPassword')));
+    await tester.pump();
+    expect(hidden(), isTrue);
+  });
 }

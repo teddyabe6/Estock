@@ -47,6 +47,7 @@ class EstockApp extends StatelessWidget {
         darkTheme: EstockTheme.dark(),
         routes: {
           '/credit': (_) => const CreditScreen(),
+          '/credit/payables': (_) => const CreditScreen(payables: true),
           '/notifications': (_) => const NotificationsScreen(),
           '/pending': (_) => const PendingScreen(),
           '/stock/transfers': (_) => const StockTransfersScreen(),
