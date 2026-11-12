@@ -116,6 +116,20 @@ export type ProformaView = {
     line_total: string | null;
   }>;
   disclaimer: string;
+  /** What has happened to the money the customer says they sent. */
+  payment: {
+    state: "checking" | "paid" | "part_paid" | "not_found" | null;
+    items: Array<{
+      status: "submitted" | "accepted" | "rejected";
+      amount_claimed: string | null;
+      method: string | null;
+      reference: string | null;
+      paid_on: string | null;
+      submitted_at: string | null;
+      reviewed_at: string | null;
+      review_note: string | null;
+    }>;
+  };
 };
 
 function qs(params: Record<string, string | number | undefined>): string {
@@ -361,6 +375,24 @@ export function proformaTone(status: string): "ok" | "warn" | "danger" | "muted"
       return "danger";
     default:
       return "muted";
+  }
+}
+
+/** The badge for where the customer's payment has got to, when it says more than the status. */
+export function paymentBadge(
+  state: ProformaView["payment"]["state"] | undefined,
+): { label: string; tone: "ok" | "warn" | "danger" } | null {
+  switch (state) {
+    case "paid":
+      return { label: "Paid", tone: "ok" };
+    case "part_paid":
+      return { label: "Part paid", tone: "warn" };
+    case "checking":
+      return { label: "Payment being checked", tone: "warn" };
+    case "not_found":
+      return { label: "Payment not found", tone: "danger" };
+    default:
+      return null;
   }
 }
 

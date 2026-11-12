@@ -546,3 +546,115 @@ def test_an_unknown_token_takes_no_upload(client):
         files={"file": ("slip.png", io.BytesIO(PNG), "image/png")},
     )
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# The customer's own link, after they have paid
+# --------------------------------------------------------------------------- #
+
+
+def test_the_customers_link_follows_what_happened_to_their_money(
+    client, db, business, sent_proforma
+):
+    """The link is where a buyer comes back to find out.
+
+    It used to know nothing about slips: a customer who had paid came back to
+    the same "accept" buttons and the same payment form, as if nothing had
+    happened, and the seller's "the money arrived" reached nobody.
+    """
+    headers = business.headers()
+    link = f"/api/v1/public/quotations/{sent_proforma.share_token}"
+
+    before = client.get(link).json()
+    assert before["payment"] == {"state": None, "items": []}
+    assert before["can_respond"] is True
+
+    first = attach_payment_slip(
+        db, sent_proforma.share_token, _slip(amount_claimed=Decimal("900"), reference="TX1")
+    )
+    db.flush()
+    checking = client.get(link).json()
+    assert checking["payment"]["state"] == "checking"
+    assert "checking it" in checking["next_step"]
+    assert checking["can_respond"] is False, "paying is a firmer yes than the button"
+    assert checking["payment"]["items"][0]["status"] == "submitted"
+    assert checking["payment"]["items"][0]["reference"] == "TX1"
+    assert "sender_phone" not in checking["payment"]["items"][0]
+
+    client.post(
+        f"/api/v1/shop/payment-slips/{first.id}/review",
+        json={"accept": False, "note": "Nothing from TX1 yet"},
+        headers=headers,
+    ).raise_for_status()
+    missing = client.get(link).json()
+    assert missing["payment"]["state"] == "not_found"
+    assert "could not find your payment" in missing["next_step"]
+    assert missing["payment"]["items"][0]["review_note"] == "Nothing from TX1 yet"
+    assert missing["can_send_payment"] is True, "they can send it again"
+
+    second = attach_payment_slip(
+        db, sent_proforma.share_token, _slip(amount_claimed=Decimal("900"), reference="TX2")
+    )
+    db.flush()
+    client.post(
+        f"/api/v1/shop/payment-slips/{second.id}/review",
+        json={"accept": True},
+        headers=headers,
+    ).raise_for_status()
+    paid = client.get(link).json()
+    assert paid["payment"]["state"] == "paid"
+    assert "found your payment" in paid["next_step"]
+    assert paid["can_send_payment"] is False
+    assert paid["can_respond"] is False
+    assert "receipt when the sale is made" in paid["disclaimer"]
+
+
+def test_a_part_payment_says_what_is_left_to_send(client, db, business, sent_proforma):
+    slip = attach_payment_slip(
+        db, sent_proforma.share_token, _slip(amount_claimed=Decimal("400"))
+    )
+    db.flush()
+    client.post(
+        f"/api/v1/shop/payment-slips/{slip.id}/review",
+        json={"accept": True},
+        headers=business.headers(),
+    ).raise_for_status()
+
+    body = client.get(f"/api/v1/public/quotations/{sent_proforma.share_token}").json()
+    assert body["payment"]["state"] == "part_paid"
+    assert "found 400.00 ETB of the 900.00 ETB" in body["next_step"]
+    assert "remaining 500.00 ETB" in body["next_step"]
+    assert body["can_send_payment"] is True
+
+
+def test_a_paid_proforma_does_not_expire_under_the_customer(
+    client, db, business, sent_proforma
+):
+    """The price held long enough to be paid.
+
+    Telling somebody who has paid that their proforma "expired, ask for a
+    new one" tells them to start again; the shop being slow to hand the
+    goods over is not the customer's lapse.
+    """
+    from datetime import timedelta
+
+    link = f"/api/v1/public/quotations/{sent_proforma.share_token}"
+    sent_proforma.valid_until = date.today() - timedelta(days=3)
+    db.flush()
+    assert client.get(link).json()["status"] == "expired"
+
+    slip = attach_payment_slip(db, sent_proforma.share_token, _slip())
+    db.flush()
+    assert client.get(link).json()["status"] == "sent", "a slip is waiting"
+    listed = client.get("/api/v1/shop/quotations", headers=business.headers()).json()
+    row = next(q for q in listed["items"] if q["id"] == str(sent_proforma.id))
+    assert row["status"] == "sent", "the seller's list agrees"
+
+    client.post(
+        f"/api/v1/shop/payment-slips/{slip.id}/review",
+        json={"accept": False},
+        headers=business.headers(),
+    ).raise_for_status()
+    assert client.get(link).json()["status"] == "expired", (
+        "a slip whose money was never found does not hold the price"
+    )

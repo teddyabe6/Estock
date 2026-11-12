@@ -393,7 +393,7 @@ class _ShopOrderScreenState extends State<ShopOrderScreen> {
         context: context,
         builder: (dialog) => AlertDialog(
           title: Text('You found $amount in your account?'),
-          content: const Text('The customer will be told it arrived.'),
+          content: const Text('Their order page will say it arrived.'),
           actions: [
             DialogActions(
               back: OutlinedButton(
@@ -414,7 +414,8 @@ class _ShopOrderScreenState extends State<ShopOrderScreen> {
       note = await askForReason(
         context,
         title: 'The money did not arrive?',
-        body: 'The customer will be told it was not found.',
+        body: 'Their order page will say it was not found, with anything you '
+            'write here.',
         hint: 'What to tell them (optional)',
         confirm: 'Not found',
       );

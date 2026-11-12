@@ -546,18 +546,21 @@ export function ShopFilters({
 export function PaymentSlipForm({
   token,
   total,
+  owing,
   currency,
   shopName,
   onSent,
 }: {
   token: string;
   total: string | null;
+  /** What is still to pay, when part of it has already been found. */
+  owing?: string | null;
   currency: string;
   shopName: string | null;
   onSent: (message: string) => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [amount, setAmount] = useState(total ?? "");
+  const [amount, setAmount] = useState(owing ?? total ?? "");
   const [method, setMethod] = useState<string>("telebirr");
   const [reference, setReference] = useState("");
   const [paidOn, setPaidOn] = useState(new Date().toISOString().slice(0, 10));
@@ -606,7 +609,16 @@ export function PaymentSlipForm({
       <Alert>{error}</Alert>
 
       <div className="grid">
-        <Field label="How much you sent" hint={total ? `the proforma is ${money(total, currency)}` : undefined}>
+        <Field
+          label="How much you sent"
+          hint={
+            owing
+              ? `${money(owing, currency)} is still to pay`
+              : total
+                ? `the proforma is ${money(total, currency)}`
+                : undefined
+          }
+        >
           <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
         </Field>
         <Field label="How you sent it">

@@ -23,9 +23,10 @@ from fastapi import (
 )
 from fastapi.responses import RedirectResponse
 
+from app.core.db import utcnow
 from app.core.deps import DbSession, client_ip, limit_public_requests
 from app.core.errors import NotFoundError, ValidationError
-from app.models.commerce import QuotationStatus
+from app.models.commerce import PaymentSlipStatus, QuotationStatus
 from app.models.platform import Tenant
 from app.models.system import FileAsset
 from app.schemas.operations import EnquiryIn, EnquiryOut, ProformaRequestIn
@@ -205,6 +206,68 @@ _NEXT_STEP = {
 }
 
 
+def _payment_progress(quotation, status_now) -> dict:
+    """What has happened to the money the customer says they sent.
+
+    Their link is where they come back to find out, so it says it in their
+    terms: being checked, found, or not found and why.  Only what they sent
+    themselves, plus the seller's answer — never the seller's books.
+    """
+    slips = sorted(quotation.payment_slips, key=lambda slip: slip.created_at or utcnow())
+    found = sum(
+        (Decimal(slip.amount_claimed or 0) for slip in slips if slip.status == PaymentSlipStatus.ACCEPTED),
+        Decimal("0"),
+    )
+    total = Decimal(quotation.total_amount or 0)
+    checking = any(slip.status == PaymentSlipStatus.SUBMITTED for slip in slips)
+    accepted = any(slip.status == PaymentSlipStatus.ACCEPTED for slip in slips)
+
+    state: str | None = None
+    next_step: str | None = None
+    currency = quotation.currency
+    if status_now in (QuotationStatus.CONVERTED, QuotationStatus.CANCELLED):
+        state = "paid" if accepted else None
+    elif accepted and (total <= 0 or found >= total):
+        state = "paid"
+        next_step = (
+            "The seller found your payment. They will be in touch about collection "
+            "or delivery."
+        )
+    elif accepted:
+        state = "part_paid"
+        next_step = (
+            f"The seller found {found} {currency} of the {total} {currency}. "
+            f"Send the remaining {total - found} {currency} and its slip below."
+        )
+    elif checking:
+        state = "checking"
+        next_step = "Your slip is with the seller. They are checking it against their account."
+    elif slips:
+        state = "not_found"
+        next_step = (
+            "The seller could not find your payment. Check the details and send the slip "
+            "again, or call them."
+        )
+
+    return {
+        "state": state,
+        "next_step": next_step,
+        "items": [
+            {
+                "status": str(slip.status),
+                "amount_claimed": str(slip.amount_claimed) if slip.amount_claimed is not None else None,
+                "method": slip.method,
+                "reference": slip.reference,
+                "paid_on": slip.paid_on.isoformat() if slip.paid_on else None,
+                "submitted_at": slip.created_at.isoformat() if slip.created_at else None,
+                "reviewed_at": slip.reviewed_at.isoformat() if slip.reviewed_at else None,
+                "review_note": slip.review_note,
+            }
+            for slip in slips
+        ],
+    }
+
+
 @router.get("/quotations/{token}")
 def view_quotation(token: str, db: DbSession) -> dict:
     """A customer's view of a shared proforma, and their order tracking page."""
@@ -212,6 +275,8 @@ def view_quotation(token: str, db: DbSession) -> dict:
     tenant = db.get(Tenant, quotation.tenant_id)
     store = store_for_tenant(db, quotation.tenant_id)
     status_now = quotation_status_for(quotation)
+    payment = _payment_progress(quotation, status_now)
+    paying = payment["state"] in ("checking", "paid", "part_paid")
     # A request the seller has not priced yet shows amounts only where the shop
     # shows prices to visitors anyway.
     amounts_visible = status_now != QuotationStatus.REQUESTED or bool(
@@ -224,13 +289,18 @@ def view_quotation(token: str, db: DbSession) -> dict:
     return {
         "number": quotation.number,
         "status": str(status_now),
-        "next_step": _NEXT_STEP.get(status_now, ""),
-        "can_respond": status_now in (QuotationStatus.SENT, QuotationStatus.DRAFT),
+        "next_step": payment["next_step"] or _NEXT_STEP.get(status_now, ""),
+        # Paying, or saying you have, is a firmer yes than the button.
+        "can_respond": status_now in (QuotationStatus.SENT, QuotationStatus.DRAFT)
+        and not paying,
         # Whether there is anything to pay yet. The same rule the upload
         # endpoint enforces, stated once here so the screen cannot offer a
         # form the server will refuse: before the seller has priced it there
-        # is no amount, whatever the shop's price display says.
-        "can_send_payment": status_now != QuotationStatus.REQUESTED,
+        # is no amount, whatever the shop's price display says.  Nor once the
+        # seller has found all of it.
+        "can_send_payment": status_now != QuotationStatus.REQUESTED
+        and payment["state"] != "paid",
+        "payment": {"state": payment["state"], "items": payment["items"]},
         "amounts_visible": amounts_visible,
         "issued_on": quotation.issued_on.isoformat(),
         "valid_until": quotation.valid_until.isoformat() if quotation.valid_until else None,
@@ -278,7 +348,10 @@ def view_quotation(token: str, db: DbSession) -> dict:
             for line in quotation.lines
         ],
         "disclaimer": (
-            "This is a proforma invoice. It is not a receipt and no payment has "
+            "This is a proforma invoice, not a receipt. The seller gives you a receipt "
+            "when the sale is made."
+            if payment["state"] in ("paid", "part_paid")
+            else "This is a proforma invoice. It is not a receipt and no payment has "
             "been recorded against it."
         ),
     }

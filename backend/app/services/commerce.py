@@ -926,15 +926,36 @@ def waiting_requests(
     )
 
 
-def quotation_status_for(quotation: Quotation, *, today: date | None = None) -> QuotationStatus:
-    """Expire a sent proforma once its validity date has passed."""
+def quotation_status_for(
+    quotation: Quotation,
+    *,
+    today: date | None = None,
+    has_payment: bool | None = None,
+) -> QuotationStatus:
+    """Expire a sent proforma once its validity date has passed.
+
+    Unless the customer has paid for it, or says they have: a slip waiting
+    to be checked, or one the seller has found the money for.  The price
+    held long enough to be paid, and telling somebody who has paid that
+    their proforma "expired" tells them to start again.  A slip the seller
+    did not find the money for does not count.
+
+    ``has_payment`` is passed by a caller that has already counted slips
+    for a whole page; left out, it is read off this one proforma.
+    """
     today = today or date.today()
     if (
         quotation.status == QuotationStatus.SENT
         and quotation.valid_until is not None
         and quotation.valid_until < today
     ):
-        return QuotationStatus.EXPIRED
+        if has_payment is None:
+            has_payment = any(
+                slip.status in (PaymentSlipStatus.SUBMITTED, PaymentSlipStatus.ACCEPTED)
+                for slip in quotation.payment_slips
+            )
+        if not has_payment:
+            return QuotationStatus.EXPIRED
     return quotation.status
 
 

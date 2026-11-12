@@ -552,11 +552,37 @@ tfoot th {
     margin-top: 8px;
   }
 
-  /* The totals row is still the figure the eye goes to, so it keeps its
-     weight rather than reading as one more card. */
+  /* Totals are a name and a figure — "Total ........ 450.00 ETB" — one
+     line each under a single rule, rather than a card apiece with the
+     figure on the line below its name.  They are still the figures the eye
+     goes to, so they keep their weight. */
+  table[data-stacked] > tfoot {
+    margin-top: 10px;
+    padding-top: 4px;
+    border-top: 2px solid var(--border);
+  }
+
   table[data-stacked] > tfoot > tr {
-    border-width: 2px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 0;
+    padding: 2px 0;
+    border: none;
     font-weight: 600;
+  }
+
+  table[data-stacked] > tfoot > tr > td,
+  table[data-stacked] > tfoot > tr > th {
+    display: block;
+    width: auto;
+    padding: 2px 12px;
+    border-top: none;
+  }
+
+  table[data-stacked] > tfoot > tr > :last-child {
+    text-align: right;
   }
 
   /* Name beside value, as two columns of their own.  A cell laid out as a

@@ -265,7 +265,11 @@ def quotation_out(
     payload.slips_found = (
         slips_found if slips_found is not None else counted(PaymentSlipStatus.ACCEPTED)
     )
-    payload.status = str(quotation_status_for(quotation))
+    payload.status = str(
+        quotation_status_for(
+            quotation, has_payment=payload.slips_to_check + payload.slips_found > 0
+        )
+    )
     if quotation.marketplace_request_id is not None:
         # Worth telling the shop: a marketplace request means the buyer is
         # probably asking others too, so a sharp price matters.  It says

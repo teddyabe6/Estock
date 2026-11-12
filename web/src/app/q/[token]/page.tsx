@@ -14,7 +14,26 @@ import { Suspense, use, useEffect, useState } from "react";
 import { PaymentSlipForm } from "@/components/Storefront";
 import { Alert } from "@/components/ui";
 import { money, shortDate } from "@/lib/format";
-import { proformaLabel, proformaTone, shopApi, type ProformaView } from "@/lib/storefront";
+import { paymentBadge, proformaLabel, proformaTone, shopApi, type ProformaView } from "@/lib/storefront";
+
+const METHODS: Record<string, string> = {
+  telebirr: "telebirr",
+  cbe_birr: "CBE Birr",
+  bank_transfer: "bank transfer",
+  cash: "cash",
+};
+
+/** Where one slip has got to, in the customer's words. */
+function slipStatus(status: string): { label: string; tone: "ok" | "warn" | "danger" } {
+  switch (status) {
+    case "accepted":
+      return { label: "found by the seller", tone: "ok" };
+    case "rejected":
+      return { label: "not found", tone: "danger" };
+    default:
+      return { label: "being checked", tone: "warn" };
+  }
+}
 
 export default function ProformaPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
@@ -33,13 +52,16 @@ function Proforma({ token }: { token: string }) {
   const [responded, setResponded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [slipSent, setSlipSent] = useState<string | null>(null);
+  /** Whether the buyer asked to send another slip while one is being checked. */
+  const [another, setAnother] = useState(false);
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     shopApi
       .quotation(token)
       .then(setProforma)
       .catch((cause) => setError(cause instanceof Error ? cause.message : "This link is no longer valid"));
-  }, [token]);
+  }, [token, version]);
 
   async function respond(accept: boolean) {
     setBusy(true);
@@ -74,6 +96,19 @@ function Proforma({ token }: { token: string }) {
   const amount = (value: string | null) => (value === null ? "—" : money(value, currency));
   const phone = proforma.shop?.contact_phone?.replace(/[^\d+]/g, "");
   const title = proforma.status === "requested" ? "Proforma request" : "Proforma";
+  const payment = proforma.payment ?? { state: null, items: [] };
+  // A completed order says so; until then, where the money has got to says
+  // more than "ready to accept" does.
+  const badge =
+    proforma.status === "converted" || proforma.status === "cancelled" ? null : paymentBadge(payment.state);
+  const waiting = payment.state === "checking";
+  const found = payment.items
+    .filter((item) => item.status === "accepted")
+    .reduce((sum, item) => sum + Number(item.amount_claimed ?? 0), 0);
+  const owing =
+    payment.state === "part_paid" && proforma.total_amount !== null
+      ? (Number(proforma.total_amount) - found).toFixed(2)
+      : null;
 
   return (
     <main style={{ maxWidth: 760, margin: "32px auto", padding: "0 16px 60px" }}>
@@ -95,7 +130,11 @@ function Proforma({ token }: { token: string }) {
               {proforma.valid_until ? ` · valid until ${shortDate(proforma.valid_until)}` : ""}
             </p>
           </div>
-          <span className={`badge ${proformaTone(proforma.status)}`}>{proformaLabel(proforma.status)}</span>
+          {badge ? (
+            <span className={`badge ${badge.tone}`}>{badge.label}</span>
+          ) : (
+            <span className={`badge ${proformaTone(proforma.status)}`}>{proformaLabel(proforma.status)}</span>
+          )}
         </div>
 
         {proforma.next_step && (
@@ -229,19 +268,70 @@ function Proforma({ token }: { token: string }) {
       {/* Paying is a separate step from accepting: a buyer may accept and pay
           later, or pay first and accept on the same visit. Both are offered
           once the seller has sent a price. */}
-      {proforma.can_send_payment && !slipSent && (
+      {/* What the buyer has sent, and what the seller said about it: this
+          link is where they come back to find out. */}
+      {payment.items.length > 0 && (
+        <div className="card">
+          <div className="card-title">Your payment</div>
+          <ul className="plain-list" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {payment.items.map((item, index) => {
+              const status = slipStatus(item.status);
+              return (
+                <li key={`${item.submitted_at}-${index}`} style={{ padding: "8px 0", borderTop: index ? "1px solid var(--border, #e5e7eb)" : undefined }}>
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+                    <strong>{item.amount_claimed ? money(item.amount_claimed, currency) : "Amount not given"}</strong>
+                    <span className={`badge ${status.tone}`}>{status.label}</span>
+                  </div>
+                  <div className="muted" style={{ fontSize: "0.88rem" }}>
+                    {[
+                      item.method ? (METHODS[item.method] ?? item.method.replace(/_/g, " ")) : null,
+                      item.reference ? `ref ${item.reference}` : null,
+                      item.submitted_at ? `sent ${shortDate(item.submitted_at)}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                  {item.review_note && (
+                    <div style={{ fontSize: "0.88rem" }}>The seller said: “{item.review_note}”</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {waiting && !another && !slipSent && proforma.can_send_payment && (
+            <button type="button" className="secondary no-print" style={{ marginTop: 8 }} onClick={() => setAnother(true)}>
+              Paid in two parts? Send another slip
+            </button>
+          )}
+        </div>
+      )}
+
+      {proforma.can_send_payment && !slipSent && (!waiting || another) && (
         <PaymentSlipForm
           token={token}
           total={proforma.total_amount}
+          owing={owing}
           currency={proforma.currency}
           shopName={proforma.shop?.display_name ?? proforma.seller.name}
-          onSent={setSlipSent}
+          onSent={(message) => {
+            setSlipSent(message);
+            setAnother(false);
+            // Read the page again, so the slip just sent is listed with the rest.
+            setVersion((current) => current + 1);
+          }}
         />
       )}
       {slipSent && (
         <div className="card no-print">
           <Alert kind="ok">{slipSent}</Alert>
-          <button type="button" className="secondary" onClick={() => setSlipSent(null)}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setSlipSent(null);
+              setAnother(true);
+            }}
+          >
             Send another slip
           </button>
         </div>
