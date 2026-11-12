@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Query, Response, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from app.api.v1.serializers import quotation_out, sale_out
 from app.core.config import settings
@@ -20,6 +20,7 @@ from app.models.commerce import (
     EnquiryStatus,
     OnlineStore,
     PaymentSlip,
+    PaymentSlipStatus,
     Quotation,
     QuotationStatus,
 )
@@ -141,6 +142,54 @@ def shop_summary(ctx: Ctx, db: DbSession) -> dict:
                 CustomerEnquiry.status == EnquiryStatus.NEW
             )
         ),
+        # A buyer saying "I have paid" is the one thing here with somebody
+        # waiting at the other end for an answer.
+        "slips_to_check": count(
+            tenant_query(PaymentSlip, ctx.tenant_id).where(
+                PaymentSlip.status == PaymentSlipStatus.SUBMITTED,
+                # A slip on an order already sold or turned down has nobody
+                # left to answer it for.
+                PaymentSlip.quotation_id.in_(
+                    select(Quotation.id).where(
+                        Quotation.tenant_id == ctx.tenant_id,
+                        Quotation.status.notin_(
+                            (QuotationStatus.CONVERTED, QuotationStatus.CANCELLED)
+                        ),
+                    )
+                ),
+            )
+        ),
+        # Orders where the next move is the shop's: one to price and send,
+        # one the customer has said yes to, one somebody says they have paid
+        # for, and one whose money the shop has found but whose goods have
+        # not gone out.  One number for a badge, counted the way the list it
+        # sits on is sorted, so the two cannot disagree.
+        "orders_waiting": count(
+            tenant_query(Quotation, ctx.tenant_id).where(
+                or_(
+                    Quotation.status.in_(
+                        (
+                            QuotationStatus.REQUESTED,
+                            QuotationStatus.DRAFT,
+                            QuotationStatus.ACCEPTED,
+                        )
+                    ),
+                    and_(
+                        Quotation.status.notin_(
+                            (QuotationStatus.CONVERTED, QuotationStatus.CANCELLED)
+                        ),
+                        Quotation.id.in_(
+                            select(PaymentSlip.quotation_id).where(
+                                PaymentSlip.tenant_id == ctx.tenant_id,
+                                PaymentSlip.status.in_(
+                                    (PaymentSlipStatus.SUBMITTED, PaymentSlipStatus.ACCEPTED)
+                                ),
+                            )
+                        ),
+                    ),
+                )
+            )
+        ),
     }
 
 
@@ -221,11 +270,35 @@ def list_quotations(
     if status_filter:
         stmt = stmt.where(Quotation.status == status_filter)
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
-    rows = db.execute(
-        stmt.order_by(Quotation.created_at.desc()).limit(limit).offset(offset)
-    ).scalars()
+    rows = list(
+        db.execute(
+            stmt.order_by(Quotation.created_at.desc()).limit(limit).offset(offset)
+        ).scalars()
+    )
+    # Counted once for the page, not once per row.
+    slips: dict[tuple[uuid.UUID, str], int] = {}
+    if rows:
+        for quotation_id, slip_status, number in db.execute(
+            select(PaymentSlip.quotation_id, PaymentSlip.status, func.count())
+            .where(
+                PaymentSlip.tenant_id == ctx.tenant_id,
+                PaymentSlip.quotation_id.in_([q.id for q in rows]),
+            )
+            .group_by(PaymentSlip.quotation_id, PaymentSlip.status)
+        ).all():
+            slips[(quotation_id, str(slip_status))] = number
     return Page(
-        items=[quotation_out(q) for q in rows], total=total, limit=limit, offset=offset
+        items=[
+            quotation_out(
+                q,
+                slips_to_check=slips.get((q.id, str(PaymentSlipStatus.SUBMITTED)), 0),
+                slips_found=slips.get((q.id, str(PaymentSlipStatus.ACCEPTED)), 0),
+            )
+            for q in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -338,6 +411,7 @@ def convert(
             for p in payload.payments
         ],
         due_date=payload.due_date,
+        due_date_preset=payload.due_date_preset,
     )
     return SaleResponse(
         sale=sale_out(ctx, result.sale),

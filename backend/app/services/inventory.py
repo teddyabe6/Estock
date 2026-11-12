@@ -27,6 +27,7 @@ from app.core.errors import (
 )
 from app.core.permissions import Permission
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
+from app.core.wording import count_of
 from app.models.catalogue import Category, Product, ProductVariant
 from app.models.inventory import (
     OPEN_TRANSFER_STATUSES,
@@ -817,7 +818,7 @@ def _notify_approvers(
             kind=NotificationKind.STOCK_REQUEST,
             title=f"{destination.name} is asking {source.name} for stock",
             body=(
-                f"Request {transfer.reference} · {len(transfer.lines)} item(s)"
+                f"Request {transfer.reference} · {count_of(len(transfer.lines), 'item')}"
                 + (f" · {transfer.note}" if transfer.note else "")
             ),
             link="/stock?tab=transfers",
@@ -1148,7 +1149,7 @@ def post_count(db: Session, ctx: AuthContext, count_id: uuid.UUID) -> StockCount
         actor_user_id=ctx.user_id,
         entity_type="stock_count",
         entity_id=count.id,
-        summary=f"Posted {count.reference} with {adjustments} adjustment(s)",
+        summary=f"Posted {count.reference} with {count_of(adjustments, 'adjustment')}",
     )
     db.flush()
     return count

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -50,6 +51,39 @@ class ApiClient {
       _send('POST', path, body: body, anonymous: anonymous);
 
   Future<dynamic> patch(String path, {Object? body}) => _send('PATCH', path, body: body);
+
+  /// A file the server will only hand to somebody signed in — a payment
+  /// slip, say, which is a stranger's banking document and has no public
+  /// link on purpose.  Returns its bytes and what kind of thing they are.
+  Future<(Uint8List, String)> getBytes(String path) async {
+    final headers = <String, String>{};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    late http.Response response;
+    try {
+      response = await _http
+          .get(Uri.parse('$baseUrl$path'), headers: headers)
+          .timeout(_timeout);
+    } on TimeoutException {
+      throw ApiException(0, 'timeout', 'The server took too long to answer.');
+    } catch (_) {
+      throw ApiException(0, 'network_error', 'No connection.');
+    }
+    if (response.statusCode >= 400) {
+      final dynamic payload = _tryDecode(utf8.decode(response.bodyBytes));
+      final map =
+          payload is Map<String, dynamic> ? payload : const <String, dynamic>{};
+      throw ApiException(
+        response.statusCode,
+        map['code'] as String? ?? 'error',
+        map['message'] as String? ?? 'Request failed (${response.statusCode})',
+        map['details'],
+      );
+    }
+    return (
+      response.bodyBytes,
+      response.headers['content-type'] ?? 'application/octet-stream',
+    );
+  }
 
   Future<dynamic> _send(
     String method,

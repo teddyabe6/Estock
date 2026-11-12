@@ -821,6 +821,13 @@ class QuotationOut(Schema):
     lines: list[QuotationLineOut] = []
     share: dict | None = None
     converted_sale_id: uuid.UUID | None = None
+    #: Proofs of payment the buyer has sent that nobody has looked at yet.
+    #: A list has to be able to say "this one is waiting on you" without
+    #: opening every row to find out.
+    slips_to_check: int = 0
+    #: Slips the seller has looked at and found the money for.  The goods are
+    #: owed to the customer until the proforma becomes a sale.
+    slips_found: int = 0
 
 
 class QuotationUpdateIn(BaseModel):
@@ -866,3 +873,5 @@ class ConvertQuotationIn(BaseModel):
     location_id: uuid.UUID | None = None
     payments: list[PaymentIn] = []
     due_date: date | None = None
+    #: The till's quick choices ("7_days"), for whatever is left unpaid.
+    due_date_preset: str | None = None

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from app.core.config import settings
 from app.core.deps import DbSession, client_ip, limit_public_requests
 from app.core.errors import ValidationError
+from app.core.wording import count_of
 from app.schemas.operations import MarketplaceRequestIn
 from app.services import marketplace, platform_settings
 from app.services.commerce import (
@@ -139,7 +140,7 @@ def submit_request(
         "url": marketplace_request_url(result.request.share_token),
         "shop_count": len(result.quotations),
         "message": (
-            f"Sent to {len(result.quotations)} shop(s). "
+            f"Sent to {count_of(len(result.quotations), 'shop')}. "
             "Keep this link to see their prices as they answer."
         ),
     }

@@ -30,6 +30,7 @@ from app.core.permissions import Permission
 from app.core.phone import normalise_et_phone
 from app.core.security import generate_public_reference, generate_share_token
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
+from app.core.wording import count_of
 from app.models.catalogue import Category, Product, ProductVariant
 from app.models.commerce import (
     CustomerEnquiry,
@@ -585,7 +586,7 @@ def request_quotation(
             else f"Proforma request {quotation.number} from {quotation.customer_name}"
         ),
         body=(
-            f"{len(quotation.lines)} item(s) · {quotation.total_amount} {quotation.currency}"
+            f"{count_of(len(quotation.lines), 'item')} · {quotation.total_amount} {quotation.currency}"
             + (
                 " · other shops were asked for the same basket, so price it soon"
                 if from_marketplace
@@ -986,6 +987,7 @@ def convert_to_sale(
     location_id: uuid.UUID | None = None,
     payments: list | None = None,
     due_date: date | None = None,
+    due_date_preset: str | None = None,
 ):
     """The explicit step that turns a proforma into a sale (PRD 14)."""
     from app.services.sales import SaleInput, SaleLineInput, create_sale
@@ -1042,14 +1044,15 @@ def convert_to_sale(
             customer_id=customer_id,
             note=f"From proforma {quotation.number}",
             due_date=due_date,
+            due_date_preset=due_date_preset,
             idempotency_key=f"quotation:{quotation.id}",
         ),
     )
     if Decimal(quotation.delivery_charge or 0) > 0:
         # A sale has no delivery line; say so rather than let the charge vanish.
         result.warnings.append(
-            f"The proforma's delivery charge of {quotation.delivery_charge} "
-            f"{quotation.currency} is not part of the sale total; record it separately."
+            f"The delivery charge of {quotation.delivery_charge} {quotation.currency} "
+            "is not part of the sale. Collect it separately."
         )
 
     quotation.status = QuotationStatus.CONVERTED

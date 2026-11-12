@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import AuditAction, record_audit
 from app.core.clock import local_today
 from app.core.errors import NotFoundError, PlanLimitReached
+from app.core.wording import count_of
 from app.models.access import MembershipStatus, TenantMembership
 from app.models.catalogue import Product
 from app.models.organisation import Branch
@@ -69,7 +70,7 @@ def describe(db: Session, tenant: Tenant, *, today: date | None = None) -> Subsc
             "subscribe to record new sales and stock again."
         )
     elif days is not None and 0 <= days <= 7:
-        message = f"Your trial ends in {days} day(s)."
+        message = f"Your trial ends in {count_of(days, 'day')}."
 
     return SubscriptionState(
         status=tenant.status,
@@ -145,7 +146,7 @@ def warn_expiring_trials(db: Session, *, today: date | None = None) -> int:
         if notify_owners(
             db,
             tenant,
-            title=f"Your trial ends in {days} day(s)",
+            title=f"Your trial ends in {count_of(days, 'day')}",
             body="Subscribe to keep recording sales, stock and credit without interruption.",
         ):
             warned += 1

@@ -237,10 +237,34 @@ def credit_out(
     )
 
 
-def quotation_out(quotation: Quotation, *, include_share: bool = True) -> QuotationOut:
+def quotation_out(
+    quotation: Quotation,
+    *,
+    include_share: bool = True,
+    slips_to_check: int | None = None,
+    slips_found: int | None = None,
+) -> QuotationOut:
+    """One proforma as the API shows it.
+
+    ``slips_to_check`` and ``slips_found`` are passed by a caller that has
+    already counted them for a whole page; left out, they are read off this
+    one proforma.
+    """
+    from app.models.commerce import PaymentSlipStatus
     from app.services.commerce import EDITABLE_STATUSES, quotation_status_for, share_links
 
+    def counted(status: PaymentSlipStatus) -> int:
+        return sum(1 for slip in quotation.payment_slips if slip.status == status)
+
     payload = QuotationOut.model_validate(quotation)
+    payload.slips_to_check = (
+        slips_to_check
+        if slips_to_check is not None
+        else counted(PaymentSlipStatus.SUBMITTED)
+    )
+    payload.slips_found = (
+        slips_found if slips_found is not None else counted(PaymentSlipStatus.ACCEPTED)
+    )
     payload.status = str(quotation_status_for(quotation))
     if quotation.marketplace_request_id is not None:
         # Worth telling the shop: a marketplace request means the buyer is

@@ -51,9 +51,20 @@ class AppState extends ChangeNotifier {
   /// requests their own branch has yet to take up.
   int transfersNeedingMe = 0;
 
+  int _shopNeedsYou = 0;
+
+  /// Online orders where the next move is the shop's — one to price and
+  /// send, one the customer said yes to, one somebody says they have paid
+  /// for — plus questions nobody has opened.  For the badge on the Shop tab.
+  int get shopNeedsYou => _shopNeedsYou;
+
   DateTime? catalogueFetchedAt;
   bool loading = true;
   String? error;
+
+  /// When the server was last asked for everything, so coming back to the
+  /// app can catch up without asking again every time a call is answered.
+  DateTime? _refreshedAt;
 
   int _unreadNotifications = 0;
 
@@ -144,6 +155,8 @@ class AppState extends ChangeNotifier {
     branchStock = const StockByBranch.empty();
     branchesToCount = const [];
     transfersNeedingMe = 0;
+    _shopNeedsYou = 0;
+    _refreshedAt = null;
     await catalogue.clear();
     // The outbox is deliberately kept: unsynced work is not thrown away
     // because someone signed out.
@@ -153,6 +166,7 @@ class AppState extends ChangeNotifier {
   /// Refresh the session and catalogue from the server, falling back to the
   /// cached copies when there is no connection.
   Future<void> refresh() async {
+    _refreshedAt = DateTime.now();
     try {
       final dynamic sessionJson = await api.get('/auth/session');
       session = UserSession.fromJson(Map<String, dynamic>.from(sessionJson as Map));
@@ -179,6 +193,7 @@ class AppState extends ChangeNotifier {
         await catalogue.saveCustomers(customers);
       }
       if (session!.can('stock:view')) await _refreshStock();
+      await refreshShopWaiting();
       final dynamic notices =
           await api.get('/notifications', query: {'unread_only': 'true', 'limit': '1'});
       _unreadNotifications = ((notices as Map<String, dynamic>)['unread'] as num?)?.toInt() ?? 0;
@@ -193,6 +208,50 @@ class AppState extends ChangeNotifier {
       // A network failure is not an error to show: the cached data still works.
     } finally {
       notifyListeners();
+    }
+  }
+
+  /// Catch up after the app has been out of sight, unless it only just did.
+  ///
+  /// A phone spends the day in a pocket with the app behind something else.
+  /// What it shows when it comes back should be now, not this morning — an
+  /// order that arrived at noon is no use on a screen last drawn at nine.
+  Future<void> refreshIfStale({
+    Duration after = const Duration(minutes: 1),
+  }) async {
+    if (!isSignedIn) return;
+    final last = _refreshedAt;
+    if (last != null && DateTime.now().difference(last) < after) return;
+    await refresh();
+  }
+
+  /// Ask the server again what is waiting on the online shop.
+  ///
+  /// Its own small request, so that answering one order does not cost a
+  /// refresh of the whole catalogue to clear the badge it was behind.
+  Future<void> refreshShopWaiting() async {
+    final user = session;
+    if (user == null || !user.can('shop:view')) return;
+    try {
+      final dynamic summary = await api.get('/shop/summary');
+      final map = Map<String, dynamic>.from(summary as Map);
+      int of(String key) => (map[key] as num?)?.toInt() ?? 0;
+      // A server from before it counted these for us says less; what it
+      // does say is still better than no badge.
+      final orders = map.containsKey('orders_waiting')
+          ? of('orders_waiting')
+          : of('proforma_requests') + of('slips_to_check');
+      final waiting = (user.can('quotation:view') ? orders : 0) +
+          (user.can('enquiry:view') ? of('new_enquiries') : 0);
+      if (waiting != _shopNeedsYou) {
+        _shopNeedsYou = waiting;
+        notifyListeners();
+      }
+    } on ApiException catch (exception) {
+      if (exception.isAuthError) rethrow;
+      // The last count stands: no connection is not "nothing waiting".
+    } on TypeError {
+      // Nor is an answer in a shape this phone does not know.
     }
   }
 

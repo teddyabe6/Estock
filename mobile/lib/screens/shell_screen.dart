@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/app_state.dart';
@@ -17,7 +19,7 @@ class _Tab {
     required this.screen,
     this.permission,
     this.ownsTitle = false,
-    this.showsNotices = false,
+    this.waiting,
     this.actions,
   });
 
@@ -42,14 +44,20 @@ class _Tab {
   /// one above it.
   final bool ownsTitle;
 
-  /// Set on the tab that leads to the notifications, which carries the count
-  /// of what is waiting. A notice nobody can see is a sale lost.
-  final bool showsNotices;
+  /// How many things behind this tab are waiting on whoever holds the
+  /// phone, for the count the bar carries. A notice nobody can see is a sale
+  /// lost — and so is an order, or a van at the door, that only shows once
+  /// the right tab happens to be opened.
+  final int Function(AppState state)? waiting;
 
   /// What this tab puts in the app bar, where a screen has work to offer
   /// beyond what its body shows.
   final List<Widget> Function(BuildContext context, AppState state)? actions;
 }
+
+int _transfersWaiting(AppState state) => state.transfersNeedingMe;
+int _ordersWaiting(AppState state) => state.shopNeedsYou;
+int _noticesWaiting(AppState state) => state.unreadNotifications;
 
 /// The five the web shows on a phone, in the same order and with the same
 /// icons: Home, Sales, Stock, Shop, More (PRD 7).
@@ -81,6 +89,7 @@ const _tabs = <_Tab>[
     icon: Icons.inventory_2_outlined,
     screen: StockScreen(),
     permission: 'stock:view',
+    waiting: _transfersWaiting,
     actions: stockTabActions,
   ),
   _Tab(
@@ -89,13 +98,14 @@ const _tabs = <_Tab>[
     icon: Icons.storefront_outlined,
     screen: ShopScreen(),
     permission: 'shop:view',
+    waiting: _ordersWaiting,
   ),
   _Tab(
     label: 'More',
     title: 'More',
     icon: Icons.more_horiz,
     screen: MoreScreen(),
-    showsNotices: true,
+    waiting: _noticesWaiting,
   ),
 ];
 
@@ -113,10 +123,31 @@ class ShellScreen extends StatefulWidget {
   State<ShellScreen> createState() => _ShellScreenState();
 }
 
-class _ShellScreenState extends State<ShellScreen> {
+class _ShellScreenState extends State<ShellScreen>
+    with WidgetsBindingObserver {
   /// An index into the tabs on screen, not into [_tabs]: which of those are
   /// shown depends on the role.
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Coming back to the app is the moment its counts matter most, and the
+  /// moment they are most likely to be hours old.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
+    unawaited(AppScope.of(context).refreshIfStale());
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -198,9 +229,9 @@ class _ShellScreenState extends State<ShellScreen> {
           destinations: [
             for (final tab in tabs)
               NavigationDestination(
-                icon: tab.showsNotices && state.unreadNotifications > 0
+                icon: (tab.waiting?.call(state) ?? 0) > 0
                     ? Badge.count(
-                        count: state.unreadNotifications,
+                        count: tab.waiting!(state),
                         child: Icon(tab.icon),
                       )
                     : Icon(tab.icon),

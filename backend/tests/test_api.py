@@ -672,6 +672,58 @@ def test_converting_a_proforma_with_a_delivery_charge_says_so(client, business):
     assert any("delivery charge" in w for w in converted.json()["warnings"])
 
 
+def test_what_a_proforma_leaves_unpaid_takes_the_tills_due_date(client, business):
+    """Selling an online order on the phone asks the same question the till
+    does about whatever is left owing — "pay the rest by" — and so sends the
+    same answer, a quick choice rather than a date somebody has to work out.
+    """
+    from datetime import date, timedelta
+
+    product = business.add_product("Part paid", selling_price="100", opening_stock="10")
+    quotation = client.post(
+        "/api/v1/shop/quotations",
+        json={
+            "customer_name": "Half Now",
+            "customer_phone": "0911000001",
+            "lines": [{"variant_id": str(product.default_variant.id), "quantity": "3"}],
+        },
+        headers=business.headers(),
+    ).json()
+    converted = client.post(
+        f"/api/v1/shop/quotations/{quotation['id']}/convert",
+        json={
+            "payments": [{"method": "telebirr", "amount": "100"}],
+            "due_date_preset": "7_days",
+        },
+        headers=business.headers(),
+    )
+    assert converted.status_code == 200, converted.text
+    owed = client.get(
+        f"/api/v1/credit/transactions/{converted.json()['credit_transaction_id']}",
+        headers=business.headers(),
+    ).json()
+    assert owed["balance"] == "200.00"
+    issued = date.fromisoformat(owed["issued_on"])
+    assert date.fromisoformat(owed["due_date"]) == issued + timedelta(days=7)
+
+    # A choice the till does not offer is refused, not quietly dropped.
+    other = client.post(
+        "/api/v1/shop/quotations",
+        json={
+            "customer_name": "Half Now",
+            "customer_phone": "0911000001",
+            "lines": [{"variant_id": str(product.default_variant.id), "quantity": "1"}],
+        },
+        headers=business.headers(),
+    ).json()
+    refused = client.post(
+        f"/api/v1/shop/quotations/{other['id']}/convert",
+        json={"payments": [], "due_date_preset": "whenever"},
+        headers=business.headers(),
+    )
+    assert refused.status_code == 422
+
+
 def test_business_settings_accept_a_default_tax_rate(client, business):
     response = client.patch(
         "/api/v1/business",

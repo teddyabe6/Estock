@@ -94,7 +94,7 @@ class _PendingScreenState extends State<PendingScreen> {
                             title: Text(entry.summary),
                             subtitle: Text(
                               'Captured ${Money.dateTime(entry.createdAt)}'
-                              '${entry.attempts > 0 ? ' · ${entry.attempts} attempt(s)' : ''}',
+                              '${entry.attempts > 0 ? ' · tried ${countOf(entry.attempts, 'time')}' : ''}',
                             ),
                           )),
                     ],

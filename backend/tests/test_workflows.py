@@ -217,7 +217,7 @@ def test_import_refuses_to_proceed_when_errors_must_be_fixed(business, tmp_path,
         business.db, business.ctx, filename="bad.xlsx", content_type=XLSX, content=content
     )
     validate_import(business.db, business.ctx, job.id, mapping)
-    with pytest.raises(ValidationError, match="need attention"):
+    with pytest.raises(ValidationError, match="needs? attention"):
         commit_import(business.db, business.ctx, job.id, skip_rows_with_errors=False)
 
 

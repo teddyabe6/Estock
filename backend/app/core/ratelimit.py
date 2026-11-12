@@ -18,6 +18,7 @@ import time
 from collections import deque
 
 from app.core.errors import DomainError
+from app.core.wording import count_of
 
 
 class RateLimited(DomainError):
@@ -72,7 +73,7 @@ class RateLimiter:
         if not self._window.hit(key, limit=self.limit, window_seconds=self.window_seconds):
             minutes = max(1, self.window_seconds // 60)
             raise RateLimited(
-                f"Too many attempts. Please wait {minutes} minute(s) and try again.",
+                f"Too many attempts. Please wait {count_of(minutes, 'minute')} and try again.",
                 details={"retry_after_seconds": self.window_seconds},
             )
 

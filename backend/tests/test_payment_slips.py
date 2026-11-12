@@ -284,6 +284,121 @@ def test_the_seller_accepts_a_slip_and_it_still_posts_nothing(
     assert db.query(Payment).count() == before, "accepting is not posting"
 
 
+def test_a_list_of_proformas_says_which_have_a_slip_waiting(
+    client, db, business, sent_proforma
+):
+    """Somebody at the other end is waiting to hear their money arrived.
+
+    A phone showing a list of orders has to be able to say "this one needs
+    you" without opening every row to count its slips, and the count has to
+    fall away the moment the slip has been looked at.
+    """
+    slip = attach_payment_slip(db, sent_proforma.share_token, _slip())
+    db.flush()
+    headers = business.headers()
+
+    listed = client.get("/api/v1/shop/quotations", headers=headers).json()
+    row = next(q for q in listed["items"] if q["id"] == str(sent_proforma.id))
+    assert row["slips_to_check"] == 1
+    assert client.get("/api/v1/shop/summary", headers=headers).json()["slips_to_check"] == 1
+    one = client.get(f"/api/v1/shop/quotations/{sent_proforma.id}", headers=headers).json()
+    assert one["slips_to_check"] == 1
+
+    client.post(
+        f"/api/v1/shop/payment-slips/{slip.id}/review",
+        json={"accept": True},
+        headers=headers,
+    )
+
+    listed = client.get("/api/v1/shop/quotations", headers=headers).json()
+    row = next(q for q in listed["items"] if q["id"] == str(sent_proforma.id))
+    assert row["slips_to_check"] == 0
+    assert row["slips_found"] == 1, "the money was found, and the list says so"
+    assert client.get("/api/v1/shop/summary", headers=headers).json()["slips_to_check"] == 0
+    one = client.get(f"/api/v1/shop/quotations/{sent_proforma.id}", headers=headers).json()
+    assert one["slips_found"] == 1
+
+
+def test_the_summary_counts_the_orders_that_are_the_shops_move(
+    client, db, business, sent_proforma
+):
+    """One number for the badge on a phone's Shop tab.
+
+    A sent proforma is the customer's move, so it is not counted.  It becomes
+    the shop's the moment somebody says they have paid for it, and stays the
+    shop's once the money has been found — the customer has paid and is
+    waiting for the goods — until it becomes a sale or is turned down.
+    Counted per order, not per slip: two slips against one order is one
+    thing to do.
+    """
+    headers = business.headers()
+
+    def waiting() -> int:
+        return client.get("/api/v1/shop/summary", headers=headers).json()["orders_waiting"]
+
+    assert waiting() == 0
+
+    first = attach_payment_slip(db, sent_proforma.share_token, _slip())
+    second = attach_payment_slip(db, sent_proforma.share_token, _slip())
+    db.flush()
+    assert waiting() == 1
+
+    client.post(
+        f"/api/v1/shop/payment-slips/{first.id}/review",
+        json={"accept": False},
+        headers=headers,
+    ).raise_for_status()
+    assert waiting() == 1, "the second slip is still to be checked"
+
+    client.post(
+        f"/api/v1/shop/payment-slips/{second.id}/review",
+        json={"accept": True},
+        headers=headers,
+    ).raise_for_status()
+    assert waiting() == 1, "paid for, and the goods have not gone out"
+
+    client.post(
+        f"/api/v1/shop/quotations/{sent_proforma.id}/convert",
+        json={"payments": [{"method": "bank_transfer", "amount": "900"}]},
+        headers=headers,
+    ).raise_for_status()
+    assert waiting() == 0
+
+
+def test_a_slip_that_was_not_found_hands_the_order_back_to_the_customer(
+    client, db, business, sent_proforma
+):
+    headers = business.headers()
+    slip = attach_payment_slip(db, sent_proforma.share_token, _slip())
+    db.flush()
+    client.post(
+        f"/api/v1/shop/payment-slips/{slip.id}/review",
+        json={"accept": False},
+        headers=headers,
+    ).raise_for_status()
+    assert client.get("/api/v1/shop/summary", headers=headers).json()["orders_waiting"] == 0
+
+
+def test_a_customer_saying_yes_hands_the_order_back_to_the_shop(
+    client, business, sent_proforma
+):
+    headers = business.headers()
+
+    def waiting() -> int:
+        return client.get("/api/v1/shop/summary", headers=headers).json()["orders_waiting"]
+
+    assert waiting() == 0
+    client.post(
+        f"/api/v1/public/quotations/{sent_proforma.share_token}/respond?accept=true"
+    ).raise_for_status()
+    assert waiting() == 1, "the goods have to go out, and the sale written down"
+
+    client.post(
+        f"/api/v1/shop/quotations/{sent_proforma.id}/cancel", json={}, headers=headers
+    ).raise_for_status()
+    assert waiting() == 0
+
+
 def test_the_seller_can_reject_a_slip(client, db, business, sent_proforma):
     slip = attach_payment_slip(db, sent_proforma.share_token, _slip())
     db.flush()

@@ -1,9 +1,62 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
 import '../widgets/common.dart';
+import 'credit_detail_screen.dart';
+import 'shop_order_screen.dart';
+
+/// Open what a notice is about.
+///
+/// The server writes each notice's link for the web —
+/// "/shop?tab=proformas&open=…" — and the phone has its own screens for the
+/// same things.  Read here, so that a notice saying a customer has paid
+/// opens that order, instead of turning a dot grey and leaving the reader
+/// to go and find it.  Returns whether it led anywhere.
+Future<bool> openNotice(BuildContext context, String? link) async {
+  final uri = link == null || link.isEmpty ? null : Uri.tryParse(link);
+  if (uri == null) return false;
+  final navigator = Navigator.of(context);
+  final query = uri.queryParameters;
+  final open = query['open'] ?? query['proforma'];
+  switch (uri.path) {
+    case '/shop':
+      if (query['tab'] == 'enquiries') {
+        await navigator.pushNamed('/shop', arguments: open);
+      } else if (open != null) {
+        await navigator.push<bool>(MaterialPageRoute(
+          builder: (_) => ShopOrderScreen(orderId: open),
+        ));
+      } else {
+        await navigator.pushNamed('/shop');
+      }
+      return true;
+    case '/stock':
+      if (query['tab'] == 'transfers') {
+        await navigator.pushNamed('/stock/transfers');
+        return true;
+      }
+      if (query['view'] == 'low') {
+        await navigator.pushNamed('/stock/low');
+        return true;
+      }
+      return false;
+    case '/credit':
+      if (open != null) {
+        await navigator.push<void>(MaterialPageRoute(
+          builder: (_) => CreditDetailScreen(transactionId: open),
+        ));
+      } else {
+        await navigator.pushNamed('/credit');
+      }
+      return true;
+    default:
+      return false;
+  }
+}
 
 /// What the shop has been told: proforma requests, enquiries, payment slips,
 /// low stock and subscription notices (PRD 9, 11.4).
@@ -209,7 +262,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ? Icon(Icons.circle,
                   size: 10, color: Theme.of(context).colorScheme.primary)
               : null,
-          onTap: () => _markRead(item),
+          onTap: () {
+            unawaited(_markRead(item));
+            unawaited(openNotice(context, item['link'] as String?));
+          },
         );
       },
     );
@@ -230,6 +286,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return Icons.receipt_long_outlined;
       case 'low_stock':
         return Icons.inventory_2_outlined;
+      case 'stock_request':
+        return Icons.move_down_outlined;
+      case 'stock_request_decided':
+        return Icons.fact_check_outlined;
       case 'credit_reminder':
         return Icons.account_balance_wallet_outlined;
       case 'trial_expiry':

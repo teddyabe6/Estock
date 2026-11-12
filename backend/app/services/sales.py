@@ -27,6 +27,7 @@ from app.core.tenancy import (
     resolve_location,
     tenant_query,
 )
+from app.core.wording import count_of
 from app.models.catalogue import ProductVariant
 from app.models.contacts import Customer
 from app.models.credit import CreditKind, CreditTransaction
@@ -419,7 +420,7 @@ def void_sale(db: Session, ctx: AuthContext, sale_id: uuid.UUID, *, reason: str)
         # of a return would put the returned units back twice and refund them
         # twice, so the returns have to be dealt with first.
         raise ConflictError(
-            f"Sale {sale.number} has {len(sale.returns)} return(s) against it. "
+            f"Sale {sale.number} has {count_of(len(sale.returns), 'return')} against it. "
             "Voiding it now would reverse the returned goods a second time.",
             code="sale_has_returns",
             details={"returns": [r.number for r in sale.returns]},

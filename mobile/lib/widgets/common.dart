@@ -263,6 +263,13 @@ Future<String?> askForReason(
   );
 }
 
+/// "1 item", "3 items" — a count with the word that goes with it.
+///
+/// Never "3 item(s)": that is a form asking the reader to finish the
+/// sentence, and it reads as a machine on a screen meant to read as a shop.
+String countOf(int number, String one, [String? many]) =>
+    '$number ${number == 1 ? one : (many ?? '${one}s')}';
+
 /// Section heading inside a scrolling screen.
 class SectionTitle extends StatelessWidget {
   const SectionTitle(this.text, {super.key, this.trailing});

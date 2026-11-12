@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import day_start, local_today
 from app.core.db import utcnow
 from app.core.permissions import Permission
+from app.core.wording import count_of, need
 from app.models.access import MembershipStatus, TenantMembership
 from app.models.credit import (
     CreditKind,
@@ -235,7 +236,7 @@ def run_low_stock_alerts(db: Session) -> LowStockRunResult:
         if not urgent:
             continue
         staff = recipients_for(db, tenant.id, Permission.STOCK_VIEW)
-        headline = f"{len(urgent)} product(s) need restocking"
+        headline = f"{count_of(len(urgent), 'product')} {need(len(urgent))} restocking"
         body = ", ".join(item.name for item in urgent[:5])
         if len(urgent) > 5:
             body += f" and {len(urgent) - 5} more"
@@ -292,7 +293,7 @@ def run_unanswered_request_nudges(
         result.requests_waiting += len(waiting)
 
         racing = [q for q in waiting if q.marketplace_request_id is not None]
-        headline = f"{len(waiting)} proforma request(s) waiting for your price"
+        headline = f"{count_of(len(waiting), 'proforma request')} waiting for your price"
         body = ", ".join(f"{q.number} for {q.customer_name}" for q in waiting[:5])
         if len(waiting) > 5:
             body += f" and {len(waiting) - 5} more"

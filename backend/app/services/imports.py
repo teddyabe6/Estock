@@ -21,6 +21,7 @@ from app.core.db import utcnow
 from app.core.errors import ConflictError, PlanLimitReached, ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import AuthContext, get_tenant_object, tenant_query
+from app.core.wording import count_of, need
 from app.models.catalogue import Product, ProductVariant
 from app.models.system import FileAsset, ImportJob, ImportJobStatus, ImportRowError
 from app.services.catalogue import ProductInput, create_product
@@ -465,7 +466,8 @@ def commit_import(
         raise ConflictError("Validate the import before applying it")
     if job.error_rows and not skip_rows_with_errors:
         raise ValidationError(
-            f"{job.error_rows} row(s) need attention. Fix them, or re-run allowing "
+            f"{count_of(job.error_rows, 'row')} {need(job.error_rows)} attention. "
+            f"Fix {'it' if job.error_rows == 1 else 'them'}, or re-run allowing "
             "rows with problems to be skipped."
         )
 
@@ -522,7 +524,7 @@ def commit_import(
         actor_user_id=ctx.user_id,
         entity_type="import_job",
         entity_id=job.id,
-        summary=f"Imported {created} product(s), skipped {skipped}",
+        summary=f"Imported {count_of(created, 'product')}, skipped {skipped}",
         payload={"filename": job.original_filename},
     )
     db.flush()

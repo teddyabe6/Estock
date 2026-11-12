@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/app_state.dart';
+import 'common.dart';
 
 /// Tells the user, without alarm, that work is being held on the device.
 ///
@@ -25,22 +26,27 @@ class OfflineBanner extends StatelessWidget {
       (_, true, _) => (
           Icons.error_outline,
           scheme.error,
-          '${sync.rejectedCount} item(s) could not be saved. Tap to review.',
+          '${countOf(sync.rejectedCount, 'item')} could not be saved. '
+              'Tap to see why.',
         ),
       (false, false, 0) => (
           Icons.cloud_off,
           scheme.onSurfaceVariant,
-          'Offline. You can keep selling — everything syncs when you reconnect.',
+          'No connection. You can keep selling — it is all sent when you '
+              'are back online.',
         ),
       (false, false, final pending) => (
           Icons.cloud_off,
           const Color(0xFF9A6200),
-          'Offline. $pending item(s) waiting to sync.',
+          'No connection. ${countOf(pending, 'item')} saved on this phone, '
+              'waiting to be sent.',
         ),
       (true, false, final pending) => (
           sync.isSyncing ? Icons.sync : Icons.cloud_upload_outlined,
           const Color(0xFF9A6200),
-          sync.isSyncing ? 'Syncing $pending item(s)…' : '$pending item(s) waiting to sync.',
+          sync.isSyncing
+              ? 'Sending ${countOf(pending, 'item')}…'
+              : '${countOf(pending, 'item')} waiting to be sent.',
         ),
     };
 
