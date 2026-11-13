@@ -94,6 +94,13 @@ List<_StockJob> _stockJobs(AppState state) {
         '/stock/transfers',
         badge: state.transfersNeedingMe,
       ),
+    if (session.can('product:manage'))
+      const _StockJob(
+        Icons.add_box_outlined,
+        'Start selling something new',
+        'Add a product you do not have yet',
+        '/products/new',
+      ),
   ];
 }
 
@@ -746,10 +753,32 @@ class _StockScreenState extends State<StockScreen> {
       );
     }
     if (_search.text.trim().isNotEmpty) {
-      return const EmptyState(
-        icon: Icons.search_off,
-        title: 'Nothing matches that',
-        message: 'Try part of the name, the SKU, or scan the barcode.',
+      final typed = _search.text.trim();
+      // Not finding something is, as often as not, the moment it turns
+      // out to be new: so the way to add it is right here, with its name
+      // already typed.
+      final mayAdd = state.session?.can('product:manage') ?? false;
+      return Column(
+        children: [
+          EmptyState(
+            icon: Icons.search_off,
+            title: 'Nothing matches that',
+            message: mayAdd
+                ? 'Try part of the name — or, if it is new, add it.'
+                : 'Try part of the name, the SKU, or scan the barcode.',
+          ),
+          if (mayAdd)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: FilledButton.tonalIcon(
+                key: const Key('addFromSearch'),
+                onPressed: () => Navigator.of(context)
+                    .pushNamed('/products/new', arguments: typed),
+                icon: const Icon(Icons.add),
+                label: Text('Add “$typed” as a new product'),
+              ),
+            ),
+        ],
       );
     }
     return const EmptyState(

@@ -186,6 +186,33 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
     );
   }
 
+  /// Put a payment back: taken twice, typed wrong, or a transfer that
+  /// never arrived.  Nothing is deleted — the row stays, crossed out, with
+  /// the reason beside it — and the amount goes back onto what is owed.
+  Future<void> _undoPayment(Map<String, dynamic> payment) async {
+    final currency = AppScope.of(context).session?.currency ?? 'ETB';
+    final amount = Money.format(payment['amount'], currency: currency);
+    final who = _row?['counterparty_name'] as String?;
+    final method = _methodLabel(payment['method'] as String?).toLowerCase();
+    final when = Money.dateTime(DateTime.tryParse('${payment['paid_at']}'));
+    final reason = await askForReason(
+      context,
+      title: 'Undo this payment?',
+      body: '$amount, $method, $when. '
+          '${_payable ? 'It goes back onto what you owe ${who ?? 'them'}.' : 'It goes back onto what ${who ?? 'they'} ${who == null ? 'owe' : 'owes'}.'}',
+      label: 'Why?',
+      hint: 'Taken twice by mistake, say',
+      confirm: 'Undo it',
+      minLength: 3,
+    );
+    if (reason == null || !mounted) return;
+    await _post(
+      '/credit/payments/${payment['id']}/reverse',
+      {'reason': reason},
+      (_) => 'Undone. $amount is owing again.',
+    );
+  }
+
   Future<void> _changeDueDate() async {
     final preset = await showModalBottomSheet<String>(
       context: context,
@@ -479,9 +506,18 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
                     Money.dateTime(DateTime.tryParse('${payment['paid_at']}')),
                     if (payment['reference'] != null) '${payment['reference']}',
                     if (payment['is_reversed'] as bool? ?? false)
-                      'reversed — ${payment['reversal_reason'] ?? 'no reason given'}',
+                      'undone — ${payment['reversal_reason'] ?? 'no reason given'}',
                   ].join(' · '),
                 ),
+                // Undoing is the same permission as taking: whoever may
+                // write a payment down may correct one.
+                trailing: mayTake && !(payment['is_reversed'] as bool? ?? false)
+                    ? TextButton(
+                        key: Key('undoPayment-${payment['id']}'),
+                        onPressed: () => _undoPayment(payment),
+                        child: const Text('Undo'),
+                      )
+                    : null,
               ),
           // Calls and promises are how a customer is chased; a debt the
           // shop owes has none, and an empty heading about them is noise.
@@ -666,6 +702,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               ],
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 value: _method,
                 decoration: InputDecoration(
                   labelText: widget.paying ? 'How you paid' : 'How it came',

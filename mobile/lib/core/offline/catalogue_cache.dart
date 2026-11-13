@@ -25,12 +25,16 @@ class CatalogueCache {
   Future<SharedPreferences> get _prefs async =>
       _preferences ??= await SharedPreferences.getInstance();
 
-  Future<void> save(List<Product> products) async {
+  /// [whole] is false when one product changed rather than the whole
+  /// catalogue being fetched, so "figures from" keeps saying how old the
+  /// rest of them are.
+  Future<void> save(List<Product> products, {bool whole = true}) async {
     final prefs = await _prefs;
     await prefs.setString(
       _productsKey,
       jsonEncode(products.map((product) => product.toJson()).toList()),
     );
+    if (!whole) return;
     await prefs.setString(_fetchedAtKey, DateTime.now().toIso8601String());
   }
 

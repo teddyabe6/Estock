@@ -9,6 +9,7 @@ class Variant {
     this.sellingPrice,
     this.purchasePrice,
     this.quantityOnHand,
+    this.reorderLevel,
   });
 
   final String id;
@@ -23,6 +24,10 @@ class Variant {
 
   final String? quantityOnHand;
 
+  /// The level at which this is "running low" — the warning a shopkeeper
+  /// sets for themselves.
+  final String? reorderLevel;
+
   factory Variant.fromJson(Map<String, dynamic> json) => Variant(
         id: json['id'] as String,
         name: json['name'] as String?,
@@ -31,6 +36,7 @@ class Variant {
         sellingPrice: json['selling_price']?.toString(),
         purchasePrice: json['purchase_price']?.toString(),
         quantityOnHand: json['quantity_on_hand']?.toString(),
+        reorderLevel: json['reorder_level']?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -41,6 +47,7 @@ class Variant {
         'selling_price': sellingPrice,
         'purchase_price': purchasePrice,
         'quantity_on_hand': quantityOnHand,
+        'reorder_level': reorderLevel,
       };
 }
 

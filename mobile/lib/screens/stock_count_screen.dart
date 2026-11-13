@@ -279,6 +279,7 @@ class _StockCountScreenState extends State<StockCountScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: DropdownButtonFormField<String>(
+                  isExpanded: true,
                   value: _branchId,
                   decoration: const InputDecoration(labelText: 'Branch'),
                   items: [

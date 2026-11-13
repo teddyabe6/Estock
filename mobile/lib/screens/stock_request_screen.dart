@@ -381,6 +381,7 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                         children: [
                           DropdownButtonFormField<String>(
+                            isExpanded: true,
                             value: sources.any((b) => b.branchId == _fromBranchId)
                                 ? _fromBranchId
                                 : null,
@@ -404,6 +405,7 @@ class _StockRequestScreenState extends State<StockRequestScreen> {
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
+                            isExpanded: true,
                             value: destinations
                                     .any((b) => b.branchId == _toBranchId)
                                 ? _toBranchId

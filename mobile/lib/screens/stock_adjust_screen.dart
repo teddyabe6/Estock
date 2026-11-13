@@ -262,6 +262,7 @@ class _StockAdjustScreenState extends State<StockAdjustScreen> {
               const SizedBox(height: 8),
               if (_branches.length > 1) ...[
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   value: _branchId,
                   decoration: const InputDecoration(labelText: 'Where'),
                   items: [

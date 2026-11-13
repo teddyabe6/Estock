@@ -650,6 +650,43 @@ def test_editing_a_simple_product_keeps_its_variant_codes_in_step(client, busine
     assert client.get("/api/v1/products/lookup/barcode/111", headers=business.headers()).status_code == 404
 
 
+def test_a_price_change_says_who_made_it_and_from_what(client, db, business):
+    """Prices are changed from phones on the shop floor now, not only at a
+    desk, and "who made it cheaper, and when" is an owner's question.
+    """
+    from app.models.platform import AuditEvent
+
+    product = business.add_product("Priced", selling_price="450", opening_stock=None)
+    variant = product.default_variant
+
+    def changes() -> list[AuditEvent]:
+        return (
+            db.query(AuditEvent)
+            .filter(AuditEvent.action == "product.price_changed")
+            .filter(AuditEvent.entity_id == variant.id)
+            .all()
+        )
+
+    edited = client.patch(
+        f"/api/v1/variants/{variant.id}",
+        json={"selling_price": "480"},
+        headers=business.headers(),
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["selling_price"] == "480.00"
+    [event] = changes()
+    assert "450.00" in event.summary and "480.00" in event.summary
+    assert event.actor_user_id == business.ctx.user_id
+
+    # Saving the same price again is not a change, and is not recorded as one.
+    client.patch(
+        f"/api/v1/variants/{variant.id}",
+        json={"selling_price": "480.00"},
+        headers=business.headers(),
+    ).raise_for_status()
+    assert len(changes()) == 1
+
+
 def test_converting_a_proforma_with_a_delivery_charge_says_so(client, business):
     product = business.add_product("Quoted", selling_price="100", opening_stock="10")
     quotation = client.post(

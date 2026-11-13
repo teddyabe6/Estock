@@ -24,6 +24,10 @@ class AuditAction:
     USER_DISABLED = "user.disabled"
     BRANCH_CREATED = "branch.created"
     PRODUCT_IMPORTED = "product.imported"
+    #: A selling price changed.  Prices are now changed from phones on the
+    #: shop floor as well as at a desk, and "who made it cheaper, and when"
+    #: is a question an owner asks.
+    PRICE_CHANGED = "product.price_changed"
     PRICING_RULE_CHANGED = "pricing.rule_changed"
     STOCK_ADJUSTED = "stock.adjusted"
     STOCK_COUNT_POSTED = "stock.count_posted"

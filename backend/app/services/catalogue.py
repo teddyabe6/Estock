@@ -15,6 +15,7 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.core.audit import AuditAction, record_audit
 from app.core.config import settings
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.permissions import Permission
@@ -354,6 +355,7 @@ def update_variant(
         barcode=changes.get("barcode"),
         exclude_variant_id=variant.id,
     )
+    price_before = variant.selling_price
     for field_name, value in changes.items():
         if field_name in {"id", "tenant_id", "product_id", "created_at"}:
             continue
@@ -361,6 +363,33 @@ def update_variant(
             value = _money(value)
         if hasattr(variant, field_name):
             setattr(variant, field_name, value)
+
+    if "selling_price" in changes and variant.selling_price != price_before:
+        currency = ctx.tenant.currency if ctx.tenant else ""
+
+        def said(value) -> str:
+            return f"{value} {currency}".strip() if value is not None else "no price"
+
+        record_audit(
+            db,
+            action=AuditAction.PRICE_CHANGED,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=ctx.user_id,
+            entity_type="product_variant",
+            entity_id=variant.id,
+            summary=(
+                f"Price of {variant.display_name} changed from {said(price_before)} "
+                f"to {said(variant.selling_price)}"
+            ),
+            payload={
+                "from": str(price_before) if price_before is not None else None,
+                "to": (
+                    str(variant.selling_price)
+                    if variant.selling_price is not None
+                    else None
+                ),
+            },
+        )
 
     if cost_fields & set(changes):
         landed = variant.landed_cost

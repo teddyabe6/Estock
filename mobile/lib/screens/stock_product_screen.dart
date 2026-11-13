@@ -7,6 +7,7 @@ import '../core/theme.dart';
 import '../models/product.dart';
 import '../models/stock.dart';
 import '../widgets/common.dart';
+import 'product_form_screen.dart';
 import 'stock_adjust_screen.dart';
 import 'stock_receive_screen.dart';
 
@@ -93,6 +94,45 @@ class _StockProductScreenState extends State<StockProductScreen> {
     }
   }
 
+  /// One price, or — for a product sold in several kinds — the kind first.
+  Future<void> _changePrice(Product product) async {
+    if (product.variants.isEmpty) return;
+    var variant = product.variants.first;
+    if (product.variants.length > 1) {
+      final currency = AppScope.of(context).session?.currency ?? 'ETB';
+      final picked = await showModalBottomSheet<Variant>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheet) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  'Which one?',
+                  style: Theme.of(sheet).textTheme.titleMedium,
+                ),
+              ),
+              for (final option in product.variants)
+                ListTile(
+                  title: Text(option.name ?? product.name),
+                  trailing: Text(
+                    Money.format(option.sellingPrice, currency: currency),
+                  ),
+                  onTap: () => Navigator.of(sheet).pop(option),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (picked == null || !mounted) return;
+      variant = picked;
+    }
+    if (!mounted) return;
+    await changePrice(context, product, variant);
+  }
+
   /// Open one of the things that change stock, and catch up afterwards.
   Future<void> _go(Widget screen) async {
     final changed = await Navigator.of(context).push<bool>(
@@ -107,8 +147,25 @@ class _StockProductScreenState extends State<StockProductScreen> {
     final product =
         state.products.where((p) => p.id == widget.productId).firstOrNull;
 
+    final mayManage = state.session?.can('product:manage') ?? false;
+
     return Scaffold(
-      appBar: AppBar(title: Text(product?.name ?? 'Product')),
+      appBar: AppBar(
+        title: Text(product?.name ?? 'Product'),
+        actions: [
+          if (product != null && mayManage)
+            IconButton(
+              key: const Key('editProduct'),
+              tooltip: 'Change its name, unit or kind',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: () => Navigator.of(context).push<bool>(
+                MaterialPageRoute(
+                  builder: (_) => ProductFormScreen(product: product),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: SafeArea(
         child: product == null
             ? const EmptyState(
@@ -186,15 +243,35 @@ class _StockProductScreenState extends State<StockProductScreen> {
                 ],
               ),
               const SizedBox(height: 4),
-              Text(
-                [
-                  'Sells for '
-                      '${Money.format(product.defaultVariant?.sellingPrice, currency: currency)}',
-                  if (product.categoryName != null) product.categoryName!,
-                ].join(' · '),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      [
+                        product.defaultVariant?.sellingPrice == null
+                            ? 'No price yet'
+                            : 'Sells for '
+                                '${Money.format(product.defaultVariant?.sellingPrice, currency: currency)}'
+                                ' a $unit',
+                        if (product.categoryName != null) product.categoryName!,
+                      ].join(' · '),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  // The change made most often, beside the figure it
+                  // changes.
+                  if (session?.can('product:manage') ?? false)
+                    TextButton.icon(
+                      key: const Key('changePrice'),
+                      onPressed: () => _changePrice(product),
+                      icon: const Icon(Icons.sell_outlined, size: 18),
+                      label: Text(product.defaultVariant?.sellingPrice == null
+                          ? 'Set a price'
+                          : 'Change price'),
+                    ),
+                ],
               ),
             ],
           ),

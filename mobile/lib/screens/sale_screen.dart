@@ -450,6 +450,7 @@ class _SaleScreenState extends State<SaleScreen> {
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       value: _method,
                       decoration: const InputDecoration(
                         labelText: 'Payment',
@@ -519,6 +520,7 @@ class _SaleScreenState extends State<SaleScreen> {
               if (_balance > 0) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
+                  isExpanded: true,
                   value: _duePreset,
                   decoration: const InputDecoration(
                     labelText: 'Payment due',

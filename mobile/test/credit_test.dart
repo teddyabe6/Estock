@@ -557,4 +557,97 @@ void main() {
       expect(find.textContaining('paid · '), findsOneWidget);
     });
   });
+
+  group('a payment taken by mistake', () {
+    Map<String, dynamic> paid({bool undone = false}) => {
+          'id': 'pay1',
+          'method': 'cash',
+          'amount': '5000.00',
+          'paid_at': '2026-11-01T10:00:00Z',
+          'reference': null,
+          'is_reversed': undone,
+          'reversal_reason': undone ? 'Taken twice' : null,
+        };
+
+    testWidgets('can be undone, with a reason', (tester) async {
+      final (state, posted) = await signedIn(payments: [paid()]);
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('undoPayment-pay1')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.byKey(const Key('undoPayment-pay1')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Undo this payment?'), findsOneWidget);
+      expect(find.textContaining('5,000.00 ETB'), findsWidgets);
+      expect(find.textContaining('It goes back onto what Yonas Alemu owes.'),
+          findsOneWidget);
+
+      // The server wants a reason, so the button waits for one.
+      final undo = find.widgetWithText(FilledButton, 'Undo it');
+      expect(tester.widget<FilledButton>(undo).onPressed, isNull);
+      await tester.enterText(find.byType(TextField).last, 'Taken twice');
+      await tester.pump();
+      expect(tester.widget<FilledButton>(undo).onPressed, isNotNull);
+
+      await tester.tap(undo);
+      await tester.pumpAndSettle();
+
+      expect(posted.single.$1, endsWith('/credit/payments/pay1/reverse'));
+      expect(posted.single.$2, {'reason': 'Taken twice'});
+      expect(find.text('Undone. 5,000.00 ETB is owing again.'), findsOneWidget);
+    });
+
+    testWidgets('once undone says so, and cannot be undone again',
+        (tester) async {
+      final (state, _) = await signedIn(payments: [paid(undone: true)]);
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+      await tester.scrollUntilVisible(
+        find.textContaining('undone — Taken twice'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+
+      expect(find.textContaining('undone — Taken twice'), findsOneWidget);
+      expect(find.byKey(const Key('undoPayment-pay1')), findsNothing);
+    });
+
+    testWidgets('cannot be undone by somebody who may not take payments',
+        (tester) async {
+      final (state, _) = await signedIn(
+        payments: [paid()],
+        permissions: const ['credit:view'],
+      );
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+
+      expect(find.byKey(const Key('undoPayment-pay1')), findsNothing);
+    });
+
+    testWidgets('to a supplier goes back onto what the shop owes',
+        (tester) async {
+      final (state, _) = await signedIn(
+        debts: [
+          _debt(kind: 'payable', name: 'Addis Spice Traders', customerId: null),
+        ],
+        payments: [paid()],
+      );
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('undoPayment-pay1')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.byKey(const Key('undoPayment-pay1')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('It goes back onto what you owe Addis Spice '
+            'Traders.'),
+        findsOneWidget,
+      );
+    });
+  });
 }

@@ -8,6 +8,7 @@ import '../core/offline/outbox.dart';
 import '../models/product.dart';
 import '../models/stock.dart';
 import '../widgets/common.dart';
+import 'product_form_screen.dart';
 
 const _methods = <(String, String)>[
   ('cash', 'Cash'),
@@ -147,6 +148,24 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// A product the shop has never had, added and put on this delivery.
+  ///
+  /// The form is not asked how many are here: the delivery says that, and
+  /// asking twice would count them twice.
+  Future<void> _addNew(String name) async {
+    final product = await Navigator.of(context).push<Product>(
+      MaterialPageRoute(
+        builder: (_) => ProductFormScreen(
+          name: name,
+          askStock: false,
+          returnProduct: true,
+          branchId: _branchId,
+        ),
+      ),
+    );
+    if (product != null && mounted) _add(product);
   }
 
   void _add(Product product) {
@@ -381,6 +400,7 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
             children: [
               if (_branches.length > 1) ...[
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   value: _branchId,
                   decoration:
                       const InputDecoration(labelText: 'Where it arrived'),
@@ -411,6 +431,19 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
                   trailing: const Icon(Icons.add),
                   onTap: () => _add(product),
                 ),
+              // Something on the delivery note the shop has never stocked:
+              // add it here and it goes straight onto this delivery.
+              if (results.isEmpty &&
+                  _search.text.trim().isNotEmpty &&
+                  (state.session?.can('product:manage') ?? false))
+                ListTile(
+                  key: const Key('receiveNewProduct'),
+                  dense: true,
+                  leading: const Icon(Icons.add_box_outlined),
+                  title: Text('Add “${_search.text.trim()}” as a new product'),
+                  subtitle: const Text('It goes onto this delivery'),
+                  onTap: () => _addNew(_search.text.trim()),
+                ),
               const SizedBox(height: 8),
               if (_lines.isEmpty)
                 Text(
@@ -424,6 +457,7 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
                 const SizedBox(height: 4),
                 if (_suppliers.isNotEmpty) ...[
                   DropdownButtonFormField<String?>(
+                    isExpanded: true,
                     value: _supplierId,
                     decoration:
                         const InputDecoration(labelText: 'Who it came from'),
@@ -468,6 +502,7 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: DropdownButtonFormField<String>(
+                        isExpanded: true,
                         value: _method,
                         decoration:
                             const InputDecoration(labelText: 'Paid by'),
@@ -503,6 +538,7 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
                 if (_owing > 0) ...[
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String?>(
+                    isExpanded: true,
                     value: _duePreset,
                     decoration:
                         const InputDecoration(labelText: 'Pay the rest by'),
@@ -540,10 +576,17 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Delivery cost',
-                            style: theme.textTheme.titleMedium),
+                        // The figure keeps its room; the words give way,
+                        // so large text on a small phone still fits.
+                        Expanded(
+                          child: Text(
+                            'Delivery cost',
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleMedium,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
                         Text(
                           Money.format(_total, currency: currency),
                           style: theme.textTheme.titleLarge

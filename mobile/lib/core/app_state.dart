@@ -329,6 +329,18 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// One product as the server now has it, into the catalogue on the phone,
+  /// so a product just added — or a price just changed — is at the till at
+  /// once, rather than after the whole catalogue has come down again.
+  Future<void> putProduct(Product product) async {
+    final index = products.indexWhere((p) => p.id == product.id);
+    products = index < 0
+        ? [...products, product]
+        : ([...products]..[index] = product);
+    await catalogue.save(products, whole: false);
+    notifyListeners();
+  }
+
   /// Search the catalogue held on the device, so it works with no connection.
   List<Product> search(String query) {
     final text = query.trim().toLowerCase();
