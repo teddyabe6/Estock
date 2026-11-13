@@ -687,6 +687,75 @@ def test_a_price_change_says_who_made_it_and_from_what(client, db, business):
     assert len(changes()) == 1
 
 
+def test_a_customer_can_be_changed_one_thing_at_a_time(client, business):
+    """The phone sends what was edited, not the whole record."""
+    created = client.post(
+        "/api/v1/customers",
+        json={"name": "Almaz Tadesse", "company": "Almaz Shop", "notes": "Pays Fridays"},
+        headers=business.headers(),
+    ).json()
+
+    changed = client.patch(
+        f"/api/v1/customers/{created['id']}",
+        json={"phone": "0911 22 33 55"},
+        headers=business.headers(),
+    )
+    assert changed.status_code == 200, changed.text
+    body = changed.json()
+    assert body["phone"] == "+251911223355", "kept in the one form numbers are matched by"
+    assert body["name"] == "Almaz Tadesse"
+    assert body["company"] == "Almaz Shop", "what was not sent stays as it was"
+    assert body["notes"] == "Pays Fridays"
+
+    # Emptied on the phone means gone, not a blank.
+    cleared = client.patch(
+        f"/api/v1/customers/{created['id']}",
+        json={"company": "", "notes": "  "},
+        headers=business.headers(),
+    ).json()
+    assert cleared["company"] is None and cleared["notes"] is None
+
+    # A customer cannot be left without a name.
+    for blank in ("", "   ", None):
+        refused = client.patch(
+            f"/api/v1/customers/{created['id']}",
+            json={"name": blank},
+            headers=business.headers(),
+        )
+        assert refused.status_code == 422, blank
+
+
+def test_only_someone_allowed_to_may_set_a_credit_limit(client, business):
+    from app.core.permissions import RoleName
+
+    created = client.post(
+        "/api/v1/customers", json={"name": "Dawit Bekele"}, headers=business.headers()
+    ).json()
+    salesperson, _ = business.add_user(RoleName.SALESPERSON)
+
+    refused = client.patch(
+        f"/api/v1/customers/{created['id']}",
+        json={"credit_limit": "5000"},
+        headers=business.headers(salesperson),
+    )
+    assert refused.status_code == 403
+    # Everything else about the customer is theirs to change.
+    allowed = client.patch(
+        f"/api/v1/customers/{created['id']}",
+        json={"address": "Bole, near Edna Mall"},
+        headers=business.headers(salesperson),
+    )
+    assert allowed.status_code == 200, allowed.text
+
+    owner = client.patch(
+        f"/api/v1/customers/{created['id']}",
+        json={"credit_limit": "5000", "credit_limit_behaviour": "block"},
+        headers=business.headers(),
+    ).json()
+    assert owner["credit_limit"] == "5000.00"
+    assert owner["credit_limit_behaviour"] == "block"
+
+
 def test_converting_a_proforma_with_a_delivery_charge_says_so(client, business):
     product = business.add_product("Quoted", selling_price="100", opening_stock="10")
     quotation = client.post(

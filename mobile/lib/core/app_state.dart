@@ -382,6 +382,16 @@ class AppState extends ChangeNotifier {
     return customer;
   }
 
+  /// One customer as the server now has them, into the list on the phone,
+  /// so somebody just added or just changed is at the till straight away.
+  Future<void> putCustomer(Customer customer) async {
+    final others = customers.where((c) => c.id != customer.id);
+    customers = [...others, customer]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    await catalogue.saveCustomers(customers);
+    notifyListeners();
+  }
+
   Product? findByBarcode(String barcode) {
     final code = barcode.trim().toLowerCase();
     for (final product in products) {

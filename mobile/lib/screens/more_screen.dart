@@ -59,6 +59,15 @@ class MoreScreen extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const SalesHistoryScreen()),
             ),
           ),
+        if (session?.can('customer:view') ?? false)
+          ListTile(
+            key: const Key('moreCustomers'),
+            leading: const Icon(Icons.people_outline),
+            title: const Text('Customers'),
+            subtitle: const Text('Who they are, what they bought, what they owe'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).pushNamed('/customers'),
+          ),
         if (session?.can('credit:view') ?? false) ...[
           const SectionTitle('Credit'),
           ListTile(

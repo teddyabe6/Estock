@@ -558,6 +558,27 @@ class CustomerIn(BaseModel):
     )
 
 
+class CustomerUpdate(BaseModel):
+    """A change to a customer: only what is sent changes.
+
+    The phone sends what was edited, not the whole record, so that two
+    people changing different things about one customer do not put each
+    other's back.
+    """
+
+    name: str | None = Field(None, min_length=1, max_length=120)
+    phone: str | None = Field(None, max_length=32)
+    telegram_username: str | None = Field(None, max_length=120)
+    email: EmailStr | None = None
+    address: str | None = Field(None, max_length=255)
+    company: str | None = Field(None, max_length=120)
+    notes: str | None = Field(None, max_length=2000)
+    credit_limit: Decimal | None = Field(None, ge=0)
+    credit_limit_behaviour: str | None = Field(
+        None, pattern="^(warn|require_approval|block)$"
+    )
+
+
 class CustomerOut(Schema):
     id: uuid.UUID
     name: str

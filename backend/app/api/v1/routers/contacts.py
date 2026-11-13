@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, status
 from sqlalchemy import func, or_, select
 
 from app.core.deps import Ctx, DbSession, WritableCtx
+from app.core.errors import ValidationError
 from app.core.permissions import Permission
 from app.core.tenancy import get_tenant_object, tenant_query
 from app.models.contacts import Customer, Supplier
@@ -19,9 +20,11 @@ from app.schemas.common import Page
 from app.schemas.operations import (
     CustomerIn,
     CustomerOut,
+    CustomerUpdate,
     SupplierIn,
     SupplierOut,
 )
+from app.services.pricing import quantize_money
 
 router = APIRouter(tags=["contacts"])
 
@@ -91,6 +94,7 @@ def add_customer(payload: CustomerIn, ctx: WritableCtx, db: DbSession) -> Custom
     data["phone"] = normalise_et_phone(data.get("phone"))
     if data.get("credit_limit") is not None:
         ctx.require(Permission.CREDIT_LIMIT_OVERRIDE)
+        data["credit_limit"] = quantize_money(Decimal(data["credit_limit"]))
     customer = Customer(tenant_id=ctx.tenant_id, **data)
     db.add(customer)
     db.flush()
@@ -113,19 +117,38 @@ def get_customer(customer_id: uuid.UUID, ctx: Ctx, db: DbSession) -> CustomerOut
 
 @router.patch("/customers/{customer_id}", response_model=CustomerOut)
 def edit_customer(
-    customer_id: uuid.UUID, payload: CustomerIn, ctx: WritableCtx, db: DbSession
+    customer_id: uuid.UUID, payload: CustomerUpdate, ctx: WritableCtx, db: DbSession
 ) -> CustomerOut:
     ctx.require(Permission.CUSTOMER_MANAGE)
     customer = get_tenant_object(db, Customer, customer_id, ctx.tenant_id, label="Customer")
     changes = payload.model_dump(exclude_unset=True)
     if "credit_limit" in changes or "credit_limit_behaviour" in changes:
         ctx.require(Permission.CREDIT_LIMIT_OVERRIDE)
+    if "name" in changes:
+        name = (changes["name"] or "").strip()
+        if not name:
+            raise ValidationError("A customer needs a name")
+        changes["name"] = name
+    # A field emptied on a phone arrives as an empty string; it means
+    # "nothing", and is kept as nothing rather than as a blank.
+    for key in ("telegram_username", "address", "company", "notes"):
+        if key in changes and isinstance(changes[key], str) and not changes[key].strip():
+            changes[key] = None
     if "phone" in changes:
         changes["phone"] = normalise_et_phone(changes["phone"])
+    if changes.get("credit_limit") is not None:
+        changes["credit_limit"] = quantize_money(Decimal(changes["credit_limit"]))
     for key, value in changes.items():
         setattr(customer, key, value)
     db.flush()
-    return CustomerOut.model_validate(customer)
+    payload_out = CustomerOut.model_validate(customer)
+    if ctx.has(Permission.CREDIT_VIEW):
+        payload_out.outstanding_balance = _outstanding(
+            db, ctx.tenant_id, customer_id=customer.id
+        )
+    else:
+        payload_out.credit_limit = None
+    return payload_out
 
 
 @router.get("/customers/{customer_id}/history")
@@ -165,8 +188,14 @@ def customer_history(customer_id: uuid.UUID, ctx: Ctx, db: DbSession) -> dict:
             for t in rows
         ]
 
+    profile = CustomerOut.model_validate(customer)
+    if not ctx.has(Permission.CREDIT_VIEW):
+        # The same rule as the list and the record: a credit limit is
+        # credit information.
+        profile.credit_limit = None
+        profile.credit_limit_behaviour = None
     return {
-        "customer": CustomerOut.model_validate(customer).model_dump(mode="json"),
+        "customer": profile.model_dump(mode="json"),
         "outstanding_balance": (
             str(_outstanding(db, ctx.tenant_id, customer_id=customer.id))
             if ctx.has(Permission.CREDIT_VIEW)

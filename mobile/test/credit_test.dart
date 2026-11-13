@@ -650,4 +650,27 @@ void main() {
       );
     });
   });
+
+  group('from a debt to the person', () {
+    testWidgets('a customer’s debt opens who they are', (tester) async {
+      final (state, _) = await signedIn(permissions: const [
+        'credit:view',
+        'credit:payment',
+        'customer:view',
+      ]);
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+      expect(find.byKey(const Key('openCustomer')), findsOneWidget);
+    });
+
+    testWidgets('a supplier’s debt has no customer to open', (tester) async {
+      final (state, _) = await signedIn(
+        debts: [
+          _debt(kind: 'payable', name: 'Addis Spice Traders', customerId: null),
+        ],
+        permissions: const ['credit:view', 'credit:payment', 'customer:view'],
+      );
+      await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
+      expect(find.byKey(const Key('openCustomer')), findsNothing);
+    });
+  });
 }

@@ -8,6 +8,7 @@ import '../core/money.dart';
 import '../core/offline/outbox.dart';
 import '../core/theme.dart';
 import '../widgets/common.dart';
+import 'customers_screen.dart';
 
 const _methods = <(String, String)>[
   ('cash', 'Cash'),
@@ -318,9 +319,27 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
     final currency = state.session?.currency ?? 'ETB';
     final mayTake = state.session?.can('credit:payment') ?? false;
 
+    final customerId = _payable ? null : _row?['customer_id'] as String?;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_row?['counterparty_name'] as String? ?? 'Credit'),
+        actions: [
+          // Who they are, everything they owe and what they have bought —
+          // a debt is one sale, and the decision is about the person.
+          if (customerId != null &&
+              (state.session?.can('customer:view') ?? false))
+            IconButton(
+              key: const Key('openCustomer'),
+              tooltip: 'Their details',
+              icon: const Icon(Icons.person_outline),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (_) => CustomerScreen(customerId: customerId),
+                ),
+              ),
+            ),
+        ],
       ),
       body: SafeArea(
         child: _loading
