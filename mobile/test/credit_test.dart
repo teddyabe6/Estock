@@ -662,15 +662,22 @@ void main() {
       expect(find.byKey(const Key('openCustomer')), findsOneWidget);
     });
 
-    testWidgets('a supplier’s debt has no customer to open', (tester) async {
+    testWidgets('a supplier’s debt opens the supplier, not a customer',
+        (tester) async {
       final (state, _) = await signedIn(
         debts: [
           _debt(kind: 'payable', name: 'Addis Spice Traders', customerId: null),
         ],
-        permissions: const ['credit:view', 'credit:payment', 'customer:view'],
+        permissions: const [
+          'credit:view',
+          'credit:payment',
+          'customer:view',
+          'supplier:view',
+        ],
       );
       await open(tester, state, const CreditDetailScreen(transactionId: 'c1'));
       expect(find.byKey(const Key('openCustomer')), findsNothing);
+      expect(find.byKey(const Key('openSupplier')), findsOneWidget);
     });
   });
 }

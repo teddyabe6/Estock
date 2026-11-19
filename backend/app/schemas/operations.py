@@ -605,11 +605,25 @@ class SupplierIn(BaseModel):
     notes: str | None = Field(None, max_length=2000)
 
 
+class SupplierUpdate(BaseModel):
+    """A change to a supplier: only what is sent changes."""
+
+    name: str | None = Field(None, min_length=1, max_length=120)
+    phone: str | None = Field(None, max_length=32)
+    email: EmailStr | None = None
+    telegram_username: str | None = Field(None, max_length=120)
+    address: str | None = Field(None, max_length=255)
+    contact_person: str | None = Field(None, max_length=120)
+    tin: str | None = Field(None, max_length=64)
+    notes: str | None = Field(None, max_length=2000)
+
+
 class SupplierOut(Schema):
     id: uuid.UUID
     name: str
     phone: str | None = None
     email: str | None = None
+    telegram_username: str | None = None
     contact_person: str | None = None
     address: str | None = None
     tin: str | None = None

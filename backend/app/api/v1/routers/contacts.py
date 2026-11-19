@@ -23,6 +23,7 @@ from app.schemas.operations import (
     CustomerUpdate,
     SupplierIn,
     SupplierOut,
+    SupplierUpdate,
 )
 from app.services.pricing import quantize_money
 
@@ -231,6 +232,9 @@ def list_suppliers(
             or_(
                 func.lower(Supplier.name).like(pattern),
                 func.lower(Supplier.phone).like(pattern),
+                # The person dealt with is often who a supplier is
+                # remembered by.
+                func.lower(Supplier.contact_person).like(pattern),
             )
         )
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
@@ -272,14 +276,28 @@ def get_supplier(supplier_id: uuid.UUID, ctx: Ctx, db: DbSession) -> SupplierOut
 
 @router.patch("/suppliers/{supplier_id}", response_model=SupplierOut)
 def edit_supplier(
-    supplier_id: uuid.UUID, payload: SupplierIn, ctx: WritableCtx, db: DbSession
+    supplier_id: uuid.UUID, payload: SupplierUpdate, ctx: WritableCtx, db: DbSession
 ) -> SupplierOut:
+    """Change what is sent, and nothing else — the same rules as a customer."""
     ctx.require(Permission.SUPPLIER_MANAGE)
     supplier = get_tenant_object(db, Supplier, supplier_id, ctx.tenant_id, label="Supplier")
     changes = payload.model_dump(exclude_unset=True)
+    if "name" in changes:
+        name = (changes["name"] or "").strip()
+        if not name:
+            raise ValidationError("A supplier needs a name")
+        changes["name"] = name
+    for key in ("telegram_username", "address", "contact_person", "tin", "notes"):
+        if key in changes and isinstance(changes[key], str) and not changes[key].strip():
+            changes[key] = None
     if "phone" in changes:
         changes["phone"] = normalise_et_phone(changes["phone"])
     for key, value in changes.items():
         setattr(supplier, key, value)
     db.flush()
-    return SupplierOut.model_validate(supplier)
+    payload_out = SupplierOut.model_validate(supplier)
+    if ctx.has(Permission.CREDIT_VIEW, Permission.PURCHASE_VIEW):
+        payload_out.outstanding_balance = _outstanding(
+            db, ctx.tenant_id, supplier_id=supplier.id
+        )
+    return payload_out

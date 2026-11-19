@@ -756,6 +756,60 @@ def test_only_someone_allowed_to_may_set_a_credit_limit(client, business):
     assert owner["credit_limit_behaviour"] == "block"
 
 
+def test_a_supplier_can_be_changed_one_thing_at_a_time(client, business):
+    created = client.post(
+        "/api/v1/suppliers",
+        json={
+            "name": "Highland Grain",
+            "contact_person": "Abebe",
+            "telegram_username": "highlandgrain",
+            "tin": "0012345678",
+        },
+        headers=business.headers(),
+    )
+    assert created.status_code == 201, created.text
+    supplier = created.json()
+    assert supplier["telegram_username"] == "highlandgrain", "what was saved comes back"
+
+    changed = client.patch(
+        f"/api/v1/suppliers/{supplier['id']}",
+        json={"phone": "0911 44 55 66"},
+        headers=business.headers(),
+    )
+    assert changed.status_code == 200, changed.text
+    body = changed.json()
+    assert body["phone"] == "+251911445566"
+    assert body["name"] == "Highland Grain"
+    assert body["contact_person"] == "Abebe", "what was not sent stays as it was"
+    assert body["tin"] == "0012345678"
+
+    cleared = client.patch(
+        f"/api/v1/suppliers/{supplier['id']}",
+        json={"contact_person": "", "tin": " "},
+        headers=business.headers(),
+    ).json()
+    assert cleared["contact_person"] is None and cleared["tin"] is None
+
+    for blank in ("", "  ", None):
+        refused = client.patch(
+            f"/api/v1/suppliers/{supplier['id']}",
+            json={"name": blank},
+            headers=business.headers(),
+        )
+        assert refused.status_code == 422, blank
+
+    # Found by the person dealt with there, too.
+    client.patch(
+        f"/api/v1/suppliers/{supplier['id']}",
+        json={"contact_person": "Abebe Girma"},
+        headers=business.headers(),
+    ).raise_for_status()
+    found = client.get(
+        "/api/v1/suppliers", params={"q": "girma"}, headers=business.headers()
+    ).json()
+    assert [s["name"] for s in found["items"]] == ["Highland Grain"]
+
+
 def test_converting_a_proforma_with_a_delivery_charge_says_so(client, business):
     product = business.add_product("Quoted", selling_price="100", opening_stock="10")
     quotation = client.post(

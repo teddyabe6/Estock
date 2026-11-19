@@ -7,8 +7,10 @@ import '../core/money.dart';
 import '../core/offline/outbox.dart';
 import '../models/product.dart';
 import '../models/stock.dart';
+import '../models/supplier.dart';
 import '../widgets/common.dart';
 import 'product_form_screen.dart';
+import 'supplier_form_screen.dart';
 
 const _methods = <(String, String)>[
   ('cash', 'Cash'),
@@ -45,6 +47,10 @@ class _Line {
   }
 }
 
+/// The marker for "a supplier not in the list yet" in the supplier choice;
+/// never an id the server would hand out.
+const _newSupplier = '\u0000new-supplier';
+
 /// A delivery arriving: what came, how many, and what it cost (PRD 11.2).
 ///
 /// This is how stock gets into a shop, and it happens at the back door with
@@ -53,13 +59,21 @@ class _Line {
 /// repricing and the rest of what a purchase can carry stay on the web,
 /// where there is a desk to do them at.
 class StockReceiveScreen extends StatefulWidget {
-  const StockReceiveScreen({super.key, this.productId, this.branchId});
+  const StockReceiveScreen({
+    super.key,
+    this.productId,
+    this.branchId,
+    this.supplierId,
+  });
 
   /// Opened from a product, so that product starts on the list.
   final String? productId;
 
   /// The branch somebody was looking at when they opened it.
   final String? branchId;
+
+  /// Opened from a supplier, so who it came from is already said.
+  final String? supplierId;
 
   @override
   State<StockReceiveScreen> createState() => _StockReceiveScreenState();
@@ -129,6 +143,9 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
       setState(() {
         _branches = branches;
         _suppliers = suppliers;
+        if (suppliers.any((supplier) => supplier['id'] == widget.supplierId)) {
+          _supplierId = widget.supplierId;
+        }
         _branchId = branches.any((b) => b.branchId == widget.branchId)
             ? widget.branchId
             : branches.map((b) => b.branchId).firstOrNull;
@@ -148,6 +165,40 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// Who it came from, once somebody has said.  The title carries it, so a
+  /// delivery opened from a supplier's page says whose it is before the
+  /// first product is added — the choice itself only shows after that.
+  String? get _supplierName => _suppliers
+      .where((supplier) => supplier['id'] == _supplierId)
+      .map((supplier) => supplier['name'] as String?)
+      .firstOrNull;
+
+  /// Bumped whenever the supplier choice is reset from outside, so the
+  /// dropdown shows what was really chosen rather than "A new supplier…".
+  int _supplierPick = 0;
+
+  /// A supplier the shop has never bought from, added on the spot and
+  /// said to be who this came from.
+  Future<void> _addSupplier() async {
+    final known = _suppliers.map(Supplier.fromJson).toList();
+    final supplier = await Navigator.of(context).push<Supplier>(
+      MaterialPageRoute(
+        builder: (_) => SupplierFormScreen(returnSupplier: true, known: known),
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _supplierPick += 1;
+      if (supplier != null) {
+        _suppliers = [
+          ..._suppliers,
+          {'id': supplier.id, 'name': supplier.name, 'phone': supplier.phone},
+        ];
+        _supplierId = supplier.id;
+      }
+    });
   }
 
   /// A product the shop has never had, added and put on this delivery.
@@ -354,7 +405,11 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('A delivery arrived')),
+      appBar: AppBar(
+        title: Text(_supplierName == null
+            ? 'A delivery arrived'
+            : 'A delivery from $_supplierName'),
+      ),
       body: SafeArea(
         child: _loading
             ? const Center(child: CircularProgressIndicator())
@@ -383,6 +438,7 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
     final theme = Theme.of(context);
     final state = AppScope.of(context);
     final currency = state.session?.currency ?? 'ETB';
+    final maySupplier = state.session?.can('supplier:manage') ?? false;
     final results = _search.text.trim().isEmpty
         ? const <Product>[]
         : state
@@ -455,8 +511,12 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
               for (final line in _lines) _lineCard(context, line, currency),
               if (_lines.isNotEmpty) ...[
                 const SizedBox(height: 4),
-                if (_suppliers.isNotEmpty) ...[
+                // Asked even before the first supplier exists, when this
+                // user may add one: otherwise a new shop could never say
+                // who delivered.
+                if (_suppliers.isNotEmpty || maySupplier) ...[
                   DropdownButtonFormField<String?>(
+                    key: ValueKey('receiveSupplier-$_supplierPick'),
                     isExpanded: true,
                     value: _supplierId,
                     decoration:
@@ -471,8 +531,15 @@ class _StockReceiveScreenState extends State<StockReceiveScreen> {
                           value: supplier['id'] as String,
                           child: Text(supplier['name'] as String? ?? ''),
                         ),
+                      if (maySupplier)
+                        const DropdownMenuItem<String?>(
+                          value: _newSupplier,
+                          child: Text('A new supplier…'),
+                        ),
                     ],
-                    onChanged: (value) => setState(() => _supplierId = value),
+                    onChanged: (value) => value == _newSupplier
+                        ? _addSupplier()
+                        : setState(() => _supplierId = value),
                   ),
                   const SizedBox(height: 12),
                 ],

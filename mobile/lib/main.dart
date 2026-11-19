@@ -17,6 +17,7 @@ import 'screens/stock_receive_screen.dart';
 import 'screens/stock_request_screen.dart';
 import 'screens/stock_screen.dart';
 import 'screens/stock_transfers_screen.dart';
+import 'screens/suppliers_screen.dart';
 
 /// Where the API lives. Set at build time:
 ///
@@ -50,6 +51,7 @@ class EstockApp extends StatelessWidget {
         routes: {
           '/credit': (_) => const CreditScreen(),
           '/customers': (_) => const CustomersScreen(),
+          '/suppliers': (_) => const SuppliersScreen(),
           '/credit/payables': (_) => const CreditScreen(payables: true),
           '/notifications': (_) => const NotificationsScreen(),
           '/pending': (_) => const PendingScreen(),

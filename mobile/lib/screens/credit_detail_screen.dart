@@ -9,6 +9,7 @@ import '../core/offline/outbox.dart';
 import '../core/theme.dart';
 import '../widgets/common.dart';
 import 'customers_screen.dart';
+import 'suppliers_screen.dart';
 
 const _methods = <(String, String)>[
   ('cash', 'Cash'),
@@ -320,6 +321,7 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
     final mayTake = state.session?.can('credit:payment') ?? false;
 
     final customerId = _payable ? null : _row?['customer_id'] as String?;
+    final supplierId = _payable ? (_row?['supplier_id'] as String?) : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -336,6 +338,18 @@ class _CreditDetailScreenState extends State<CreditDetailScreen> {
               onPressed: () => Navigator.of(context).push<void>(
                 MaterialPageRoute(
                   builder: (_) => CustomerScreen(customerId: customerId),
+                ),
+              ),
+            ),
+          if (supplierId != null &&
+              (state.session?.can('supplier:view') ?? false))
+            IconButton(
+              key: const Key('openSupplier'),
+              tooltip: 'Their details',
+              icon: const Icon(Icons.local_shipping_outlined),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (_) => SupplierScreen(supplierId: supplierId),
                 ),
               ),
             ),

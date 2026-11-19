@@ -68,6 +68,15 @@ class MoreScreen extends StatelessWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).pushNamed('/customers'),
           ),
+        if (session?.can('supplier:view') ?? false)
+          ListTile(
+            key: const Key('moreSuppliers'),
+            leading: const Icon(Icons.local_shipping_outlined),
+            title: const Text('Suppliers'),
+            subtitle: const Text('Who you buy from, and what you owe them'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).pushNamed('/suppliers'),
+          ),
         if (session?.can('credit:view') ?? false) ...[
           const SectionTitle('Credit'),
           ListTile(
