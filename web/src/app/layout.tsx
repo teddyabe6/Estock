@@ -11,9 +11,14 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // Browser extensions write their own attributes onto <html> and <body>
+  // before React starts (LastPass: data-lastpass-safe-prompts-active;
+  // Grammarly: data-gr-ext-installed), and React then reports the page as not
+  // matching what the server sent. suppressHydrationWarning ignores that for
+  // these two tags' own attributes only; everything inside is still checked.
   return (
-    <html lang="en">
-      <body>
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>
         <SessionProvider>{children}</SessionProvider>
         <StackedTables />
       </body>

@@ -16,8 +16,10 @@ export default function GlobalError({
   reset: () => void;
 }) {
   return (
-    <html lang="en">
+    // Ignore what browser extensions add to these two tags (see layout.tsx).
+    <html lang="en" suppressHydrationWarning>
       <body
+        suppressHydrationWarning
         style={{
           fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
           margin: 0,
