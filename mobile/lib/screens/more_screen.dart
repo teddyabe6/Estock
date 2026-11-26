@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/app_state.dart';
 import '../core/money.dart';
+import '../core/server_address.dart';
 import '../widgets/common.dart';
 import 'sales_history_screen.dart';
 
@@ -123,6 +124,18 @@ class MoreScreen extends StatelessWidget {
             );
           },
         ),
+        // Only in a copy built without a server, where somebody typed one
+        // in: when the phone stops reaching it, this is the first thing to
+        // check.
+        if (state.asksForServer)
+          ListTile(
+            key: const Key('moreServer'),
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('Server'),
+            subtitle: Text(
+              '${serverLabel(state.server)} · sign out to use another',
+            ),
+          ),
         const Divider(),
         ListTile(
           leading: const Icon(Icons.logout),

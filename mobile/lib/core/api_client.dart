@@ -34,7 +34,9 @@ class ApiClient {
   ApiClient({required this.baseUrl, http.Client? httpClient})
       : _http = httpClient ?? http.Client();
 
-  final String baseUrl;
+  /// Where the server is.  Fixed by the build, or — in a copy built without
+  /// one — whatever the person signing in said (see [AppState.useServer]).
+  String baseUrl;
   final http.Client _http;
 
   /// Session token, set after sign-in and cleared on sign-out.

@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Everything the app does goes through the Estock server. Without this
+         a release build installed on a phone cannot reach it at all: only the
+         debug and profile manifests grant it, for the Flutter tool's own use. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="estock_mobile"
+        android:label="Estock"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -12,6 +12,7 @@ import 'api_client.dart';
 import 'offline/catalogue_cache.dart';
 import 'offline/outbox.dart';
 import 'offline/sync_service.dart';
+import 'server_address.dart';
 
 /// Application state: who is signed in, the cached catalogue, and the outbox.
 ///
@@ -19,7 +20,8 @@ import 'offline/sync_service.dart';
 /// after a restart, even with no connection.
 class AppState extends ChangeNotifier {
   AppState({required this.api, Outbox? outbox, CatalogueCache? catalogue})
-      : outbox = outbox ?? Outbox(),
+      : asksForServer = api.baseUrl.isEmpty,
+        outbox = outbox ?? Outbox(),
         catalogue = catalogue ?? CatalogueCache() {
     sync = SyncService(api: api, outbox: this.outbox);
     sync.addListener(notifyListeners);
@@ -27,6 +29,15 @@ class AppState extends ChangeNotifier {
 
   static const _tokenKey = 'estock.token.v1';
   static const _sessionKey = 'estock.session.v1';
+  static const _serverKey = 'estock.server.v1';
+
+  /// Whether this copy of the app was built without a server, so whoever
+  /// signs in says where it is: a phone trying Estock against a computer on
+  /// the same Wi-Fi.  A build for a shop names its server and never asks.
+  final bool asksForServer;
+
+  /// The server's API address; empty until somebody has said it.
+  String get server => api.baseUrl;
 
   final ApiClient api;
   final Outbox outbox;
@@ -112,6 +123,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> start() async {
     final prefs = await SharedPreferences.getInstance();
+    // The server first: the saved session belongs to it.
+    if (asksForServer) api.baseUrl = prefs.getString(_serverKey) ?? '';
     api.token = prefs.getString(_tokenKey);
 
     final cachedSession = prefs.getString(_sessionKey);
@@ -134,6 +147,24 @@ class AppState extends ChangeNotifier {
 
     await sync.start();
     if (api.token != null) unawaited(refresh());
+  }
+
+  /// Talk to the server at [typed] from now on, and remember it.
+  ///
+  /// Work waiting to be sent goes with it.  If this is the same server at a
+  /// new address — a laptop handed a different one by the Wi-Fi — that is
+  /// right; if it is another server, what it refers to is not there, so it
+  /// is refused and shown to a person rather than recorded anywhere wrong.
+  Future<void> useServer(String typed) async {
+    final base = apiBaseFor(typed);
+    if (base == null) {
+      throw ArgumentError.value(typed, 'typed', 'not a server address');
+    }
+    if (base == api.baseUrl) return;
+    api.baseUrl = base;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_serverKey, base);
+    notifyListeners();
   }
 
   Future<void> signIn(String email, String password) async {

@@ -284,6 +284,7 @@ ${WSL_HINT}
   Every password is: demo-password-123
 
   Cannot reach it in your browser? Run ./scripts/doctor.sh
+  Trying the Android app?  In a second terminal: ./scripts/phone.sh
   Logs: backend/var/api.log and backend/var/web.log
   Press Ctrl-C to stop.
 

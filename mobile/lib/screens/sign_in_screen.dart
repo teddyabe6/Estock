@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
 import '../core/app_state.dart';
+import '../core/server_address.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -13,6 +14,10 @@ class SignInScreen extends StatefulWidget {
 class _SignInScreenState extends State<SignInScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+
+  /// Where the server is, in a copy of the app built without one; null in a
+  /// build for a shop, which knows its server already.
+  TextEditingController? _server;
   final _formKey = GlobalKey<FormState>();
   bool _busy = false;
 
@@ -22,9 +27,22 @@ class _SignInScreenState extends State<SignInScreen> {
   String? _error;
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final state = AppScope.of(context);
+    if (state.asksForServer && _server == null) {
+      // The address used last time, so the next sign-in is two fields again.
+      _server = TextEditingController(
+        text: state.server.isEmpty ? '' : serverLabel(state.server),
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _server?.dispose();
     super.dispose();
   }
 
@@ -34,15 +52,28 @@ class _SignInScreenState extends State<SignInScreen> {
       _busy = true;
       _error = null;
     });
+    final state = AppScope.of(context);
     try {
-      await AppScope.of(context).signIn(_email.text.trim(), _password.text);
+      final server = _server;
+      if (server != null) await state.useServer(server.text);
+      await state.signIn(_email.text.trim(), _password.text);
     } on ApiException catch (exception) {
-      setState(() => _error = exception.message);
+      setState(() => _error = exception.isNetworkError && _server != null
+          ? _unreachable(serverLabel(state.server))
+          : exception.message);
     } catch (_) {
       setState(() => _error = 'Could not sign in. Please try again.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Said when the server the person typed did not answer — most often a
+  /// computer on another Wi-Fi, or an address missing its port.
+  static String _unreachable(String label) {
+    final port = label.contains(':') ? '' : ' (it usually ends in :8000)';
+    return 'Could not reach $label. Check the address$port, that Estock is '
+        'running on that computer, and that this phone is on the same Wi-Fi.';
   }
 
   @override
@@ -85,6 +116,26 @@ class _SignInScreenState extends State<SignInScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
+                    ],
+                    if (_server != null) ...[
+                      TextFormField(
+                        key: const Key('server'),
+                        controller: _server,
+                        decoration: const InputDecoration(
+                          labelText: 'Server',
+                          hintText: '192.168.1.20:8000',
+                          helperText:
+                              'Where Estock runs: the address its computer shows',
+                        ),
+                        keyboardType: TextInputType.url,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        textInputAction: TextInputAction.next,
+                        validator: (value) => apiBaseFor(value ?? '') == null
+                            ? 'Enter the server address, like 192.168.1.20:8000'
+                            : null,
+                      ),
+                      const SizedBox(height: 12),
                     ],
                     TextFormField(
                       key: const Key('email'),

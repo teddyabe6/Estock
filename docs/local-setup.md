@@ -172,8 +172,40 @@ On an Android emulator the host is `10.0.2.2`, not `localhost`:
 cd mobile && flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1
 ```
 
-For a physical phone, use your machine's LAN address and add it to
-`CORS_ORIGINS` in `backend/.env`.
+### On your Android phone
+
+The phone needs the app (an APK file) and a computer on the same Wi-Fi
+running the server. Nothing else is installed on the phone.
+
+1. **Get the app.** The APK you were sent, or build one — with Flutter and the
+   Android SDK installed — with `make phone-apk`. This build has no server
+   built in: it asks for one when you sign in.
+2. **Install it.** Open the APK on the phone (from the download, or the
+   message it came in) and tap Install. The first time, Android asks to allow
+   installing apps from that source: allow it for the app you opened it from.
+   If Play Protect warns that it does not know the developer, choose to
+   install anyway.
+3. **Start the server** on the computer: `./scripts/demo.sh`.
+4. **In a second terminal:** `./scripts/phone.sh`. It prints the address to
+   type into the app. On WSL it also prints what to paste into PowerShell run
+   as Administrator, so the phone can get through Windows to the server
+   inside WSL — once, plus its first line again whenever WSL restarts.
+5. **On the phone**, on the same Wi-Fi: open Estock, type the address into
+   **Server**, and sign in as `owner@merkato-demo.et` / `demo-password-123`.
+
+If the app says it could not reach the server:
+
+- The phone must be on the same Wi-Fi as the computer, not on mobile data.
+  Guest networks often keep devices apart from each other.
+- The address ends in the port, `:8000`.
+- Open `http://<the address>/health` in the phone's browser. If it shows
+  `{"status":"ok", ...}`, the phone reaches the server; if not, Windows is not
+  passing the connection on to WSL (step 4) or the network is blocking it.
+
+The phone keeps the address. If the computer is given a new one by the Wi-Fi,
+sign out (More → Sign out) and type the new one; More shows which server the
+app is using. Sales recorded with no connection wait on the phone and go to
+the server once it is reachable again.
 
 ## The fuller setup
 

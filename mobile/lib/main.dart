@@ -22,10 +22,11 @@ import 'screens/suppliers_screen.dart';
 /// Where the API lives. Set at build time:
 ///
 ///   flutter run --dart-define=API_BASE_URL=https://api.example.et/api/v1
-const apiBaseUrl = String.fromEnvironment(
-  'API_BASE_URL',
-  defaultValue: 'http://localhost:8000/api/v1',
-);
+///
+/// Left out, the app asks for its server at sign-in instead — for trying it
+/// on a phone against a computer on the same Wi-Fi, whose address is not
+/// known when the app is built.
+const apiBaseUrl = String.fromEnvironment('API_BASE_URL');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

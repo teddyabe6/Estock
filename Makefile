@@ -16,12 +16,12 @@ API_URL     ?= http://localhost:8000/api/v1
 export DATABASE_URL := $(DB_URL)
 
 .DEFAULT_GOAL := help
-.PHONY: help demo doctor setup setup-backend setup-web setup-mobile \
+.PHONY: help demo doctor phone setup setup-backend setup-web setup-mobile \
         api web mobile mobile-web worker \
         migrate seed reset-db \
         test test-backend test-backend-pg test-mobile \
         lint lint-backend lint-web lint-mobile fix \
-        build-web build-apk docker clean
+        build-web build-apk phone-apk docker clean
 
 help: ## Show this help
 	@echo "Estock — make targets"
@@ -41,6 +41,9 @@ demo: ## Everything running for manual testing — no database to install
 
 doctor: ## Work out why the browser cannot reach the app
 	@./scripts/doctor.sh
+
+phone: ## What to type into the Android app, and on WSL how the phone gets through
+	@./scripts/phone.sh
 
 # --------------------------------------------------------------------------- #
 # Setup
@@ -153,8 +156,14 @@ fix: ## Apply the fixes the backend linter can make itself
 build-web: ## Production build of the web app
 	@cd web && NEXT_PUBLIC_API_BASE_URL=$(API_URL) npm run build
 
-build-apk: ## Release APK for Android
+build-apk: ## Release APK for Android, for the server at API_URL
 	@cd mobile && flutter build apk --release --dart-define=API_BASE_URL=$(API_URL)
+
+phone-apk: ## APK that asks for its server at sign-in, for trying on a phone
+	@cd mobile && flutter build apk --release
+	@echo
+	@echo "Built mobile/build/app/outputs/flutter-apk/app-release.apk"
+	@echo "Copy it to the phone and open it there; then see ./scripts/phone.sh"
 
 clean: ## Remove build output and caches
 	@rm -rf web/.next mobile/build backend/.pytest_cache backend/.ruff_cache

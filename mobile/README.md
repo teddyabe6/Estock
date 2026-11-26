@@ -11,9 +11,15 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1   # Android e
 flutter run --dart-define=API_BASE_URL=http://localhost:8000/api/v1  # iOS simulator
 ```
 
-`API_BASE_URL` is read at build time. On a physical device, point it at the
-machine running the API (`http://192.168.x.x:8000/api/v1`), and make sure that
-host is listed in the API's `CORS_ORIGINS`.
+`API_BASE_URL` is read at build time. Leave it out and the app asks for its
+server on the sign-in screen instead, and remembers it: that is the build for
+trying the app on a phone against a computer on the same Wi-Fi, whose address
+is not known when the app is built (`make phone-apk`, then
+`./scripts/phone.sh` for what to type). A build for a shop always names its
+server, and never asks.
+
+The browser build is different: there the page calls the API, so the API's
+`CORS_ORIGINS` must list where the page is served from.
 
 ```bash
 flutter test        # 35 tests
