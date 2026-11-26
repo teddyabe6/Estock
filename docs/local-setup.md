@@ -195,6 +195,11 @@ running the server. Nothing else is installed on the phone.
 
 If the app says it could not reach the server:
 
+- Run `./scripts/phone.sh` again. On WSL it checks each step between the
+  phone and the server — Windows passing the port on to WSL's current
+  address, the service that does it, the firewall rule, whether the Wi-Fi is
+  set to block every incoming connection, and whether the PC reaches the
+  server the way the phone will — and marks what is missing with ✗.
 - The phone must be on the same Wi-Fi as the computer, not on mobile data.
   Guest networks often keep devices apart from each other.
 - The address ends in the port, `:8000`.
