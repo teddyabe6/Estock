@@ -172,6 +172,65 @@ On an Android emulator the host is `10.0.2.2`, not `localhost`:
 cd mobile && flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1
 ```
 
+### From your computer, phone on a cable
+
+For development: the app is built on your computer and runs on the phone,
+and a change to the code shows on the phone a moment later (`r` in the
+terminal). The phone reaches the server through the cable, so the Wi-Fi does
+not come into it.
+
+**Once, on the phone.** Settings → About phone → tap *Build number* seven
+times, which unlocks Developer options. Then, in Developer options (under
+Settings → System on most phones), turn on **USB debugging**.
+
+**Once, on the computer** (Linux or WSL):
+
+```bash
+./scripts/setup-android.sh     # Java 17, Flutter 3.27.1 and the Android SDK
+```
+
+About 2 GB to download. Open a new terminal when it is done.
+
+**Once, on Windows (WSL only).** WSL cannot see USB devices by itself;
+[usbipd-win](https://github.com/dorssel/usbipd-win) hands the phone to it.
+In PowerShell:
+
+```powershell
+winget install --exact dorssel.usbipd-win
+```
+
+Plug the phone in. Then, in PowerShell opened as Administrator, find the
+phone in the list — by its name, or "ADB Interface" — and allow it to be
+handed to WSL, with its BUSID:
+
+```powershell
+usbipd list
+usbipd bind --busid 2-3
+```
+
+**Each time:**
+
+```bash
+./scripts/demo.sh              # terminal 1: the server
+./scripts/phone-usb.sh         # terminal 2: the app, on the phone
+```
+
+`phone-usb.sh` hands the phone to WSL when it needs to, waits for you to tap
+**Allow** on the phone the first time, connects the phone to the server
+through the cable, then builds the app, installs it and starts it — signed in
+as usual, `owner@merkato-demo.et` / `demo-password-123`, with no server to
+type. The first build takes several minutes. After that, change the code and
+press `r` in terminal 2 to see it on the phone; `R` restarts the app and `q`
+stops it.
+
+If the APK was installed before, the first run replaces it (it was signed
+differently), and anything that copy had not synced is lost.
+
+If the phone drops out of WSL — it can, when it asks for permission or
+changes USB mode — run `phone-usb.sh` again, or keep it attached by leaving
+`usbipd attach --wsl --busid 2-3 --auto-attach` running in a PowerShell
+window.
+
 ### On your Android phone
 
 The phone needs the app (an APK file) and a computer on the same Wi-Fi

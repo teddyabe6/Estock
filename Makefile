@@ -16,7 +16,7 @@ API_URL     ?= http://localhost:8000/api/v1
 export DATABASE_URL := $(DB_URL)
 
 .DEFAULT_GOAL := help
-.PHONY: help demo doctor phone setup setup-backend setup-web setup-mobile \
+.PHONY: help demo doctor phone phone-usb setup setup-backend setup-web setup-mobile setup-android \
         api web mobile mobile-web worker \
         migrate seed reset-db \
         test test-backend test-backend-pg test-mobile \
@@ -45,6 +45,9 @@ doctor: ## Work out why the browser cannot reach the app
 phone: ## What to type into the Android app, and on WSL how the phone gets through
 	@./scripts/phone.sh
 
+phone-usb: ## Run the app on a phone plugged in by USB, against the server here, with hot reload
+	@./scripts/phone-usb.sh
+
 # --------------------------------------------------------------------------- #
 # Setup
 # --------------------------------------------------------------------------- #
@@ -66,6 +69,9 @@ setup-backend: ## Create the virtualenv and install Python dependencies
 setup-web: ## Install web dependencies
 	@cd web && npm install --no-audit --no-fund
 	@echo "web ready"
+
+setup-android: ## Install Java 17, Flutter and the Android SDK (Linux/WSL) for a phone on a cable
+	@./scripts/setup-android.sh
 
 setup-mobile: ## Resolve Flutter packages
 	@cd mobile && flutter pub get

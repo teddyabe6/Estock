@@ -11,6 +11,10 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1   # Android e
 flutter run --dart-define=API_BASE_URL=http://localhost:8000/api/v1  # iOS simulator
 ```
 
+On a phone plugged into your computer, with hot reload: set up once with
+`../scripts/setup-android.sh`, then run `../scripts/phone-usb.sh` (the server
+running in another terminal). The phone reaches the server through the cable.
+
 `API_BASE_URL` is read at build time. Leave it out and the app asks for its
 server on the sign-in screen instead, and remembers it: that is the build for
 trying the app on a phone against a computer on the same Wi-Fi, whose address
