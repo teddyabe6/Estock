@@ -12,6 +12,7 @@ import 'package:estock_mobile/screens/stock_adjust_screen.dart';
 import 'package:estock_mobile/screens/stock_receive_screen.dart';
 import 'package:estock_mobile/screens/stock_request_screen.dart';
 import 'package:estock_mobile/screens/stock_transfers_screen.dart';
+import 'package:estock_mobile/widgets/nav_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -190,7 +191,7 @@ Future<void> openStockTab(WidgetTester tester, AppState state) async {
   await tester.pumpWidget(EstockApp(state: state));
   await tester.pump();
   await tester.tap(find.descendant(
-    of: find.byType(NavigationBar),
+    of: find.byType(EstockNavBar),
     matching: find.text('Stock'),
   ));
   await tester.pump();

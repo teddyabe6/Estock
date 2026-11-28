@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/app_state.dart';
+import '../widgets/nav_bar.dart';
 import '../widgets/offline_banner.dart';
 import 'home_screen.dart';
 import 'more_screen.dart';
@@ -221,43 +222,20 @@ class _ShellScreenState extends State<ShellScreen>
           ],
         ),
       ),
-      bottomNavigationBar: DecoratedBox(
-        // A hairline and a faint shadow, so the bar sits apart from whatever
-        // scrolls past underneath it.
-        decoration: BoxDecoration(
-          border: Border(
-            top:
-                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-          ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x0F0F2A27),
-              blurRadius: 16,
-              offset: Offset(0, -4),
+      bottomNavigationBar: EstockNavBar(
+        selectedIndex: index,
+        onDestinationSelected: (next) => setState(() => _index = next),
+        destinations: [
+          for (final tab in tabs)
+            EstockNavDestination(
+              icon: tab.icon,
+              selectedIcon: tab.selectedIcon,
+              label: tab.label,
+              waiting: tab.waiting?.call(state) ?? 0,
             ),
-          ],
-        ),
-        child: NavigationBar(
-          selectedIndex: index,
-          onDestinationSelected: (next) => setState(() => _index = next),
-          destinations: [
-            for (final tab in tabs)
-              NavigationDestination(
-                icon: _badged(state, tab, tab.icon),
-                selectedIcon: _badged(state, tab, tab.selectedIcon),
-                label: tab.label,
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
 
-  /// The tab's icon, with a count on it when something there waits.
-  Widget _badged(AppState state, _Tab tab, IconData icon) {
-    final waiting = tab.waiting?.call(state) ?? 0;
-    return waiting > 0
-        ? Badge.count(count: waiting, child: Icon(icon))
-        : Icon(icon);
-  }
 }

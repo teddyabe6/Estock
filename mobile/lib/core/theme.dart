@@ -340,50 +340,6 @@ class EstockTheme {
         foregroundColor: scheme.onPrimary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
-      navigationBarTheme: _bottomBar(light, palette, text, card),
-    );
-  }
-
-  /// The bottom bar: the tab you are on in a pill of the brand's palest
-  /// shade, its icon filled and its label in the brand's colour, so where
-  /// you are reads at a glance rather than by comparing four greys.
-  static NavigationBarThemeData _bottomBar(
-    bool light,
-    EstockPalette palette,
-    TextTheme text,
-    Color card,
-  ) {
-    return NavigationBarThemeData(
-      backgroundColor: card,
-      elevation: 0,
-      surfaceTintColor: Colors.transparent,
-      indicatorColor: palette.brandTint,
-      indicatorShape: const StadiumBorder(),
-      height: 68,
-      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-      iconTheme: WidgetStateProperty.resolveWith(
-        (states) => IconThemeData(
-          size: 24,
-          color: states.contains(WidgetState.selected)
-              ? palette.brandStrong
-              : palette.muted,
-        ),
-      ),
-      labelTextStyle: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.selected)
-            ? text.labelSmall!.copyWith(
-                fontSize: 12,
-                letterSpacing: 0,
-                fontWeight: FontWeight.w700,
-                color: palette.brandStrong,
-              )
-            : text.labelSmall!.copyWith(
-                fontSize: 12,
-                letterSpacing: 0,
-                fontWeight: FontWeight.w500,
-                color: palette.muted,
-              ),
-      ),
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:estock_mobile/core/offline/catalogue_cache.dart';
 import 'package:estock_mobile/core/offline/outbox.dart';
 import 'package:estock_mobile/main.dart';
 import 'package:estock_mobile/models/session.dart';
+import 'package:estock_mobile/widgets/nav_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -44,7 +45,7 @@ Future<void> open(WidgetTester tester, AppState state) async {
 }
 
 Finder tab(String label) => find.descendant(
-      of: find.byType(NavigationBar),
+      of: find.byType(EstockNavBar),
       matching: find.text(label),
     );
 
@@ -66,13 +67,13 @@ void main() {
       (tester) async {
     await open(tester, await signedIn(everything));
 
-    expect(find.byType(NavigationDestination), findsNWidgets(5));
+    expect(find.byType(EstockNavDestination), findsNWidgets(5));
     for (final label in ['Home', 'Sales', 'Stock', 'Shop', 'More']) {
       expect(tab(label), findsOneWidget, reason: '$label should be in the bar');
     }
 
     final labels = tester
-        .widgetList<NavigationDestination>(find.byType(NavigationDestination))
+        .widgetList<EstockNavDestination>(find.byType(EstockNavDestination))
         .map((destination) => destination.label)
         .toList();
     expect(labels, ['Home', 'Sales', 'Stock', 'Shop', 'More']);
@@ -93,7 +94,7 @@ void main() {
       (tester) async {
     await open(tester, await signedIn(const []));
 
-    expect(find.byType(NavigationDestination), findsNWidgets(2));
+    expect(find.byType(EstockNavDestination), findsNWidgets(2));
     expect(tab('Home'), findsOneWidget);
     expect(tab('More'), findsOneWidget);
   });

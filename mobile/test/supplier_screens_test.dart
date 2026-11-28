@@ -11,6 +11,7 @@ import 'package:estock_mobile/models/supplier.dart';
 import 'package:estock_mobile/screens/stock_receive_screen.dart';
 import 'package:estock_mobile/screens/supplier_form_screen.dart';
 import 'package:estock_mobile/screens/suppliers_screen.dart';
+import 'package:estock_mobile/widgets/nav_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -229,7 +230,7 @@ void main() {
       await tester.pumpWidget(EstockApp(state: state));
       await tester.pump();
       await tester.tap(find.descendant(
-        of: find.byType(NavigationBar),
+        of: find.byType(EstockNavBar),
         matching: find.text('More'),
       ));
       await settle(tester);
