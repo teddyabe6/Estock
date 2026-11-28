@@ -19,7 +19,13 @@ API_PORT="${API_PORT:-8000}"
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
+step() { printf '  \033[2m…\033[0m %s\n' "$*"; }
 fail() { printf '\n  Error: %s\n\n' "$*" >&2; exit 1; }
+
+# Nothing here may wait for ever without saying so: adb can hang on a phone
+# that was unplugged while WSL had it, and Windows tools can hang too.
+ADB_WAIT="${ADB_WAIT:-15}"
+WINDOWS_WAIT="${WINDOWS_WAIT:-30}"
 
 # What setup-android.sh installed, even in a terminal opened before it ran.
 for dir in "${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools" "$HOME/flutter/bin"; do
@@ -31,6 +37,7 @@ command -v flutter >/dev/null || fail "Flutter is not installed. Run ./scripts/s
 command -v adb >/dev/null || fail "adb is not installed. Run ./scripts/setup-android.sh first."
 ADB="$(command -v adb)"
 
+step "Checking the server on port ${API_PORT}..."
 curl -fsS -m 5 "http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1 \
   || fail "the server is not running. Start it first, in another terminal: ./scripts/demo.sh"
 
@@ -38,11 +45,21 @@ on_wsl() { grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
 
 # One line per phone adb can see: its serial, then device, unauthorized, or
 # "no" (as in "no permissions").
-phones() { "$ADB" devices 2>/dev/null | tail -n +2 | awk 'NF >= 2 { print $1, $2 }'; }
+phones() { timeout "$ADB_WAIT" "$ADB" devices 2>/dev/null | tail -n +2 | awk 'NF >= 2 { print $1, $2 }'; }
 count() { phones | awk -v state="$1" '$2 == state' | grep -c . || true; }
 any() { phones | grep -c . || true; }
 
-"$ADB" start-server >/dev/null 2>&1
+adb_stuck() {
+  fail "adb is not answering. That is usually a phone unplugged while WSL had
+  it. Unplug the phone, plug it back in, then run:
+      adb kill-server; sudo $ADB kill-server
+  and this script again."
+}
+
+step "Starting adb, which talks to the phone..."
+timeout "$ADB_WAIT" "$ADB" start-server >/dev/null 2>&1 || adb_stuck
+timeout "$ADB_WAIT" "$ADB" devices >/dev/null 2>&1 || adb_stuck
+step "Looking for the phone..."
 
 # On WSL a phone plugged into the PC belongs to Windows until usbipd-win hands
 # it over, which it does once allowed (`usbipd bind`, as Administrator).
@@ -62,15 +79,26 @@ attach_from_windows() {
     info "then run this script again."
     return 1
   fi
-  list="$(cd /mnt/c 2>/dev/null; "$usbipd" list 2>/dev/null | tr -d '\r')"
+  step "Asking Windows for the phone (usbipd)..."
+  list="$(cd /mnt/c 2>/dev/null; timeout "$WINDOWS_WAIT" "$usbipd" list 2>/dev/null | tr -d '\r')"
+  if [ -z "$list" ]; then
+    bold "Windows did not answer"
+    info "usbipd gave no list of USB devices. In Windows PowerShell run"
+    info "    usbipd list"
+    info "and check the phone is there; then run this script again."
+    return 1
+  fi
   rows="$(printf '%s\n' "$list" | grep -E '^[0-9]+-[0-9.]+ ' || true)"
   # Already in WSL: it can take adb a moment, or wait on the phone's say-so.
-  printf '%s\n' "$rows" | grep -qE ' Attached *$' && return 0
+  if printf '%s\n' "$rows" | grep -qE ' Attached *$'; then
+    step "Windows has already handed it to WSL."
+    return 0
+  fi
   shared="$(printf '%s\n' "$rows" | grep -E ' Shared *$' || true)"
   if [ "$(printf '%s\n' "$shared" | grep -c .)" -eq 1 ]; then
     busid="$(printf '%s\n' "$shared" | awk '{ print $1 }')"
     info "Handing the phone (USB $busid) from Windows to WSL..."
-    if (cd /mnt/c 2>/dev/null; "$usbipd" attach --wsl --busid "$busid" >/dev/null 2>&1); then
+    if (cd /mnt/c 2>/dev/null; timeout "$WINDOWS_WAIT" "$usbipd" attach --wsl --busid "$busid" >/dev/null 2>&1); then
       return 0
     fi
     info "That did not work. In Windows PowerShell: usbipd attach --wsl --busid $busid"
@@ -95,14 +123,17 @@ attach_from_windows() {
 if [ "$(any)" -eq 0 ] && on_wsl; then
   attach_from_windows || exit 1
   # A phone takes a few seconds to show up once attached.
+  step "Waiting for the phone to show up in WSL (up to 15 seconds)..."
   for _ in $(seq 1 15); do [ "$(any)" -gt 0 ] && break; sleep 1; done
 fi
 if [ "$(any)" -eq 0 ]; then
   bold "No phone found"
   info "Check the cable (a charge-only cable carries no data), that USB debugging"
-  info "is on (Settings, Developer options), and that the phone is unlocked."
+  info "is on (Settings, Developer options), that the phone is unlocked, and that"
+  info "its USB setting is File transfer."
   if on_wsl; then
-    info "If Windows still has it, in Windows PowerShell: usbipd attach --wsl --busid <BUSID>"
+    info "Or hand it to WSL afresh: in Windows PowerShell, usbipd detach --busid <BUSID>"
+    info "(its BUSID is in usbipd list), then run this script again."
   fi
   echo
   exit 1
@@ -114,9 +145,10 @@ if [ "$(count no)" -gt 0 ]; then
   info "adb may not open the phone's USB port as you; restarting it as root."
   "$ADB" kill-server >/dev/null 2>&1
   if [ "$(id -u)" -eq 0 ]; then
-    "$ADB" start-server >/dev/null 2>&1
+    timeout "$ADB_WAIT" "$ADB" start-server >/dev/null 2>&1 || adb_stuck
   else
-    sudo "$ADB" start-server >/dev/null 2>&1 || fail "could not start adb with sudo."
+    sudo timeout "$ADB_WAIT" "$ADB" start-server >/dev/null 2>&1 \
+      || fail "could not start adb with sudo."
   fi
   for _ in $(seq 1 10); do [ "$(count no)" -eq 0 ] && [ "$(any)" -gt 0 ] && break; sleep 1; done
 fi
@@ -137,10 +169,11 @@ if [ "$(count device)" -gt 1 ] && [ -z "${ANDROID_SERIAL:-}" ]; then
 fi
 
 # The phone's own 127.0.0.1:8000, through the cable, to the server here.
-"$ADB" -s "$serial" reverse "tcp:${API_PORT}" "tcp:${API_PORT}" >/dev/null \
+step "Connecting the phone to the server through the cable..."
+timeout "$ADB_WAIT" "$ADB" -s "$serial" reverse "tcp:${API_PORT}" "tcp:${API_PORT}" >/dev/null \
   || fail "could not connect the phone to the server through the cable (adb reverse)."
 
-model="$("$ADB" -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+model="$(timeout "$ADB_WAIT" "$ADB" -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
 bold "Running Estock on ${model:-the phone}"
 info "The phone reaches the server here through the cable, as 127.0.0.1:${API_PORT}."
 info "The first build takes several minutes; later ones are quick."
