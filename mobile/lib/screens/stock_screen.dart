@@ -256,9 +256,14 @@ class _StockScreenState extends State<StockScreen> {
                     itemBuilder: (context, index) {
                       if (index == rows.length) return _freshness(context, state);
                       final row = rows[index];
-                      return row is Product
-                          ? _row(context, state, row)
-                          : _heading(context, row as String);
+                      if (row is! Product) return _heading(context, row as String);
+                      // Products between two headings read as one group.
+                      return GroupedRow(
+                        first: index == 0 || rows[index - 1] is! Product,
+                        last: index == rows.length - 1 || rows[index + 1] is! Product,
+                        dividerIndent: 72,
+                        child: _row(context, state, row),
+                      );
                     },
                   ),
                 ),
@@ -388,10 +393,10 @@ class _StockScreenState extends State<StockScreen> {
   /// A heading over the products that share a category.
   Widget _heading(BuildContext context, String label) {
     final theme = Theme.of(context);
+    // A label above its group, lined up with the rows' text.
     return Container(
       width: double.infinity,
-      color: theme.colorScheme.surfaceContainerHighest,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
       child: Text(
         label.toUpperCase(),
         style: theme.textTheme.labelSmall?.copyWith(
@@ -651,6 +656,7 @@ class _StockScreenState extends State<StockScreen> {
           ),
         ),
       ),
+      leading: Monogram(product.name),
       title: Text(product.name),
       subtitle: _subtitle(state, product, elsewhere),
       trailing: Column(

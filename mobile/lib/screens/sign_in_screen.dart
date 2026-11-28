@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/server_address.dart';
+import '../core/theme.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -91,99 +92,114 @@ class _SignInScreenState extends State<SignInScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(Icons.storefront,
-                        size: 48, color: theme.colorScheme.primary),
-                    const SizedBox(height: 16),
-                    Text('Estock', style: theme.textTheme.headlineSmall),
+                    const Center(child: _BrandMark()),
+                    const SizedBox(height: 20),
+                    Text(
+                      'Estock',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.headlineMedium,
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       'Your shop, in your pocket.',
+                      textAlign: TextAlign.center,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
                     const SizedBox(height: 28),
-                    if (_error != null) ...[
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.errorContainer,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          _error!,
-                          style: TextStyle(color: theme.colorScheme.onErrorContainer),
+                    Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (_error != null) ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.errorContainer,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  _error!,
+                                  style: TextStyle(color: theme.colorScheme.onErrorContainer),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (_server != null) ...[
+                              TextFormField(
+                                key: const Key('server'),
+                                controller: _server,
+                                decoration: const InputDecoration(
+                                  labelText: 'Server',
+                                  hintText: '192.168.1.20:8000',
+                                  helperText:
+                                      'Where Estock runs: the address its computer shows',
+                                ),
+                                keyboardType: TextInputType.url,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                textInputAction: TextInputAction.next,
+                                validator: (value) => apiBaseFor(value ?? '') == null
+                                    ? 'Enter the server address, like 192.168.1.20:8000'
+                                    : null,
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                            TextFormField(
+                              key: const Key('email'),
+                              controller: _email,
+                              decoration: const InputDecoration(labelText: 'Email'),
+                              keyboardType: TextInputType.emailAddress,
+                              autocorrect: false,
+                              validator: (value) =>
+                                  (value ?? '').contains('@') ? null : 'Enter your email',
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              key: const Key('password'),
+                              controller: _password,
+                              decoration: InputDecoration(
+                                labelText: 'Password',
+                                suffixIcon: IconButton(
+                                  key: const Key('showPassword'),
+                                  tooltip: _showPassword
+                                      ? 'Hide the password'
+                                      : 'Show the password',
+                                  icon: Icon(_showPassword
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined),
+                                  onPressed: () =>
+                                      setState(() => _showPassword = !_showPassword),
+                                ),
+                              ),
+                              obscureText: !_showPassword,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              onFieldSubmitted: (_) => _submit(),
+                              validator: (value) =>
+                                  (value ?? '').isEmpty ? 'Enter your password' : null,
+                            ),
+                            const SizedBox(height: 20),
+                            FilledButton(
+                              key: const Key('signIn'),
+                              onPressed: _busy ? null : _submit,
+                              child: _busy
+                                  ? const SizedBox(
+                                      height: 20,
+                                      width: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Text('Sign in'),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 16),
-                    ],
-                    if (_server != null) ...[
-                      TextFormField(
-                        key: const Key('server'),
-                        controller: _server,
-                        decoration: const InputDecoration(
-                          labelText: 'Server',
-                          hintText: '192.168.1.20:8000',
-                          helperText:
-                              'Where Estock runs: the address its computer shows',
-                        ),
-                        keyboardType: TextInputType.url,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        textInputAction: TextInputAction.next,
-                        validator: (value) => apiBaseFor(value ?? '') == null
-                            ? 'Enter the server address, like 192.168.1.20:8000'
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    TextFormField(
-                      key: const Key('email'),
-                      controller: _email,
-                      decoration: const InputDecoration(labelText: 'Email'),
-                      keyboardType: TextInputType.emailAddress,
-                      autocorrect: false,
-                      validator: (value) =>
-                          (value ?? '').contains('@') ? null : 'Enter your email',
                     ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      key: const Key('password'),
-                      controller: _password,
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        suffixIcon: IconButton(
-                          key: const Key('showPassword'),
-                          tooltip: _showPassword
-                              ? 'Hide the password'
-                              : 'Show the password',
-                          icon: Icon(_showPassword
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined),
-                          onPressed: () =>
-                              setState(() => _showPassword = !_showPassword),
-                        ),
-                      ),
-                      obscureText: !_showPassword,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      onFieldSubmitted: (_) => _submit(),
-                      validator: (value) =>
-                          (value ?? '').isEmpty ? 'Enter your password' : null,
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      key: const Key('signIn'),
-                      onPressed: _busy ? null : _submit,
-                      child: _busy
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Sign in'),
-                    ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 18),
                     Text(
                       'Signing in needs a connection. After that you can keep '
                       'working offline.',
@@ -199,6 +215,36 @@ class _SignInScreenState extends State<SignInScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The app's mark: the shop front, white on the brand's gradient.
+class _BrandMark extends StatelessWidget {
+  const _BrandMark();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Container(
+      width: 76,
+      height: 76,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [palette.heroStart, palette.heroEnd],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: palette.heroEnd.withValues(alpha: 0.3),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: const Icon(Icons.storefront_rounded, color: Colors.white, size: 40),
     );
   }
 }

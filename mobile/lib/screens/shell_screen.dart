@@ -16,6 +16,7 @@ class _Tab {
     required this.label,
     required this.title,
     required this.icon,
+    required this.selectedIcon,
     required this.screen,
     this.permission,
     this.ownsTitle = false,
@@ -30,9 +31,10 @@ class _Tab {
   /// same: the Sales tab opens the till, and "New sale" is what that is.
   final String title;
 
-  /// One icon, whichever tab is open: the bar says where you are with colour,
-  /// the way the web's does, not by filling the icon in.
+  /// The outline icon at rest, and the filled one for the tab you are on —
+  /// with the pill behind it, where you are reads at a glance.
   final IconData icon;
+  final IconData selectedIcon;
 
   final Widget screen;
 
@@ -69,6 +71,7 @@ const _tabs = <_Tab>[
     label: 'Home',
     title: 'Home',
     icon: Icons.home_outlined,
+    selectedIcon: Icons.home_rounded,
     screen: HomeScreen(),
     ownsTitle: true,
   ),
@@ -76,6 +79,7 @@ const _tabs = <_Tab>[
     label: 'Sales',
     title: 'New sale',
     icon: Icons.receipt_long_outlined,
+    selectedIcon: Icons.receipt_long,
     screen: SaleScreen(),
     // The web's Sales tab opens a list of sales, so it asks for sale:view.
     // This one opens the till, which is a sale being made; the list is an
@@ -87,6 +91,7 @@ const _tabs = <_Tab>[
     label: 'Stock',
     title: 'Stock',
     icon: Icons.inventory_2_outlined,
+    selectedIcon: Icons.inventory_2,
     screen: StockScreen(),
     permission: 'stock:view',
     waiting: _transfersWaiting,
@@ -96,6 +101,7 @@ const _tabs = <_Tab>[
     label: 'Shop',
     title: 'Shop',
     icon: Icons.storefront_outlined,
+    selectedIcon: Icons.storefront,
     screen: ShopScreen(),
     permission: 'shop:view',
     waiting: _ordersWaiting,
@@ -104,6 +110,7 @@ const _tabs = <_Tab>[
     label: 'More',
     title: 'More',
     icon: Icons.more_horiz,
+    selectedIcon: Icons.more_horiz,
     screen: MoreScreen(),
     waiting: _noticesWaiting,
   ),
@@ -215,13 +222,20 @@ class _ShellScreenState extends State<ShellScreen>
         ),
       ),
       bottomNavigationBar: DecoratedBox(
-        // The rule along the top that the web's bar has, which a flat bar
-        // needs to sit apart from whatever scrolls past underneath it.
+        // A hairline and a faint shadow, so the bar sits apart from whatever
+        // scrolls past underneath it.
         decoration: BoxDecoration(
           border: Border(
             top:
                 BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
           ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0F0F2A27),
+              blurRadius: 16,
+              offset: Offset(0, -4),
+            ),
+          ],
         ),
         child: NavigationBar(
           selectedIndex: index,
@@ -229,17 +243,21 @@ class _ShellScreenState extends State<ShellScreen>
           destinations: [
             for (final tab in tabs)
               NavigationDestination(
-                icon: (tab.waiting?.call(state) ?? 0) > 0
-                    ? Badge.count(
-                        count: tab.waiting!(state),
-                        child: Icon(tab.icon),
-                      )
-                    : Icon(tab.icon),
+                icon: _badged(state, tab, tab.icon),
+                selectedIcon: _badged(state, tab, tab.selectedIcon),
                 label: tab.label,
               ),
           ],
         ),
       ),
     );
+  }
+
+  /// The tab's icon, with a count on it when something there waits.
+  Widget _badged(AppState state, _Tab tab, IconData icon) {
+    final waiting = tab.waiting?.call(state) ?? 0;
+    return waiting > 0
+        ? Badge.count(count: waiting, child: Icon(icon))
+        : Icon(icon);
   }
 }

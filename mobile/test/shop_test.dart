@@ -402,7 +402,6 @@ void main() {
 
       expect(find.text('Waiting for you (2)'), findsOneWidget);
       expect(find.text('Waiting for the customer (1)'), findsOneWidget);
-      expect(find.text('Earlier orders (2)'), findsOneWidget);
 
       // Somebody saying they have paid outranks a new order, however much
       // newer it is.
@@ -411,8 +410,15 @@ void main() {
       expect(top(tester, 'Hana Tesfaye'), lessThan(top(tester, 'Abebe Kebede')));
       expect(top(tester, 'Abebe Kebede'), lessThan(top(tester, 'Meron Haile')));
 
-      // What is finished is out of the way until asked for.
+      // What is finished is out of the way until asked for: further down,
+      // under its own heading.
       expect(find.text('Dawit Bekele'), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('Earlier orders (2)'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Earlier orders (2)'), findsOneWidget);
       await reachAndTap(tester, find.byKey(const Key('shopEarlier')));
       await tester.pump();
       await tester.scrollUntilVisible(

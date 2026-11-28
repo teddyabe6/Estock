@@ -192,12 +192,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
                                   ),
                               ],
                             )
-                          : ListView.separated(
+                          : ListView.builder(
+                              padding: const EdgeInsets.only(top: 4, bottom: 16),
                               itemCount: _rows.length,
-                              separatorBuilder: (_, __) =>
-                                  const Divider(height: 1),
-                              itemBuilder: (context, index) =>
-                                  _row(context, _rows[index], currency),
+                              itemBuilder: (context, index) => GroupedRow(
+                                first: index == 0,
+                                last: index == _rows.length - 1,
+                                dividerIndent: 72,
+                                child: _row(context, _rows[index], currency),
+                              ),
                             ),
                     ),
             ),
@@ -208,7 +211,6 @@ class _CustomersScreenState extends State<CustomersScreen> {
   }
 
   Widget _row(BuildContext context, Customer customer, String currency) {
-    final theme = Theme.of(context);
     final owes = Money.parse(customer.outstandingBalance) ?? 0;
     final details = [
       if ((customer.phone ?? '').isNotEmpty) customer.phone!,
@@ -216,15 +218,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
     ];
     return ListTile(
       key: Key('customer-${customer.id}'),
+      leading: Monogram(customer.name),
       title: Text(customer.name),
       subtitle: details.isEmpty ? null : Text(details.join(' · ')),
       trailing: owes > 0
-          ? Text(
-              'owes ${Money.format(owes, currency: currency)}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: EstockTheme.statusColour('warning', theme.colorScheme),
-                fontWeight: FontWeight.w600,
-              ),
+          ? StatusChip(
+              status: 'warning',
+              label: 'owes ${Money.format(owes, currency: currency)}',
             )
           : const Icon(Icons.chevron_right),
       onTap: () => _open(customer),

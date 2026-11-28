@@ -189,12 +189,15 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                                       ),
                                   ],
                                 )
-                              : ListView.separated(
+                              : ListView.builder(
+                                  padding: const EdgeInsets.only(top: 4, bottom: 16),
                                   itemCount: _rows.length,
-                                  separatorBuilder: (_, __) =>
-                                      const Divider(height: 1),
-                                  itemBuilder: (context, index) =>
-                                      _row(context, _rows[index], currency),
+                                  itemBuilder: (context, index) => GroupedRow(
+                                    first: index == 0,
+                                    last: index == _rows.length - 1,
+                                    dividerIndent: 72,
+                                    child: _row(context, _rows[index], currency),
+                                  ),
                                 ),
                         ),
             ),
@@ -205,7 +208,6 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   }
 
   Widget _row(BuildContext context, Supplier supplier, String currency) {
-    final theme = Theme.of(context);
     final owed = Money.parse(supplier.outstandingBalance) ?? 0;
     final details = [
       if ((supplier.phone ?? '').isNotEmpty) supplier.phone!,
@@ -213,15 +215,13 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     ];
     return ListTile(
       key: Key('supplier-${supplier.id}'),
+      leading: Monogram(supplier.name),
       title: Text(supplier.name),
       subtitle: details.isEmpty ? null : Text(details.join(' · ')),
       trailing: owed > 0
-          ? Text(
-              'you owe ${Money.format(owed, currency: currency)}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: EstockTheme.statusColour('warning', theme.colorScheme),
-                fontWeight: FontWeight.w600,
-              ),
+          ? StatusChip(
+              status: 'warning',
+              label: 'you owe ${Money.format(owed, currency: currency)}',
             )
           : const Icon(Icons.chevron_right),
       onTap: () => _open(supplier),

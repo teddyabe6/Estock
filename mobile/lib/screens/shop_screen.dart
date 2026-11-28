@@ -383,7 +383,7 @@ class _ShopScreenState extends State<ShopScreen> {
           ),
         if (waiting.isNotEmpty) ...[
           SectionTitle('Waiting for you (${waiting.length})'),
-          ...waiting.map(_orderRow),
+          TileGroup(dividerIndent: 72, children: waiting.map(_orderRow).toList()),
         ] else if (_orders.isNotEmpty)
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 20, 16, 0),
@@ -391,7 +391,7 @@ class _ShopScreenState extends State<ShopScreen> {
           ),
         if (withCustomer.isNotEmpty) ...[
           SectionTitle('Waiting for the customer (${withCustomer.length})'),
-          ...withCustomer.map(_orderRow),
+          TileGroup(dividerIndent: 72, children: withCustomer.map(_orderRow).toList()),
         ],
         if (earlier.isNotEmpty) ...[
           SectionTitle(
@@ -402,12 +402,13 @@ class _ShopScreenState extends State<ShopScreen> {
               child: Text(_showEarlier ? 'Hide' : 'Show'),
             ),
           ),
-          if (_showEarlier) ...earlier.map(_orderRow),
+          if (_showEarlier)
+            TileGroup(dividerIndent: 72, children: earlier.map(_orderRow).toList()),
         ],
       ],
       if (_enquiries.isNotEmpty) ...[
         SectionTitle('Questions from customers (${_enquiries.length})'),
-        ..._enquiries.map(_enquiryRow),
+        TileGroup(children: _enquiries.map(_enquiryRow).toList()),
       ],
     ];
   }
@@ -508,9 +509,11 @@ class _ShopScreenState extends State<ShopScreen> {
   Widget _orderRow(Map<String, dynamic> order) {
     final currency = AppScope.of(context).session?.currency ?? 'ETB';
     final lines = (order['lines'] as List<dynamic>?)?.length ?? 0;
+    final customer = order['customer_name'] as String? ?? 'A customer';
     return ListTile(
       key: Key('order-${order['id']}'),
-      title: Text(order['customer_name'] as String? ?? 'A customer'),
+      leading: Monogram(customer),
+      title: Text(customer),
       subtitle: Text(
         [
           countOf(lines, 'item'),

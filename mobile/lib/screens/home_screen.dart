@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/app_state.dart';
 import '../core/money.dart';
+import '../core/theme.dart';
 import '../models/stock.dart';
 import '../widgets/common.dart';
 import 'sales_history_screen.dart';
@@ -60,19 +61,22 @@ class _HomeScreenState extends State<HomeScreen> {
     void line(
       Key key,
       IconData icon,
+      Color colour,
       String title,
       String? subtitle,
       String route,
     ) {
       rows.add(ListTile(
         key: key,
-        leading: Icon(icon, color: theme.colorScheme.primary),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        leading: IconBadge(icon, colour: colour),
+        title: Text(title),
         subtitle: subtitle == null ? null : Text(subtitle),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => navigator.pushNamed(route),
       ));
     }
+
+    final palette = context.palette;
 
     final orders = state.shopOrdersWaiting;
     final slips = state.shopSlipsToCheck;
@@ -80,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
       line(
         const Key('homeOrders'),
         Icons.storefront_outlined,
+        palette.warn,
         '${countOf(orders, 'online order')} ${orders == 1 ? 'needs' : 'need'} you',
         slips > 0
             ? '${countOf(slips, 'customer')} ${slips == 1 ? 'says' : 'say'} '
@@ -92,6 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
       line(
         const Key('homeQuestions'),
         Icons.help_outline,
+        palette.info,
         '${countOf(state.shopQuestions, 'question')} from customers',
         null,
         '/shop',
@@ -101,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
       line(
         const Key('homeTransfers'),
         Icons.move_down_outlined,
+        theme.colorScheme.primary,
         '${countOf(state.transfersNeedingMe, 'stock transfer')} to answer',
         null,
         '/stock/transfers',
@@ -109,11 +116,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (rows.isEmpty) return const [];
     return [
       const SectionTitle('Waiting for you'),
-      Card(
-        margin: const EdgeInsets.symmetric(horizontal: 12),
-        clipBehavior: Clip.antiAlias,
-        child: Column(children: rows),
-      ),
+      TileGroup(dividerIndent: 70, children: rows),
     ];
   }
 
@@ -141,32 +144,13 @@ class _HomeScreenState extends State<HomeScreen> {
       child: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  session?.tenantName ?? 'Estock',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                Text(
-                  'Today, ${Money.date(DateTime.now())}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-              ],
-            ),
-          ),
-          // What is waiting on whoever holds the phone, before the figures:
-          // the figures say how the day went, this says what to do next.
+          // Who and where, and how today is going, in one place at the top.
+          _hero(context, state, today, currency, maySeeSales),
+          // What is waiting on whoever holds the phone, straight after: the
+          // figures say how the day went, this says what to do next.
           ..._waiting(context, state),
           if (_loading)
-            const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(child: CircularProgressIndicator()),
-            )
+            const SizedBox.shrink()
           else if (_offline && _dashboard == null)
             const EmptyState(
               icon: Icons.cloud_off,
@@ -176,50 +160,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   'when you are back online.',
             )
           else ...[
-            if (today != null) ...[
-              const SectionTitle('Today'),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Wrap(
-                  children: [
-                    SizedBox(
-                      width: _tileWidth(context),
-                      child: StatTile(
-                        label: 'Sales',
-                        value: Money.format(today['net_sales'], currency: currency),
-                        // Today's figure opens today's sales: the list it
-                        // was added up from.
-                        onTap: maySeeSales ? () => _openSales(context) : null,
-                      ),
-                    ),
-                    SizedBox(
-                      width: _tileWidth(context),
-                      child: StatTile(
-                        label: 'Sales made',
-                        value: '${today['sale_count'] ?? 0}',
-                        onTap: maySeeSales ? () => _openSales(context) : null,
-                      ),
-                    ),
-                    SizedBox(
-                      width: _tileWidth(context),
-                      child: StatTile(
-                        label: 'Items sold',
-                        value: Money.quantity(today['items_sold']),
-                      ),
-                    ),
-                    if (today['gross_profit'] != null)
-                      SizedBox(
-                        width: _tileWidth(context),
-                        child: StatTile(
-                          label: 'Gross profit',
-                          value: Money.format(today['gross_profit'],
-                              currency: currency),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
             if (receivables != null) ...[
               SectionTitle(
                 'Money owed',
@@ -228,53 +168,43 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Text('See all'),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Wrap(
-                  children: [
-                    SizedBox(
-                      width: _tileWidth(context),
-                      child: StatTile(
-                        label: 'Customers owe you',
-                        value: Money.format(receivables['total_outstanding'],
-                            currency: currency),
-                        note: owedBy(receivables),
-                        onTap: () =>
-                            Navigator.of(context).pushNamed('/credit'),
-                      ),
-                    ),
-                    SizedBox(
-                      width: _tileWidth(context),
-                      child: StatTile(
-                        label: 'Overdue',
-                        value:
-                            Money.format(receivables['overdue'], currency: currency),
-                        tone: (Money.parse(receivables['overdue']) ?? 0) > 0
-                            ? Theme.of(context).colorScheme.error
-                            : null,
-                        onTap: () =>
-                            Navigator.of(context).pushNamed('/credit'),
-                      ),
-                    ),
-                    // The other side of the same book: deliveries taken
-                    // on credit, which the phone can now record and so
-                    // has to be able to show.
-                    if (owesSuppliers)
-                      SizedBox(
-                        width: _tileWidth(context),
-                        child: StatTile(
-                          key: const Key('homePayables'),
-                          label: 'You owe suppliers',
-                          value: Money.format(payables['total_outstanding'],
-                              currency: currency),
-                          note: owedBy(payables, toSuppliers: true),
-                          onTap: () => Navigator.of(context)
-                              .pushNamed('/credit/payables'),
-                        ),
-                      ),
-                  ],
+              _grid(context, [
+                StatTile(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: 'Customers owe you',
+                  value: Money.format(receivables['total_outstanding'],
+                      currency: currency),
+                  note: owedBy(receivables),
+                  onTap: () => Navigator.of(context).pushNamed('/credit'),
                 ),
-              ),
+                StatTile(
+                  icon: Icons.schedule_rounded,
+                  accent: (Money.parse(receivables['overdue']) ?? 0) > 0
+                      ? Theme.of(context).colorScheme.error
+                      : context.palette.muted,
+                  label: 'Overdue',
+                  value: Money.format(receivables['overdue'], currency: currency),
+                  tone: (Money.parse(receivables['overdue']) ?? 0) > 0
+                      ? Theme.of(context).colorScheme.error
+                      : null,
+                  onTap: () => Navigator.of(context).pushNamed('/credit'),
+                ),
+                // The other side of the same book: deliveries taken on
+                // credit, which the phone can now record and so has to be
+                // able to show.
+                if (owesSuppliers)
+                  StatTile(
+                    key: const Key('homePayables'),
+                    icon: Icons.local_shipping_outlined,
+                    accent: context.palette.warn,
+                    label: 'You owe suppliers',
+                    value: Money.format(payables['total_outstanding'],
+                        currency: currency),
+                    note: owedBy(payables, toSuppliers: true),
+                    onTap: () =>
+                        Navigator.of(context).pushNamed('/credit/payables'),
+                  ),
+              ]),
             ],
             SectionTitle(
               'Low stock',
@@ -287,9 +217,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
             ),
             if (lowStock.isEmpty)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text('Nothing needs restocking right now.'),
+              TileGroup(
+                children: [
+                  ListTile(
+                    leading: IconBadge(
+                      Icons.check_rounded,
+                      colour: context.palette.good,
+                    ),
+                    title: const Text('Nothing needs restocking right now.'),
+                  ),
+                ],
               )
             else
               // The same product can be short at one branch and fine at
@@ -297,7 +234,9 @@ class _HomeScreenState extends State<HomeScreen> {
               // The worst few, not the whole list: the list has a screen of
               // its own, and five rows here leave the rest of today in
               // sight.
-              ...lowStock.take(5).map((item) {
+              TileGroup(
+                dividerIndent: 70,
+                children: lowStock.take(5).map((item) {
                 final row = Map<String, dynamic>.from(item as Map);
                 final branch = row['branch_name'] as String?;
                 final productId = row['product_id'] as String?;
@@ -305,7 +244,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     .where((p) => p.id == productId)
                     .map((p) => p.unitOfMeasure)
                     .firstOrNull;
+                final severity = row['severity'] as String? ?? '';
                 return ListTile(
+                  leading: IconBadge(
+                    Icons.inventory_2_outlined,
+                    colour: EstockTheme.statusColour(
+                      severity,
+                      Theme.of(context).colorScheme,
+                    ),
+                  ),
                   title: Text(row['name'] as String? ?? ''),
                   subtitle: Text(
                     [
@@ -333,9 +280,167 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                 );
-              }),
+              }).toList(),
+              ),
           ],
         ],
+      ),
+    );
+  }
+
+  /// The top of the screen: a greeting, whose shop it is, and today's
+  /// takings large enough to read from across the counter, with the
+  /// three figures that explain them underneath. Opens today's sales.
+  Widget _hero(
+    BuildContext context,
+    AppState state,
+    Map<String, dynamic>? today,
+    String currency,
+    bool maySeeSales,
+  ) {
+    final theme = Theme.of(context);
+    final palette = context.palette;
+    final session = state.session;
+    final firstName = (session?.fullName ?? '').trim().split(' ').first;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : hour < 17
+            ? 'Good afternoon'
+            : 'Good evening';
+    final soft = Colors.white.withValues(alpha: 0.78);
+
+    Widget figure(String value, String label) => Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.13),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: EstockTheme.figures,
+                    ),
+                  ),
+                ),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(color: soft),
+                ),
+              ],
+            ),
+          ),
+        );
+
+    final figures = today == null
+        ? const <Widget>[]
+        : [
+            figure('${today['sale_count'] ?? 0}', 'sales made'),
+            figure(Money.quantity(today['items_sold']), 'items sold'),
+            if (today['gross_profit'] != null)
+              figure(
+                Money.format(today['gross_profit'], currency: currency),
+                'profit',
+              ),
+          ];
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [palette.heroStart, palette.heroEnd],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: palette.heroEnd.withValues(alpha: 0.25),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: today != null && maySeeSales ? () => _openSales(context) : null,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  firstName.isEmpty ? greeting : '$greeting, $firstName',
+                  style: theme.textTheme.labelMedium?.copyWith(color: soft),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  session?.tenantName ?? 'Estock',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+                ),
+                Text(
+                  'Today, ${Money.date(DateTime.now())}',
+                  style: theme.textTheme.bodySmall?.copyWith(color: soft),
+                ),
+                if (today != null) ...[
+                  const SizedBox(height: 18),
+                  Text(
+                    'SALES TODAY',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: soft,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      Money.format(today['net_sales'], currency: currency),
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        color: Colors.white,
+                        fontFeatures: EstockTheme.figures,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      for (var i = 0; i < figures.length; i++) ...[
+                        if (i > 0) const SizedBox(width: 8),
+                        figures[i],
+                      ],
+                    ],
+                  ),
+                ] else if (_loading) ...[
+                  const SizedBox(height: 18),
+                  const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -344,11 +449,29 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute(builder: (_) => const SalesHistoryScreen()),
       );
 
-  /// Two tiles per row on a phone, more on a tablet.
-  double _tileWidth(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width - 24;
-    final columns = width > 600 ? 4 : 2;
-    return width / columns;
+  /// Two tiles to a row on a phone, four on a tablet, each row as tall as
+  /// its tallest tile so the cards line up.
+  Widget _grid(BuildContext context, List<Widget> tiles) {
+    final columns = MediaQuery.sizeOf(context).width > 624 ? 4 : 2;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 11),
+      child: Column(
+        children: [
+          for (var i = 0; i < tiles.length; i += columns)
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var j = i; j < i + columns; j++)
+                    Expanded(
+                      child: j < tiles.length ? tiles[j] : const SizedBox.shrink(),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
