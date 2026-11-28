@@ -49,11 +49,17 @@ any() { phones | grep -c . || true; }
 attach_from_windows() {
   local usbipd list rows shared busid
   usbipd="$(command -v usbipd.exe 2>/dev/null || true)"
+  # Where its installer puts it, for a WSL started before it was installed,
+  # which has not seen Windows' new PATH.
+  if [ -z "$usbipd" ] && [ -x "/mnt/c/Program Files/usbipd-win/usbipd.exe" ]; then
+    usbipd="/mnt/c/Program Files/usbipd-win/usbipd.exe"
+  fi
   if [ -z "$usbipd" ]; then
     bold "Windows has to hand the phone to WSL"
-    info "Install usbipd-win once, in Windows PowerShell:"
+    info "Install usbipd-win once, in Windows PowerShell — open it from the"
+    info "Start menu; it is not this WSL terminal — with:"
     info "    winget install --exact dorssel.usbipd-win"
-    info "then open a new WSL terminal and run this script again."
+    info "then run this script again."
     return 1
   fi
   list="$(cd /mnt/c 2>/dev/null; "$usbipd" list 2>/dev/null | tr -d '\r')"
@@ -76,7 +82,7 @@ attach_from_windows() {
     info "attach the phone's, with its BUSID from the list below:"
     info "    usbipd attach --wsl --busid <BUSID>"
   else
-    info "Allow it once: in PowerShell opened as Administrator, find the phone"
+    info "Allow it once: in Windows PowerShell opened as Administrator, find the phone"
     info "in the list below (its name, or \"ADB Interface\") and run, with its BUSID:"
     info "    usbipd bind --busid <BUSID>"
   fi
@@ -96,7 +102,7 @@ if [ "$(any)" -eq 0 ]; then
   info "Check the cable (a charge-only cable carries no data), that USB debugging"
   info "is on (Settings, Developer options), and that the phone is unlocked."
   if on_wsl; then
-    info "If Windows still has it, in PowerShell: usbipd attach --wsl --busid <BUSID>"
+    info "If Windows still has it, in Windows PowerShell: usbipd attach --wsl --busid <BUSID>"
   fi
   echo
   exit 1

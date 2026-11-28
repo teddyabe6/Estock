@@ -193,11 +193,16 @@ About 2 GB to download. Open a new terminal when it is done.
 
 **Once, on Windows (WSL only).** WSL cannot see USB devices by itself;
 [usbipd-win](https://github.com/dorssel/usbipd-win) hands the phone to it.
-In PowerShell:
+This part is in **Windows PowerShell** — open it from the Start menu; the
+WSL terminal will not find `winget` or `usbipd`:
 
 ```powershell
 winget install --exact dorssel.usbipd-win
 ```
+
+Say yes when it asks to accept the terms and to make changes to the PC. If
+PowerShell has no `winget` either, download the `.msi` from
+[its releases](https://github.com/dorssel/usbipd-win/releases) and run it.
 
 Plug the phone in. Then, in PowerShell opened as Administrator, find the
 phone in the list — by its name, or "ADB Interface" — and allow it to be

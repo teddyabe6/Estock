@@ -156,7 +156,8 @@ info "  ./scripts/phone-usb.sh   in another, with the phone plugged in"
 if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
   echo
   info "On WSL, Windows has to hand the phone to WSL first. Once, in Windows"
-  info "PowerShell:  winget install --exact dorssel.usbipd-win"
+  info "PowerShell (from the Start menu, not this terminal):"
+  info "    winget install --exact dorssel.usbipd-win"
   info "The rest is in docs/local-setup.md, \"From your computer, phone on a cable\"."
 fi
 echo
